@@ -15,7 +15,7 @@ dependencies = [
 [project.optional-dependencies]
 # Kept out of the base install so Lambda artifacts stay small: pollers never
 # import Spark, and `uv pip install .` for the Lambda zip must not pull ~300 MB.
-spark = ["pyspark>=4.0"]
+spark = ["pyspark>=4.0", "pandas>=2.2,<3.0"]
 
 [dependency-groups]
 dev = [
@@ -24,6 +24,7 @@ dev = [
     "ruff>=0.7",
     "mypy>=1.11",
     "pyspark>=4.0",
+    "pandas>=2.2,<3.0",
     "pre-commit>=3.8",
 ]
 
