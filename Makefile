@@ -1,6 +1,6 @@
 # Signal — see SPEC.md. Every target here is meant to work from a fresh clone.
 .DEFAULT_GOAL := help
-.PHONY: help setup up down skeleton test lint fmt eval brief clean tf-validate lambda-package
+.PHONY: help setup up down skeleton test lint fmt eval brief clean tf-validate lambda-package airflow-password
 
 UV ?= uv
 
@@ -14,7 +14,12 @@ setup: ## install the project and dev dependencies
 
 up: ## start Airflow + Postgres (Ollama runs natively on the host — ADR-0002)
 	docker compose up -d
-	@echo "Airflow: http://localhost:8080"
+	@echo "Airflow: http://localhost:8080 — user 'admin', password from 'make airflow-password'"
+
+airflow-password: ## print the Airflow UI password (SimpleAuthManager generates it)
+	@# Airflow 3 generates this into AIRFLOW_HOME on first start and regenerates it
+	@# whenever the container is recreated, so it is read, never written down.
+	@docker compose exec -T airflow-apiserver cat /opt/airflow/simple_auth_manager_passwords.json.generated
 
 down: ## stop local services
 	docker compose down
