@@ -73,7 +73,27 @@ working (SPEC §6.2).
       (147 hackernews, 1 rss_tech, 1 edgar, 3 edgar errors). Second pass: **0 bytes
       downloaded, 0 rows committed, 152 recognised as duplicates** — the read-once cache
       and the MERGE both holding
-- [ ] `make up`, unpause `ingest_monitor`, and watch one real hour through it
+- [x] `make up`, unpause `ingest_monitor`, run it. Verified 2026-08-18: 23 staged objects
+      seen, **14 downloaded (239 KB egress) and 9 skipped** — already in the shared cache
+      from an earlier hand-run — **851 staged rows, 699 committed, 152 recognised as
+      duplicates**, and one `ops.source_health` row per source for the 18:00 window, all
+      `ok`. Both idempotence claims held in production, not just in tests
+
+**Compose runs from inside WSL, not Windows.** Three things had to be right, and each
+failed in a way that pointed somewhere unhelpful:
+
+- `AIRFLOW__CORE__EXECUTION_API_SERVER_URL`. Airflow 3 runs tasks against the Task
+  Execution API, defaulting to `localhost:8080` — nothing, inside the scheduler container.
+  Every task died with `Connection refused` **before it could open a log file**, so the
+  symptom was a failed run with an empty log and no traceback.
+- `AIRFLOW_UID`. `~/.aws` is `0600` owned by your host user; a container running as uid
+  50000 cannot read it, and botocore's report for an unreadable credentials file is
+  "unable to locate credentials" — not a permission error. Running as the host uid fixes
+  it without loosening anything on the host.
+- Bind mounts, not named volumes, for `.cache`. Docker creates a named volume root-owned,
+  which the container then cannot write. The bind mount also means host and containers
+  share one read-once cache, so a byte either has paid for is a byte the other does not
+  (SPEC §10.1) — which is exactly where those 9 skipped objects came from.
 
 **Spark does not read `s3://` here, and that is deliberate.** Doing so would mean
 `hadoop-aws` plus a ~500 MB AWS SDK bundle in every session, and — the part that actually
@@ -89,7 +109,10 @@ Doing it against the deployed pipeline is the deliverable:
 
 1. Disable the three EventBridge schedules. Note the time.
 2. Leave it off for a day. The brief's footer should degrade as each source passes its
-   freshness SLA — 1 minute for `hackernews`, 15 for `edgar`, 30 for `rss_tech`.
+   freshness SLA — 15 minutes for `hackernews`, 45 for `edgar` and `rss_tech`. Each is 3x
+   its deployed cadence: an SLA shorter than the poll interval reports a healthy source as
+   permanently stale, which trains the alert away rather than detecting anything. Change
+   these and `var.sources` together.
 3. Re-enable the schedules.
 4. **Replay:** re-run the commit job over the stored interval. It must report
    `committed_rows == 0` and leave `table_rows` unchanged.

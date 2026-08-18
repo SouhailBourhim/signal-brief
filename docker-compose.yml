@@ -9,11 +9,26 @@ x-airflow-common: &airflow-common
     context: .
     dockerfile: Dockerfile.airflow
   image: signal/airflow:3.0.2
+  # Run as the host user, which is what Airflow's own compose recommends and what makes
+  # the mounts work in both directions: files written into ./data and ./out are owned by
+  # you rather than by uid 50000, and — the reason it is not optional here — ~/.aws is
+  # 0600 owned by the host user, so a container running as 50000 cannot read it and
+  # botocore reports "unable to locate credentials" rather than a permission error.
+  # Group 0 because the image makes /home/airflow group-writable for exactly this.
+  user: "${AIRFLOW_UID:-50000}:0"
   environment: &airflow-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+    # Airflow 3 runs tasks against the Task Execution API rather than in-process, and the
+    # default points at localhost:8080 — which, inside the scheduler container, is
+    # nothing. Without this every task dies with "Connection refused" before it can open
+    # a log file, so the run fails with an empty log and no traceback.
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    # Scheduler and api-server have to agree on the token secret; left unset each process
+    # invents its own and the workers are rejected. Local-only stack, hence a default.
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-signal-local-dev}
     PYTHONPATH: /opt/signal/src
     # Ollama is on the host, not in this network.
     SIGNAL_OLLAMA_URL: ${SIGNAL_OLLAMA_URL:-http://host.docker.internal:11434}
@@ -36,12 +51,16 @@ x-airflow-common: &airflow-common
     - ./src:/opt/signal/src
     - ./data:/opt/signal/data
     - ./out:/opt/signal/out
-    # The read-once staging cache. On a named volume rather than a bind mount so it
-    # survives `down` and keeps its meaning — a file here is a byte already paid for.
-    - staging-cache:/opt/signal/.cache
+    # The read-once staging cache. A bind mount rather than a named volume so the host
+    # and the containers share one cache: a staged object downloaded by a local
+    # `uv run` job is a byte the DAG then does not re-pay for, which is the whole point
+    # of SPEC §10.1. (A named volume is also created root-owned, which a container
+    # running as your uid cannot write.)
+    - ./.cache:/opt/signal/.cache
     # Iceberg's Spark runtime jar, resolved from Maven on first session. Cached so every
-    # container start does not re-download it.
-    - ivy-cache:/home/airflow/.ivy2
+    # container start does not re-download it. Bind-mounted for the same ownership reason
+    # as the staging cache above.
+    - ./.cache/ivy2:/home/airflow/.ivy2
     # Read-only, and never copied: the AWS CLI's own credential store is the single place
     # these live. This is why compose is run from inside WSL — `${HOME}` has to be the
     # Linux home holding ~/.aws, and a \wsl$\ UNC path is not a usable bind source.
@@ -96,5 +115,3 @@ services:
 
 volumes:
   postgres-data:
-  staging-cache:
-  ivy-cache:
