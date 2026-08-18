@@ -18,17 +18,27 @@ green, CI is green, and **zero AWS resources exist beyond guardrails and Terrafo
 - [x] Record digest + tokens/sec in ADR-0003, then rewrite SPEC §7.3's capacity paragraph
 - [x] `make setup && make skeleton` — first run with a real JVM
 
-## 0.C — AWS guardrails *(before any billable resource)*
-- [ ] Root MFA; stop using root; admin identity via IAM Identity Center
-- [ ] Budgets at $5 and $20; Cost Anomaly Detection; **confirm the alert email arrives** —
-      an unconfirmed SNS subscription is a silent no-op
-- [ ] Activate `project` as a cost-allocation tag (takes ~24 h to populate, which is why
-      it belongs here and not in Phase 4)
-- [ ] Verify the current free-tier egress allowance; write the real number into SPEC §10.1
-- [ ] `terraform -chdir=infra/terraform/bootstrap apply -var state_bucket=<unique>`, then
-      uncomment the backend block in `main/` and `terraform init -migrate-state`
-- [ ] GitHub Actions OIDC role, read-only, for `terraform plan`. No long-lived keys, ever
-- [ ] Confirm `terraform -chdir=infra/terraform/main plan` proposes **zero resources**
+## 0.C — AWS guardrails *(before any billable resource)* *(done)*
+- [x] Root MFA (already enabled); admin identity via a plain IAM user, not Identity Center —
+      ADR-0005 records why (Identity Center requires an Organization, which irreversibly
+      upgrades a Free Plan account and forfeits its credit balance)
+- [x] Budgets at $5 and $20; Cost Anomaly Detection; **confirmed the alert email arrives** —
+      already confirmed for bourhimsouhail@gmail.com via AWS's auto-created default
+      subscription; tightened its threshold from $100/40% to $1
+- [ ] Activate `project` as a cost-allocation tag — pending, AWS hasn't surfaced it yet
+      (needs a tagged resource in billing data, ~24h lag from the 2026-08-18 bootstrap apply;
+      the resource exists, just waiting on AWS's side — check `aws ce list-cost-allocation-tags`)
+- [x] Verify the current free-tier egress allowance; write the real number into SPEC §10.1 —
+      100 GB/month confirmed against AWS's own pricing page, unchanged
+- [x] `terraform -chdir=infra/terraform/bootstrap apply -var state_bucket=<unique>`, then
+      uncomment the backend block in `main/` and `terraform init -migrate-state` —
+      signal-brief-tfstate-481879233905
+- [x] GitHub Actions OIDC role, read-only, for `terraform plan`. No long-lived keys, ever —
+      trust policy had to match GitHub's immutable subject-claim format (ADR-0005); role is
+      ReadOnlyAccess and CI's plan runs with `-lock=false` since that role can't write the
+      S3 lock object
+- [x] Confirm `terraform -chdir=infra/terraform/main plan` proposes **zero resources** —
+      confirmed locally and in CI
 
 ## 0.D-0.G *(done)*
 - [x] Python scaffold, contracts, storage, fake source
