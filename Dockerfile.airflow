@@ -1,0 +1,23 @@
+# Airflow, plus the two things the stock image lacks for this project's DAGs.
+#
+# The image carries dependencies only; the source tree is bind-mounted by
+# docker-compose.yml, so editing a job does not mean rebuilding an image.
+#
+# ADR-0002 puts Spark in-process rather than in a Spark service, which means the
+# scheduler's own container is where `commit_bronze` runs — and therefore where a JVM has
+# to exist. `apache/airflow:3.0.2-python3.12` already ships pyarrow, boto3, and httpx;
+# what is missing is Java and pyspark.
+FROM apache/airflow:3.0.2-python3.12
+
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openjdk-17-jre-headless procps \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+
+USER airflow
+# Pinned to 4.1.x by Iceberg's Spark runtime, exactly as pyproject.toml is — ADR-0006.
+# A container that resolved pyspark 4.2 would fail at the first spark.sql() with
+# IncompatibleClassChangeError, and only inside Airflow, which is a miserable place to
+# discover it.
+RUN pip install --no-cache-dir "pyspark>=4.1,<4.2" "pandas>=2.2,<3.0" "pydantic-settings>=2.5"

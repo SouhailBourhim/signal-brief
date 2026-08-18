@@ -3,7 +3,12 @@
 name: signal
 
 x-airflow-common: &airflow-common
-  image: apache/airflow:3.0.2-python3.12
+  # Stock Airflow has no JVM and no pyspark; ADR-0002 runs Spark in-process, so the
+  # scheduler's container is where the commit job executes. See Dockerfile.airflow.
+  build:
+    context: .
+    dockerfile: Dockerfile.airflow
+  image: signal/airflow:3.0.2
   environment: &airflow-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
@@ -12,11 +17,35 @@ x-airflow-common: &airflow-common
     PYTHONPATH: /opt/signal/src
     # Ollama is on the host, not in this network.
     SIGNAL_OLLAMA_URL: ${SIGNAL_OLLAMA_URL:-http://host.docker.internal:11434}
+
+    # Absolute, because Airflow tasks run with cwd=/opt/airflow and the defaults in
+    # config.py are relative — a relative cache root would scatter downloaded staging
+    # objects into the Airflow home and re-pay the egress on the next run (SPEC §10.1).
+    SIGNAL_DATA_ROOT: /opt/signal/data
+    SIGNAL_OUT_ROOT: /opt/signal/out
+    SIGNAL_CACHE_ROOT: /opt/signal/.cache
+    SIGNAL_CONTACT_EMAIL: ${SIGNAL_CONTACT_EMAIL:-you@example.com}
+
+    # Phase 1 targets. Terraform prints all three as outputs.
+    SIGNAL_BRONZE_BUCKET: ${SIGNAL_BRONZE_BUCKET:-signal-bronze}
+    SIGNAL_ICEBERG_WAREHOUSE: ${SIGNAL_ICEBERG_WAREHOUSE:-}
+    SIGNAL_STATE_TABLE_NAME: ${SIGNAL_STATE_TABLE_NAME:-signal-pipeline-state}
+    AWS_REGION: ${AWS_REGION:-us-east-1}
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./src:/opt/signal/src
     - ./data:/opt/signal/data
     - ./out:/opt/signal/out
+    # The read-once staging cache. On a named volume rather than a bind mount so it
+    # survives `down` and keeps its meaning — a file here is a byte already paid for.
+    - staging-cache:/opt/signal/.cache
+    # Iceberg's Spark runtime jar, resolved from Maven on first session. Cached so every
+    # container start does not re-download it.
+    - ivy-cache:/home/airflow/.ivy2
+    # Read-only, and never copied: the AWS CLI's own credential store is the single place
+    # these live. This is why compose is run from inside WSL — `${HOME}` has to be the
+    # Linux home holding ~/.aws, and a \wsl$\ UNC path is not a usable bind source.
+    - ${HOME}/.aws:/home/airflow/.aws:ro
   extra_hosts:
     - "host.docker.internal:host-gateway"   # required on Linux; harmless on WSL2
   depends_on:
@@ -67,3 +96,5 @@ services:
 
 volumes:
   postgres-data:
+  staging-cache:
+  ivy-cache:

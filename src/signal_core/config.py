@@ -104,7 +104,11 @@ SOURCES: dict[str, SourceConfig] = {
         payload_format=PayloadFormat.JSON,
         # Sequential item ids make every item addressable forever. SPEC §3.
         backfill_horizon=BackfillHorizon.COMPLETE,
-        freshness_sla_seconds=60,
+        # 3x the deployed cadence (rate(5 minutes) in infra/terraform/main). An SLA
+        # shorter than the poll interval reports every source as permanently stale, which
+        # trains the alert away — the failure mode SPEC §11 is trying to avoid, arrived at
+        # from the other direction. Change this and var.sources together.
+        freshness_sla_seconds=900,
         min_docs_per_window=0,  # a quiet minute on HN is normal, not a failure
         rate_limit_per_sec=5.0,
         # Short, because one poll is up to 200 of these: a generous per-request timeout
@@ -119,7 +123,7 @@ SOURCES: dict[str, SourceConfig] = {
         payload_format=PayloadFormat.XML,
         # Current feed only recovers ~1 day; the daily index fallback is Phase 2+. SPEC §3.
         backfill_horizon=BackfillHorizon.DAY,
-        freshness_sla_seconds=900,
+        freshness_sla_seconds=2700,  # 3x rate(15 minutes)
         min_docs_per_window=1,
         rate_limit_per_sec=1.0,  # SEC fair-access limits; a descriptive User-Agent is required
         # browse-edgar is a CGI script, not a static file, and 10s was not enough from
@@ -133,7 +137,7 @@ SOURCES: dict[str, SourceConfig] = {
         payload_format=PayloadFormat.XML,
         # Only what is still in the feed survives an outage. SPEC §3, §6.3.
         backfill_horizon=BackfillHorizon.WINDOW,
-        freshness_sla_seconds=1800,
+        freshness_sla_seconds=2700,  # 3x rate(15 minutes)
         min_docs_per_window=1,
         rate_limit_per_sec=1.0,
         user_agent=settings.user_agent,
