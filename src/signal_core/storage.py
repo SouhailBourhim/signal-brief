@@ -7,6 +7,7 @@ works against `s3://signal-bronze` unchanged.
 
 from __future__ import annotations
 
+import os
 import shutil
 from collections.abc import Iterable
 from datetime import datetime
@@ -14,6 +15,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from pyarrow import fs as pa_fs
 
 from signal_core.contracts import RawDocument
 from signal_core.timeutil import ingest_partition
@@ -43,20 +45,54 @@ def bronze_partition(source_id: str, fetched_at: datetime) -> str:
     return f"source={source_id}/ingest_date={ingest_date}/hour={hour}"
 
 
-def write_bronze(documents: Iterable[RawDocument], root: Path) -> list[Path]:
+def _resolve_filesystem(root: Path | str) -> tuple[pa_fs.FileSystem, str]:
+    """(filesystem, base_path) for `root` — `s3://...` or a local path.
+
+    The local walking skeleton and the deployed Lambda pollers share `write_bronze`
+    unchanged; only the root differs. Keeping the filesystem choice here, rather than in
+    every caller, is what makes that true.
+    """
+    root_str = str(root)
+    if root_str.startswith("s3://"):
+        # AWS_ENDPOINT_URL (a real AWS SDK env var) redirects to a local S3-compatible
+        # server — moto's ThreadedMotoServer in tests, or MinIO for local dev — instead
+        # of real S3. Unset, this talks to AWS using the Lambda execution role.
+        endpoint = os.environ.get("AWS_ENDPOINT_URL")
+        s3_kwargs = {}
+        if endpoint:
+            scheme, _, host = endpoint.partition("://")
+            s3_kwargs = {"endpoint_override": host, "scheme": scheme}
+        return pa_fs.S3FileSystem(**s3_kwargs), root_str[len("s3://") :]
+    # pyarrow's local filesystem expects forward slashes even on Windows (e.g. "C:/x"),
+    # and we join partitions with "/" below regardless of platform.
+    return pa_fs.LocalFileSystem(), root_str.replace("\\", "/")
+
+
+def write_bronze(documents: Iterable[RawDocument], root: Path | str) -> list[Path | str]:
     """Write documents to their partitions. Returns the files written.
 
     Never overwrites: filenames carry the batch's first ingest_id, so a replay of the
     same interval lands beside the original rather than destroying it (SPEC §6.2).
+
+    `root` is a local path for the walking skeleton or an `s3://bucket/prefix` URI for
+    the deployed pollers (SPEC §6.4) — the write path is identical either way.
     """
     by_partition: dict[str, list[RawDocument]] = {}
     for doc in documents:
         by_partition.setdefault(bronze_partition(doc.source_id, doc.fetched_at), []).append(doc)
 
-    written: list[Path] = []
+    is_s3 = str(root).startswith("s3://")
+    filesystem, base = _resolve_filesystem(root)
+    base = base.rstrip("/")
+
+    written: list[Path | str] = []
     for partition, docs in sorted(by_partition.items()):
-        directory = root / partition
-        directory.mkdir(parents=True, exist_ok=True)
+        directory = f"{base}/{partition}"
+        if not is_s3:
+            # S3 has no real directories — object keys with slashes are the layout —
+            # and pre-creating one there would write spurious zero-byte marker objects
+            # into every partition on every poll (SPEC §10.3: S3 requests are billed).
+            filesystem.create_dir(directory, recursive=True)
         table = pa.Table.from_pylist(
             [
                 {
@@ -68,9 +104,10 @@ def write_bronze(documents: Iterable[RawDocument], root: Path) -> list[Path]:
             ],
             schema=BRONZE_SCHEMA,
         )
-        path = directory / f"{docs[0].ingest_id}.parquet"
-        pq.write_table(table, path, compression="zstd")
-        written.append(path)
+        object_path = f"{directory}/{docs[0].ingest_id}.parquet"
+        with filesystem.open_output_stream(object_path) as sink:
+            pq.write_table(table, sink, compression="zstd")
+        written.append(f"s3://{object_path}" if is_s3 else Path(object_path))
     return written
 
 

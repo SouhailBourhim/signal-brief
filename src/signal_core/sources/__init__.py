@@ -7,10 +7,16 @@ SOURCE_ID environment variable, which is how N Lambda functions run from one art
 from __future__ import annotations
 
 from signal_core.contracts import Poller
+from signal_core.sources.edgar import poll as edgar_poll
 from signal_core.sources.fake import poll as fake_poll
+from signal_core.sources.hackernews import poll as hackernews_poll
+from signal_core.sources.rss_tech import poll as rss_tech_poll
 
 REGISTRY: dict[str, Poller] = {
     "fake": fake_poll,
+    "hackernews": hackernews_poll,
+    "edgar": edgar_poll,
+    "rss_tech": rss_tech_poll,
 }
 
 

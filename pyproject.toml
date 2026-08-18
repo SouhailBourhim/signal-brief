@@ -10,12 +10,19 @@ dependencies = [
     "httpx>=0.27",
     "pyarrow>=17.0",
     "jinja2>=3.1",
+    # DynamoDB state store + S3 bronze (Phase 1). The Lambda runtime provides its own
+    # boto3, but declaring it keeps local dev and tests on the same API surface.
+    "boto3>=1.35",
 ]
 
 [project.optional-dependencies]
 # Kept out of the base install so Lambda artifacts stay small: pollers never
 # import Spark, and `uv pip install .` for the Lambda zip must not pull ~300 MB.
-spark = ["pyspark>=4.0", "pandas>=2.2,<3.0"]
+# Upper bound is Iceberg's, not ours: its Spark runtime is compiled against a specific
+# Spark minor, and the newest published one is iceberg-spark-runtime-4.1 (Iceberg 1.11).
+# On Spark 4.2 it dies at the first `spark.sql(...)` with IncompatibleClassChangeError.
+# ADR-0006. Raise this the day an Iceberg runtime for the next Spark minor ships.
+spark = ["pyspark>=4.1,<4.2", "pandas>=2.2,<3.0"]
 
 [dependency-groups]
 dev = [
@@ -23,9 +30,13 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.7",
     "mypy>=1.11",
-    "pyspark>=4.0",
+    "pyspark>=4.1,<4.2", # pinned by Iceberg's Spark runtime — ADR-0006
     "pandas>=2.2,<3.0",
     "pre-commit>=3.8",
+    # Phase 1: mock S3/DynamoDB and httpx so poller and state-store tests never touch
+    # the network or real AWS.
+    "moto[s3,dynamodb,server]>=5.0",
+    "respx>=0.21",
 ]
 
 [project.scripts]
@@ -46,10 +57,18 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "PTH", "RUF"]
 
+[tool.ruff.lint.isort]
+# `handlers/` is our own code even though it lives outside src/ (SPEC §13: Lambda entry
+# points sit at the repo root), so it sorts with signal_core, not with third-party.
+known-first-party = ["signal_core", "handlers"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
 markers = ["spark: requires a JVM and PySpark (skipped where unavailable)"]
+# So `tests/test_poll_source_handler.py` can `import handlers.poll_source` — the Lambda
+# entry point lives at repo root, not under src/signal_core (SPEC §13).
+pythonpath = ["."]
 
 [tool.mypy]
 python_version = "3.12"

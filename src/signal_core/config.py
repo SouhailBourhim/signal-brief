@@ -30,6 +30,15 @@ class Settings(BaseSettings):
 
     aws_region: str = Field(default="us-east-1", alias="AWS_REGION")
 
+    # Phase 1 ingestion infra (Terraform-provisioned; see infra/terraform/main).
+    state_table_name: str = "signal-pipeline-state"
+    bronze_bucket: str = "signal-bronze"
+
+    # Iceberg. `iceberg_warehouse` doubles as the catalog switch: an s3:// URI selects
+    # Glue + S3FileIO, anything else a local Hadoop catalog. See spark/session.py.
+    iceberg_catalog: str = "signal"
+    iceberg_warehouse: str = ""
+
     @property
     def user_agent(self) -> str:
         """SEC requires a descriptive User-Agent carrying a contact email. SPEC §6.2."""
@@ -38,6 +47,20 @@ class Settings(BaseSettings):
     @property
     def bronze_root(self) -> Path:
         return self.data_root / "bronze"
+
+    @property
+    def bronze_staging_uri(self) -> str:
+        """Where Lambda pollers land raw objects. A local Spark job — not this handler,
+        SPEC §4's "processing is local" boundary — commits them into the
+        `bronze.raw_documents` Iceberg table on its own schedule (see
+        `spark/jobs/commit_bronze.py`)."""
+        return f"s3://{self.bronze_bucket}/staging"
+
+    @property
+    def warehouse_uri(self) -> str:
+        """Iceberg warehouse root. Defaults to a local directory so a fresh clone can run
+        the commit job and the Phase 1 acceptance test without an AWS account."""
+        return self.iceberg_warehouse or str(self.data_root / "warehouse")
 
     @property
     def silver_root(self) -> Path:
@@ -58,8 +81,39 @@ SOURCES: dict[str, SourceConfig] = {
         min_docs_per_window=1,
         user_agent=settings.user_agent,
     ),
-    # Phase 1 — registered here so the shape is visible; modules land with Phase 1.
-    # "hackernews": ... BackfillHorizon.COMPLETE, 15 min SLA
-    # "edgar":      ... BackfillHorizon.DAY,      near-real-time SLA
-    # "rss_tech":   ... BackfillHorizon.WINDOW,   30 min SLA
+    # Phase 1 — three real sources. SPEC §3: one tech RSS feed, Hacker News, SEC EDGAR
+    # current filings.
+    "hackernews": SourceConfig(
+        source_id="hackernews",
+        url="https://hacker-news.firebaseio.com/v0",
+        payload_format=PayloadFormat.JSON,
+        # Sequential item ids make every item addressable forever. SPEC §3.
+        backfill_horizon=BackfillHorizon.COMPLETE,
+        freshness_sla_seconds=60,
+        min_docs_per_window=0,  # a quiet minute on HN is normal, not a failure
+        rate_limit_per_sec=5.0,
+        user_agent=settings.user_agent,
+    ),
+    "edgar": SourceConfig(
+        source_id="edgar",
+        url="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom",
+        payload_format=PayloadFormat.XML,
+        # Current feed only recovers ~1 day; the daily index fallback is Phase 2+. SPEC §3.
+        backfill_horizon=BackfillHorizon.DAY,
+        freshness_sla_seconds=900,
+        min_docs_per_window=1,
+        rate_limit_per_sec=1.0,  # SEC fair-access limits; a descriptive User-Agent is required
+        user_agent=settings.user_agent,
+    ),
+    "rss_tech": SourceConfig(
+        source_id="rss_tech",
+        url="https://techcrunch.com/feed/",
+        payload_format=PayloadFormat.XML,
+        # Only what is still in the feed survives an outage. SPEC §3, §6.3.
+        backfill_horizon=BackfillHorizon.WINDOW,
+        freshness_sla_seconds=1800,
+        min_docs_per_window=1,
+        rate_limit_per_sec=1.0,
+        user_agent=settings.user_agent,
+    ),
 }

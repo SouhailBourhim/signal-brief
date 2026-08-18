@@ -139,13 +139,14 @@ def poll(config: SourceConfig, state: State) -> tuple[list[RawDocument], State]:
             continue
 
         published_at: datetime | None = None if offset is None else now - timedelta(minutes=offset)
-        article = {
+        url = f"https://{publisher}/{story}/{index}"
+        article: dict[str, str | None] = {
             "id": doc_id,
             "story_key": story,  # ground truth, for the §7.1 eval set
             "title": title,
             "body": body,
             "publisher": publisher,
-            "url": f"https://{publisher}/{story}/{index}",
+            "url": url,
             "published_at": published_at.isoformat() if published_at else None,
         }
         payload = json.dumps(article, sort_keys=True).encode("utf-8")
@@ -155,7 +156,7 @@ def poll(config: SourceConfig, state: State) -> tuple[list[RawDocument], State]:
                 ingest_id=f"{config.source_id}-{now:%Y%m%dT%H%M%S}-{index:03d}",
                 source_id=config.source_id,
                 fetched_at=now,
-                source_url=article["url"],
+                source_url=url,
                 http_status=200,
                 outcome=FetchOutcome.OK,
                 etag=None,

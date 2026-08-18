@@ -96,7 +96,9 @@ class State(BaseModel):
     source_id: str
     etag: str | None = None
     last_modified: str | None = None
-    watermark: datetime | None = None
+    # A timestamp for time-ordered sources, or a sequence position (e.g. Hacker News's
+    # highest fetched item id) for sources addressed by a dense integer range. SPEC §3.
+    watermark: datetime | int | None = None
     seen: tuple[str, ...] = ()
     last_success_at: datetime | None = None
     consecutive_failures: int = 0
