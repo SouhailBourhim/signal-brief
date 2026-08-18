@@ -46,7 +46,24 @@ horizon allows and records `gap_reason` for the rest.
       assumed: `aws sns get-subscription-attributes --subscription-arn <arn>` reports
       `PendingConfirmation: false`. Re-check this after any change that recreates the
       subscription
-- [ ] Re-check the cost-allocation tag from 0.C — `aws ce list-cost-allocation-tags`
+- [ ] Activate `project` as a cost-allocation tag — still not surfaced as of 2026-08-18
+      20:15 UTC. The tag itself is fine: `get-tag-keys` returns `environment`,
+      `managed_by`, `project`, and 21 resources carry `project=signal`, so Terraform's
+      `default_tags` is working. `list-cost-allocation-tags` reads *billing data*, not the
+      tagging API, and a tag appears there only after AWS processes a period in which a
+      tagged resource actually cost something. Until this apply the only tagged resource
+      was an empty S3 bucket. Re-check ~24h after **this apply**, not after 0.C's
+      bootstrap:
+
+      ```bash
+      aws ce list-cost-allocation-tags                       # expect project, Inactive
+      aws ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=project,Status=Active
+      ```
+
+      Discovery is AWS-side and cannot be forced; there is nothing to fix in this repo
+      while it is empty. SPEC §10.3 wants cost as a first-class metric, and this tag is
+      what makes "what did ingestion cost?" answerable per project rather than per
+      account.
 
 ### What the first live invocations found
 

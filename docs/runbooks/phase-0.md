@@ -25,9 +25,9 @@ green, CI is green, and **zero AWS resources exist beyond guardrails and Terrafo
 - [x] Budgets at $5 and $20; Cost Anomaly Detection; **confirmed the alert email arrives** —
       already confirmed for bourhimsouhail@gmail.com via AWS's auto-created default
       subscription; tightened its threshold from $100/40% to $1
-- [ ] Activate `project` as a cost-allocation tag — pending, AWS hasn't surfaced it yet
-      (needs a tagged resource in billing data, ~24h lag from the 2026-08-18 bootstrap apply;
-      the resource exists, just waiting on AWS's side — check `aws ce list-cost-allocation-tags`)
+- [ ] Activate `project` as a cost-allocation tag — still pending; tracked in the Phase 1
+      runbook now, since the 2026-08-18 ingest apply is what finally gave the tag a
+      resource that costs something to attach to
 - [x] Verify the current free-tier egress allowance; write the real number into SPEC §10.1 —
       100 GB/month confirmed against AWS's own pricing page, unchanged
 - [x] `terraform -chdir=infra/terraform/bootstrap apply -var state_bucket=<unique>`, then
