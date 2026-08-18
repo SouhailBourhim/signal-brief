@@ -24,14 +24,29 @@ project needs: S3, Lambda, EventBridge, Glue, Athena, Budgets, IAM users all wor
 unrestricted on the Free Plan.
 
 **GitHub Actions role:** `signal-brief-gha-terraform-plan`, assumed via OIDC
-(`token.actions.githubusercontent.com`), trust policy scoped to
-`repo:SouhailBourhim/signal-brief:*` — no other repo can assume it, and no AWS access
-keys exist in GitHub secrets. Attached policy is the AWS-managed `ReadOnlyAccess` policy
-rather than a hand-rolled least-privilege list: this project's resource surface (S3,
-DynamoDB, Glue, Lambda, EventBridge, Athena) grows through Phase 1–3, and a hand-maintained
-allow-list would either lag behind and break CI's `terraform plan`, or get maintained by
-periodically widening it anyway. `ReadOnlyAccess` is broad but categorically cannot
-mutate anything — the property that actually matters for a plan-only role. Wired into
+(`token.actions.githubusercontent.com`). Trust policy condition is
+`token.actions.githubusercontent.com:sub` StringLike
+`repo:SouhailBourhim@184526894/signal-brief@1338548068:*` — no other repo can assume it,
+and no AWS access keys exist in GitHub secrets. **Not** the plain `repo:owner/repo:*`
+form documented almost everywhere: GitHub shipped "immutable subject claims" in April
+2026, and every repo created after 2026-07-15 (this one included) gets `owner@owner_id`
+and `repo@repo_id` in its OIDC `sub` claim automatically, not opt-in. Discovered via
+CloudTrail after the plain-name trust policy failed `AssumeRoleWithWebIdentity` with a
+content-free `AccessDenied` — GitHub's own docs and most existing tutorials as of this
+writing still show the old format. The immutable-ID form is arguably the better choice
+regardless: it can't be hijacked by a renamed or recycled repo/org the way a name-based
+match can.
+
+Attached policy is the AWS-managed `ReadOnlyAccess` policy rather than a hand-rolled
+least-privilege list: this project's resource surface (S3, DynamoDB, Glue, Lambda,
+EventBridge, Athena) grows through Phase 1–3, and a hand-maintained allow-list would
+either lag behind and break CI's `terraform plan`, or get maintained by periodically
+widening it anyway. One real consequence of strict read-only: Terraform's S3-native
+locking needs to `PutObject` a `.tflock` file even for `plan`, which `ReadOnlyAccess`
+correctly refuses — CI's plan runs with `-lock=false` rather than loosening the role;
+local applies (from the IAM admin user) still lock normally. `ReadOnlyAccess` is broad
+but categorically cannot mutate anything — the property that actually matters for a
+plan-only role. Wired into
 `ci.yml`'s `terraform` job so the role is exercised on every push/PR, not left idle.
 
 **Budgets and Cost Anomaly Detection** were created directly via the AWS CLI rather than

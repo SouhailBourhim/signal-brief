@@ -67,15 +67,19 @@ jobs:
       - run: terraform -chdir=infra/terraform/main validate
 
       # Same-repo events only: forked PRs don't get this role's OIDC trust (the
-      # role's trust policy is scoped to repo:SouhailBourhim/signal-brief:*), and
-      # that's the point — a fork can't plan against this AWS account.
+      # role's trust policy is scoped by GitHub's immutable owner/repo IDs — see
+      # ADR-0005 — to this repo only), and that's the point: a fork can't plan
+      # against this AWS account.
       - if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::481879233905:role/signal-brief-gha-terraform-plan
           aws-region: us-east-1
 
+      # -lock=false: the role is deliberately ReadOnlyAccess (ADR-0005), which
+      # can't PutObject the S3-native lock file either — and shouldn't need to,
+      # since this plan never applies. Locking still applies to local dev applies.
       - if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
-          terraform -chdir=infra/terraform/main init -reconfigure
-          terraform -chdir=infra/terraform/main plan
+          terraform -chdir=infra/terraform/main init -reconfigure -lock=false
+          terraform -chdir=infra/terraform/main plan -lock=false
