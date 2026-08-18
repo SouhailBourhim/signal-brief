@@ -247,8 +247,11 @@ Governed like any other transform:
 - **Determinism boundary** — temperature 0, pinned model digest, versioned prompts, and everything
   downstream marked non-reproducible in lineage. Being explicit about this is the mature move.
 - **Capacity, stated plainly** — enrichment runs against **cluster heads once per pre-brief window,
-  not on every 15-minute cycle**. At ~40 heads × ~4 s that is ~3 minutes, comfortably inside the
-  window. The DAG asserts this bound and fails loudly rather than silently lagging the 07:00 send.
+  not on every 15-minute cycle**. Measured on the dev box (RTX 5070 8GB, `llama3.1:8b` q4, see
+  ADR-0003): one-time model load ~23 s, then ~1.0 s/head at ~60 tok/s steady state. A 40-head batch
+  is therefore **~1 minute**, comfortably inside the window — well under the ~3-minute figure this
+  paragraph assumed before the model was pinned and measured. The DAG asserts this bound and fails
+  loudly rather than silently lagging the 07:00 send.
 
 ### 7.4 Ranking
 
