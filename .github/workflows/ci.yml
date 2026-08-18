@@ -53,6 +53,9 @@ jobs:
 
   terraform:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write # OIDC — ADR-0005: no long-lived AWS keys, ever
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
@@ -60,5 +63,18 @@ jobs:
           terraform_version: "1.11.0"
       - run: terraform -chdir=infra/terraform/bootstrap fmt -check
       - run: terraform -chdir=infra/terraform/main fmt -check
-      - run: terraform -chdir=infra/terraform/main init -backend=false
       - run: terraform -chdir=infra/terraform/main validate
+
+      # Same-repo events only: forked PRs don't get this role's OIDC trust (the
+      # role's trust policy is scoped to repo:SouhailBourhim/signal-brief:*), and
+      # that's the point — a fork can't plan against this AWS account.
+      - if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::481879233905:role/signal-brief-gha-terraform-plan
+          aws-region: us-east-1
+
+      - if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          terraform -chdir=infra/terraform/main init
+          terraform -chdir=infra/terraform/main plan

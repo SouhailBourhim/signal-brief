@@ -15,14 +15,13 @@ terraform {
     }
   }
 
-  # Filled in after the bootstrap module has been applied:
-  # backend "s3" {
-  #   bucket       = "<state_bucket output>"
-  #   key          = "main/terraform.tfstate"
-  #   region       = "us-east-1"
-  #   encrypt      = true
-  #   use_lockfile = true
-  # }
+  backend "s3" {
+    bucket       = "signal-brief-tfstate-481879233905"
+    key          = "main/terraform.tfstate"
+    region       = "us-east-1"
+    encrypt      = true
+    use_lockfile = true
+  }
 }
 
 provider "aws" {

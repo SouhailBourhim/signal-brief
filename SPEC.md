@@ -348,13 +348,15 @@ internet egress and is billed per GB beyond the free allowance.** Neither supers
 accounted for this, and it is the one cost that scales with the noisiest source.
 
 - Measure it before enabling GDELT. GDELT 2.0 emits files every 15 minutes; at ~20 MB per interval
-  that is ~2 GB/day, ~60 GB/month — inside the current 100 GB/month free egress allowance, but not
-  by a comfortable margin, and not with room for re-reads.
+  that is ~2 GB/day, ~60 GB/month — inside the 100 GB/month free egress allowance, but not by a
+  comfortable margin, and not with room for re-reads.
 - **Therefore §6.2's read-once local cache is a cost control, not a convenience.** A re-run that
   re-downloads the window is the failure mode that turns $0 into a real bill.
 - Record `s3_egress_bytes` in `ops.pipeline_costs` alongside Athena bytes scanned, and put both in
-  the README. **Verify the current free-tier egress allowance against AWS's own pricing page before
-  Phase 4 — do not take this paragraph's number on trust.**
+  the README. **Verified against AWS's own pricing page (2026-08-18): 100 GB/month free data
+  transfer out to the internet, aggregated across all services and regions except China and
+  GovCloud; $0.09/GB for the next 10 TB after that.** Re-verify before Phase 4 if this paragraph
+  is more than a few months old — AWS has changed this allowance before.
 
 ### 10.2 Guardrails, before the first line of code
 
