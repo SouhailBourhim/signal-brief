@@ -80,9 +80,19 @@ resource "aws_lambda_function" "poller" {
   timeout     = each.value.timeout_seconds
   memory_size = each.value.memory_mb
 
-  # One concurrent execution per source. A poller is not a service: two overlapping
-  # invocations would race on the same DynamoDB state item and re-fetch the same window.
-  reserved_concurrent_executions = 1
+  # Ideally 1: a poller is not a service, and two overlapping invocations would race on
+  # the same DynamoDB state item. It defaults to -1 (unreserved) because a new AWS
+  # account's *total* concurrency limit is 10 and AWS refuses any reservation that takes
+  # unreserved capacity below 10 — so reserving even one execution fails outright with
+  # InvalidParameterValueException. Raise the account quota (Service Quotas
+  # L-B99A9384), then set this to 1; see docs/runbooks/phase-1.md.
+  #
+  # What holds in the meantime: every cadence is far longer than its function's timeout
+  # (120s against 5 minutes for hackernews, 60s against 15 for the others), and the
+  # scheduler's retry window below is shorter than the gap to the next tick. If two ever
+  # did overlap, the damage is a re-fetched window and a last-write-wins state item —
+  # duplicates, which dedup collapses (SPEC §7.1), not loss.
+  reserved_concurrent_executions = var.poller_reserved_concurrency
 
   environment {
     variables = {
@@ -152,10 +162,12 @@ resource "aws_scheduler_schedule" "poller" {
 
     retry_policy {
       # A poller retries by being scheduled again — its next run re-reads the same
-      # watermark and covers the same ground. Long in-schedule retries just overlap
-      # with the next invocation, which reserved concurrency then throttles.
+      # watermark and covers the same ground. The age limit is deliberately shorter than
+      # the shortest cadence (5 minutes): with no reserved concurrency to throttle it, a
+      # retry allowed to land late is the one way two invocations of the same source
+      # could run at once.
       maximum_retry_attempts       = 1
-      maximum_event_age_in_seconds = 300
+      maximum_event_age_in_seconds = 120
     }
   }
 }

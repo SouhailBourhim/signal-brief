@@ -40,7 +40,7 @@ def poll_feed(
         headers["If-Modified-Since"] = state.last_modified
 
     owns_client = client is None
-    client = client or httpx.Client(timeout=10.0)
+    client = client or httpx.Client(timeout=config.timeout_seconds)
     started = time.monotonic()
     try:
         response = client.get(config.url, headers=headers)

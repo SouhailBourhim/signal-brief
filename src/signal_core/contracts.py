@@ -131,7 +131,14 @@ class SourceConfig(BaseModel):
     freshness_sla_seconds: int
     min_docs_per_window: int = 0
     rate_limit_per_sec: float = 1.0
-    user_agent: str = "signal/0.0 (+https://github.com/signal)"
+    # Per-source because sources differ enormously: EDGAR's browse-edgar endpoint is a
+    # CGI script that regularly takes tens of seconds, while a static RSS file does not.
+    # Always well under the Lambda's own timeout, so a slow fetch becomes an ERROR
+    # document (SPEC §6.2) rather than a killed invocation with nothing recorded.
+    timeout_seconds: float = 30.0
+    # `Name contact@email`, because EDGAR rejects anything more browser-shaped — see
+    # Settings.user_agent for the measurement.
+    user_agent: str = "Signal Brief you@example.com"
     options: dict[str, Any] = Field(default_factory=dict)
 
 

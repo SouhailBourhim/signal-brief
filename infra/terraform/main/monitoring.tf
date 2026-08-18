@@ -87,9 +87,11 @@ resource "aws_cloudwatch_metric_alarm" "poller_throttled" {
 
   alarm_name        = "${var.name_prefix}-poll-${each.key}-throttled"
   alarm_description = <<-EOT
-    ${each.key} was throttled. With reserved concurrency of 1 this means invocations are
-    overlapping — the poll is taking longer than its schedule interval, which for
-    hackernews means the item backlog is growing faster than MAX_ITEMS_PER_POLL drains it.
+    ${each.key} was throttled, so a scheduled poll did not run. With no per-function
+    reservation (see lambda.tf) this is the account-wide concurrency limit — 10 on a new
+    account — being hit, most likely because a poll is now outlasting its schedule
+    interval. For hackernews that means the item backlog is growing faster than
+    MAX_ITEMS_PER_POLL drains it.
   EOT
 
   namespace   = "AWS/Lambda"

@@ -29,7 +29,9 @@ MAX_ITEMS_PER_POLL = 200
 
 def poll(config: SourceConfig, state: State) -> tuple[list[RawDocument], State]:
     with httpx.Client(
-        base_url=config.url, timeout=10.0, headers={"User-Agent": config.user_agent}
+        base_url=config.url,
+        timeout=config.timeout_seconds,
+        headers={"User-Agent": config.user_agent},
     ) as client:
         maxitem = _fetch_maxitem(client)
         if maxitem is None:

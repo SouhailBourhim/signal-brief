@@ -7,11 +7,12 @@ immutably; collapses syndicated coverage into ranked story clusters; and publish
 at 07:00 Africa/Casablanca with lineage, replay, cost controls, and locally run LLM
 enrichment built in.
 
-**Status: Phase 1, in progress.** Three real pollers (Hacker News, SEC EDGAR, one tech RSS
-feed) run against `bronze.raw_documents` on Iceberg, with the ingest infrastructure written
-in Terraform and planned but **not yet applied** — no billable AWS resource exists beyond
-the Phase 0 guardrails. No LLM yet. [`SPEC.md`](SPEC.md) is the specification;
-[`docs/runbooks/phase-1.md`](docs/runbooks/phase-1.md) is where this phase stands.
+**Status: Phase 1, in progress.** Three pollers — Hacker News, SEC EDGAR, one tech RSS feed
+— run as scheduled Lambdas and land raw payloads in S3; a local Spark job commits them to
+`bronze.raw_documents` on Iceberg, registered in Glue. The infrastructure is Terraform, and
+applied. No LLM yet. [`SPEC.md`](SPEC.md) is the specification;
+[`docs/runbooks/phase-1.md`](docs/runbooks/phase-1.md) is where this phase stands, including
+what the first live invocations broke.
 
 **Replay and catch-up are not the same promise.** Replay reprocesses an interval from bytes
 already in `bronze/` — deterministic, and always available. Catch-up re-fetches what was

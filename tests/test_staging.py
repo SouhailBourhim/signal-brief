@@ -17,7 +17,7 @@ import pytest
 from moto import mock_aws
 
 from signal_core.contracts import FetchOutcome, PayloadFormat, RawDocument
-from signal_core.staging import read_staging, to_record, write_staging
+from signal_core.staging import read_staging, sync_staging, to_record, write_staging
 from signal_core.timeutil import utc_now
 
 BUCKET = "signal-bronze-test"
@@ -101,6 +101,46 @@ def test_writes_to_s3_under_the_prefix(s3_client):
     listing = s3_client.list_objects_v2(Bucket=BUCKET, Prefix="staging/")
     assert listing["KeyCount"] == 1
     assert read_staging(written[0], client=s3_client)[0].payload == b"a"
+
+
+def test_sync_downloads_each_object_at_most_once(s3_client, tmp_path):
+    """SPEC §10.1: processing runs outside AWS, so every read of a staged object is
+    billed egress. Staged objects are immutable, so the second sync must pay nothing."""
+    write_staging([_doc("fake-001", b"a")], f"s3://{BUCKET}/staging", client=s3_client)
+    write_staging([_doc("fake-002", b"bb")], f"s3://{BUCKET}/staging", client=s3_client)
+
+    first = sync_staging(f"s3://{BUCKET}/staging", tmp_path / "cache", client=s3_client)
+    second = sync_staging(f"s3://{BUCKET}/staging", tmp_path / "cache", client=s3_client)
+
+    assert first.downloaded == 2 and first.skipped == 0
+    assert first.bytes_downloaded > 0
+    assert second.downloaded == 0 and second.skipped == 2
+    assert second.bytes_downloaded == 0
+
+
+def test_sync_preserves_the_partition_layout(s3_client, tmp_path):
+    """The commit job globs `source=*/ingest_date=*/hour=*`, so a local mirror that
+    flattened the keys would read nothing and report an empty interval as healthy."""
+    write_staging([_doc("fake-001", b"a")], f"s3://{BUCKET}/staging", client=s3_client)
+
+    result = sync_staging(f"s3://{BUCKET}/staging", tmp_path / "cache", client=s3_client)
+
+    mirrored = list(result.local_root.glob("source=*/ingest_date=*/hour=*/*.jsonl.gz"))
+    assert len(mirrored) == 1
+    assert read_staging(str(mirrored[0]))[0].payload == b"a"
+
+
+def test_sync_can_narrow_to_one_source(s3_client, tmp_path):
+    write_staging([_doc("fake-001", b"a")], f"s3://{BUCKET}/staging", client=s3_client)
+    other = _doc("hn-001", b"b").model_copy(update={"source_id": "hackernews"})
+    write_staging([other], f"s3://{BUCKET}/staging", client=s3_client)
+
+    result = sync_staging(
+        f"s3://{BUCKET}/staging", tmp_path / "cache", client=s3_client, source_id="fake"
+    )
+
+    assert result.objects == 1
+    assert not list(result.local_root.rglob("*hackernews*"))
 
 
 def test_staged_object_is_gzipped_jsonl(tmp_path):

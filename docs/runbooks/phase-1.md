@@ -20,7 +20,7 @@ horizon allows and records `gap_reason` for the rest.
       commit is a MERGE on `ingest_id`, which is what makes replay safe to re-run
 - [x] Acceptance test, both halves: `tests/test_replay_catchup.py`
 
-## 1.B — Infrastructure *(written and planned; not applied)*
+## 1.B — Infrastructure *(applied 2026-08-18)*
 - [x] `infra/terraform/main` — S3 bronze bucket (SSE, public access blocked, staging
       expiry at 14 days), DynamoDB state table, Glue database `bronze`, three Lambdas via
       `for_each` over `var.sources`, EventBridge Scheduler schedules, log groups with
@@ -28,23 +28,58 @@ horizon allows and records `gap_reason` for the rest.
 - [x] `make lambda-package` — 11 MB artifact: httpx, pydantic, pydantic-settings, and the
       source tree. `tests/test_lambda_artifact.py` fails if the handler's import chain
       ever acquires pyarrow, pyspark, pandas, numpy, or jinja2
-- [x] `terraform plan` — **30 to add, 0 to change, 0 to destroy**, run 2026-08-18 against
-      account 481879233905. Nothing applied
-- [ ] `terraform apply`. Before running it, know that this is where the account starts
-      spending. Everything provisioned is inside the always-free tier at these cadences
-      (Lambda 1M requests/month, DynamoDB 25 GB, EventBridge Scheduler 14M invocations,
-      Glue's first 1M objects); S3 storage and requests are the only real line item, and
-      the $5/$20 budgets from 0.C are already watching them
-- [ ] **Confirm the SNS subscription email.** Terraform creates it in
+- [x] `terraform apply` — 30 resources in account 481879233905. Bucket
+      `signal-bronze-481879233905`, table `signal-pipeline-state`, functions
+      `signal-poll-{hackernews,edgar,rss_tech}`. Everything is inside an always-free tier
+      at these cadences (Lambda 1M requests, DynamoDB 25 GB, EventBridge Scheduler 14M
+      invocations, Glue's first 1M objects); S3 storage/requests and egress to the local
+      Spark box are the only real line items, and 0.C's $5/$20 budgets watch them
+- [x] **Reserved concurrency had to go.** The intent was 1 per function; a new account's
+      total concurrency limit is 10 and AWS refuses any reservation that takes unreserved
+      capacity below 10, so `PutFunctionConcurrency` fails outright. `var.poller_reserved_concurrency`
+      defaults to -1. To restore the intent: raise Service Quota **L-B99A9384**, then set
+      the variable to 1. Until then every cadence is far longer than its function timeout
+      and the scheduler's retry window is shorter than the gap to the next tick
+- [ ] **Confirm the SNS subscription email.** Terraform created it in
       `PendingConfirmation` and cannot tell the difference — an unconfirmed subscription
-      means every alarm below fires into nothing. Same trap as 0.C's budget alerts
+      means every alarm above fires into nothing. Same trap as 0.C's budget alerts.
+      Check with `aws sns list-subscriptions-by-topic --topic-arn arn:aws:sns:us-east-1:481879233905:signal-alerts`
 - [ ] Re-check the cost-allocation tag from 0.C — `aws ce list-cost-allocation-tags`
 
-## 1.C — Orchestration *(written; not yet run against real data)*
-- [x] `airflow/dags/ingest_monitor_dag.py` — hourly: commit the staged interval, assess
-      each source over the hour that just closed, write `ops.source_health`, fail the run
-      when a source is stale or gapped
+### What the first live invocations found
+
+Both failures below were caught by the quarantine path rather than by a crash — they are
+`outcome=ERROR` rows sitting in `bronze.raw_documents` right now, which is the design
+working (SPEC §6.2).
+
+- **EDGAR 403, "Your Request Originates from an Undeclared Automated Tool."** SEC rejects
+  the conventional browser-shaped User-Agent. Measured against the live endpoint: the form
+  with a URL in parentheses gets 403, plain `Signal Brief <email>` gets 200. There is now
+  one User-Agent in the format the strictest source demands, and a test that fails if
+  anyone reintroduces the parentheses.
+- **EDGAR read timeout at 10s.** `browse-edgar` is a CGI script, not a static file, and it
+  regularly takes longer than that from Lambda. Timeouts are per-source now: 30s for
+  EDGAR, 5s for Hacker News (one poll is up to 200 requests, so a generous per-request
+  timeout multiplies into a killed invocation).
+
+## 1.C — Orchestration
+- [x] `airflow/dags/ingest_monitor_dag.py` — hourly: sync staging to the local read-once
+      cache, commit it, assess each source over the hour that just closed, write
+      `ops.source_health`, and fail the run when a source is stale or gapped
+- [x] The local half run by hand against real AWS, 2026-08-18: 9 staged objects,
+      **54 KB egress**, **152 rows** into `bronze.raw_documents` on Glue + S3
+      (147 hackernews, 1 rss_tech, 1 edgar, 3 edgar errors). Second pass: **0 bytes
+      downloaded, 0 rows committed, 152 recognised as duplicates** — the read-once cache
+      and the MERGE both holding
 - [ ] `make up`, unpause `ingest_monitor`, and watch one real hour through it
+
+**Spark does not read `s3://` here, and that is deliberate.** Doing so would mean
+`hadoop-aws` plus a ~500 MB AWS SDK bundle in every session, and — the part that actually
+matters — Spark re-reading the prefix on every retry and every widened replay window, each
+one billed as internet egress (SPEC §10.1). `staging.sync_staging` mirrors objects to
+`.cache/staging` first; staged objects are immutable, so a file already there is already
+correct and is never re-downloaded. The Iceberg *warehouse* is on S3, written through
+Iceberg's own S3FileIO, which needs no Hadoop filesystem at all.
 
 ## 1.D — The acceptance test, for real *(after apply)*
 The test in `tests/test_replay_catchup.py` proves the mechanism against a temp warehouse.

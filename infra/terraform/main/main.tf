@@ -70,6 +70,17 @@ variable "contact_email" {
   default     = "bourhimsouhail@gmail.com"
 }
 
+variable "poller_reserved_concurrency" {
+  description = <<-EOT
+    Reserved concurrent executions per poller. -1 means unreserved, which is the only
+    value a new AWS account accepts: the default account limit is 10 concurrent
+    executions and AWS will not let a reservation take unreserved capacity below 10.
+    Set to 1 once the account quota is raised — see lambda.tf for what holds until then.
+  EOT
+  type        = number
+  default     = -1
+}
+
 variable "sources" {
   description = <<-EOT
     Poller definitions. One map entry -> one Lambda, one schedule, one alarm, one log

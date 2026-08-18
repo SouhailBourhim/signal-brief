@@ -78,3 +78,7 @@ def test_edgar_sends_a_descriptive_user_agent_with_contact_email():
 
     sent_ua = route.calls.last.request.headers["user-agent"]
     assert "@" in sent_ua  # SEC requires a contact email in the User-Agent, SPEC §6.2
+    # And requires it plainly. A browser-style token or a URL in parentheses gets a 403
+    # from EDGAR — "Your Request Originates from an Undeclared Automated Tool" — which
+    # this project learned the expensive way. See Settings.user_agent.
+    assert "(" not in sent_ua and "http" not in sent_ua and "/" not in sent_ua

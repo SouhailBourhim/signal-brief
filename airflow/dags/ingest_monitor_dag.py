@@ -39,15 +39,22 @@ SOURCE_IDS = ["hackernews", "edgar", "rss_tech"]
 def ingest_monitor_dag():
     @task
     def commit_staged() -> dict[str, int]:
-        """Staging -> bronze.raw_documents. Idempotent, so a re-run is free."""
+        """Staging -> local cache -> bronze.raw_documents. Idempotent at both steps, so
+        a re-run costs neither egress nor duplicate rows."""
         from signal_core.config import settings
         from signal_core.spark.jobs.commit_bronze import commit
         from signal_core.spark.session import build_iceberg_session
+        from signal_core.staging import sync_staging
+
+        sync = sync_staging(settings.bronze_staging_uri, settings.staging_cache_root)
 
         spark = build_iceberg_session("signal-commit-bronze")
         try:
-            result = commit(spark, settings.bronze_staging_uri)
+            result = commit(spark, sync.local_root)
             return {
+                "objects_seen": sync.objects,
+                "objects_downloaded": sync.downloaded,
+                "egress_bytes": sync.bytes_downloaded,
                 "staged_rows": result.staged_rows,
                 "committed_rows": result.committed_rows,
                 "duplicate_rows": result.duplicate_rows,

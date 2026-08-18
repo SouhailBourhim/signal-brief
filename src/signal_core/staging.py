@@ -22,6 +22,7 @@ import base64
 import gzip
 import json
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -124,6 +125,78 @@ def write_staging(
             path.write_bytes(body)
             written.append(str(path))
     return written
+
+
+@dataclass(frozen=True)
+class SyncResult:
+    """What a staging sync moved, for SPEC §10.3's cost record."""
+
+    downloaded: int
+    skipped: int
+    bytes_downloaded: int
+    local_root: Path
+
+    @property
+    def objects(self) -> int:
+        return self.downloaded + self.skipped
+
+
+def sync_staging(
+    staging_uri: str,
+    dest_root: str | Path,
+    *,
+    client: Any | None = None,
+    source_id: str | None = None,
+    ingest_date: str | None = None,
+) -> SyncResult:
+    """Mirror staged objects to local disk, downloading each one at most once.
+
+    This exists instead of pointing Spark at `s3://` directly, for two reasons and in
+    that order of importance:
+
+      1. **Egress is the line item nobody budgets** (SPEC §10.1). Processing runs outside
+         AWS, so every read of a staged object is billed internet egress. Letting Spark
+         re-read the prefix on each job — and it would, on every retry and every widened
+         replay window — is how a $0 month becomes a real bill. Staged objects are
+         immutable, so a file already here is already correct: no HEAD, no re-download.
+      2. Spark's `s3a://` support means `hadoop-aws` plus a ~500 MB AWS SDK bundle in
+         every session, to read files that are a few kilobytes each.
+
+    `source_id` / `ingest_date` narrow the listing to one prefix, so a targeted backfill
+    lists one partition rather than the bucket.
+    """
+    bucket, _, prefix = staging_uri[len("s3://") :].partition("/")
+    prefix = prefix.rstrip("/")
+    if source_id:
+        prefix = f"{prefix}/source={source_id}"
+        if ingest_date:
+            prefix = f"{prefix}/ingest_date={ingest_date}"
+
+    s3 = _s3(client)
+    dest_root = Path(dest_root)
+    downloaded = skipped = downloaded_bytes = 0
+
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if not key.endswith(".jsonl.gz"):
+                continue
+            local = dest_root / key[len(prefix) :].lstrip("/")
+            if local.exists() and local.stat().st_size == obj["Size"]:
+                skipped += 1
+                continue
+            local.parent.mkdir(parents=True, exist_ok=True)
+            s3.download_file(bucket, key, str(local))
+            downloaded += 1
+            downloaded_bytes += obj["Size"]
+
+    return SyncResult(
+        downloaded=downloaded,
+        skipped=skipped,
+        bytes_downloaded=downloaded_bytes,
+        local_root=dest_root,
+    )
 
 
 def read_staging(uri: str, *, client: Any | None = None) -> list[RawDocument]:

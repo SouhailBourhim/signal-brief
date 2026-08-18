@@ -41,8 +41,16 @@ class Settings(BaseSettings):
 
     @property
     def user_agent(self) -> str:
-        """SEC requires a descriptive User-Agent carrying a contact email. SPEC §6.2."""
-        return f"signal/0.0 (+https://github.com/signal; {self.contact_email})"
+        """`Name contact@email` — the shape SEC actually accepts. SPEC §6.2.
+
+        Not a style preference. EDGAR 403s the conventional browser-ish form
+        (`signal/0.0 (+https://github.com/signal; addr)`) with "Your Request Originates
+        from an Undeclared Automated Tool", and serves a 200 for the plain name-then-email
+        form. Measured against the live endpoint on 2026-08-18, not inferred from the
+        docs. The other sources accept either, so there is one User-Agent, in the format
+        the strictest source demands.
+        """
+        return f"Signal Brief {self.contact_email}"
 
     @property
     def bronze_root(self) -> Path:
@@ -55,6 +63,13 @@ class Settings(BaseSettings):
         `bronze.raw_documents` Iceberg table on its own schedule (see
         `spark/jobs/commit_bronze.py`)."""
         return f"s3://{self.bronze_bucket}/staging"
+
+    @property
+    def staging_cache_root(self) -> Path:
+        """Where staged objects are mirrored before Spark reads them. Under `cache_root`
+        because it is exactly SPEC §6.2's read-once cache: staged objects are immutable,
+        so one download each, ever (SPEC §10.1)."""
+        return self.cache_root / "staging"
 
     @property
     def warehouse_uri(self) -> str:
@@ -92,6 +107,10 @@ SOURCES: dict[str, SourceConfig] = {
         freshness_sla_seconds=60,
         min_docs_per_window=0,  # a quiet minute on HN is normal, not a failure
         rate_limit_per_sec=5.0,
+        # Short, because one poll is up to 200 of these: a generous per-request timeout
+        # multiplies into a killed invocation, and a slow item is not worth waiting for
+        # when the next poll re-reads the same watermark anyway.
+        timeout_seconds=5.0,
         user_agent=settings.user_agent,
     ),
     "edgar": SourceConfig(
@@ -103,6 +122,9 @@ SOURCES: dict[str, SourceConfig] = {
         freshness_sla_seconds=900,
         min_docs_per_window=1,
         rate_limit_per_sec=1.0,  # SEC fair-access limits; a descriptive User-Agent is required
+        # browse-edgar is a CGI script, not a static file, and 10s was not enough from
+        # Lambda — measured, not guessed.
+        timeout_seconds=30.0,
         user_agent=settings.user_agent,
     ),
     "rss_tech": SourceConfig(
