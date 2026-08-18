@@ -22,6 +22,9 @@ window. What catch-up cannot recover is recorded as a `gap_reason` per source pe
 in `ops.source_health` and printed in the brief's footer, rather than left to look like a
 quiet day (SPEC §6.3).
 
+**New to data engineering?** [`docs/how-signal-works.md`](docs/how-signal-works.md) explains
+what each phase is for, in plain English, with no prior knowledge assumed.
+
 ## Quickstart
 
 ```bash
@@ -73,6 +76,7 @@ clustering is good. Phase 3 replaces them with ~200 real labeled pairs.
 | `handlers/` | Lambda entry point — one artifact, N functions |
 | `infra/terraform/` | `bootstrap/` (state backend), `main/` (everything else) |
 | `evals/` | Labeled sets, scorers, and the accuracy floors CI enforces |
+| [`docs/how-signal-works.md`](docs/how-signal-works.md) | What each phase is for, in plain English — no prior knowledge assumed |
 | [`docs/decisions/`](docs/decisions/) | ADRs, including the ones that reversed earlier choices |
 | `docs/archive/` | Superseded specs, kept for the decision trail |
 
