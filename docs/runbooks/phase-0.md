@@ -8,14 +8,14 @@ green, CI is green, and **zero AWS resources exist beyond guardrails and Terrafo
 - [x] ADR-0001 (no Kafka), ADR-0002 (runtime shape), ADR-0004 (package name)
 - [ ] `gh repo create signal --public --source . --push`
 
-## 0.B — Dev machine *(Ryzen box)*
-- [ ] WSL2 + Ubuntu 24.04 if on Windows; clone **inside** the WSL2 filesystem, never `/mnt/c`
-- [ ] JDK 17 (Temurin) — Spark 4 requires 17+
-- [ ] `uv`, then `uv python install 3.12`
-- [ ] Docker, Terraform ≥ 1.11, AWS CLI v2, `gh`
-- [ ] Ollama on the **host**; pull an 8B-class q4 model
-- [ ] Record digest + tokens/sec in ADR-0003, then rewrite SPEC §7.3's capacity paragraph
-- [ ] `make setup && make skeleton` — first run with a real JVM
+## 0.B — Dev machine *(Ryzen box)* *(done)*
+- [x] WSL2 + Ubuntu 24.04 if on Windows; clone **inside** the WSL2 filesystem, never `/mnt/c`
+- [x] JDK 17 (Temurin) — Spark 4 requires 17+
+- [x] `uv`, then `uv python install 3.12`
+- [x] Docker, Terraform ≥ 1.11, AWS CLI v2, `gh`
+- [x] Ollama on the **host**; pull an 8B-class q4 model
+- [x] Record digest + tokens/sec in ADR-0003, then rewrite SPEC §7.3's capacity paragraph
+- [x] `make setup && make skeleton` — first run with a real JVM
 
 ## 0.C — AWS guardrails *(before any billable resource)*
 - [ ] Root MFA; stop using root; admin identity via IAM Identity Center
