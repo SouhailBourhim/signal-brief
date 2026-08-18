@@ -40,10 +40,12 @@ horizon allows and records `gap_reason` for the rest.
       defaults to -1. To restore the intent: raise Service Quota **L-B99A9384**, then set
       the variable to 1. Until then every cadence is far longer than its function timeout
       and the scheduler's retry window is shorter than the gap to the next tick
-- [ ] **Confirm the SNS subscription email.** Terraform created it in
-      `PendingConfirmation` and cannot tell the difference — an unconfirmed subscription
-      means every alarm above fires into nothing. Same trap as 0.C's budget alerts.
-      Check with `aws sns list-subscriptions-by-topic --topic-arn arn:aws:sns:us-east-1:481879233905:signal-alerts`
+- [x] **SNS subscription confirmed.** Terraform creates it in `PendingConfirmation` and
+      cannot tell the difference — an unconfirmed subscription means every alarm above
+      fires into nothing, the same trap as 0.C's budget alerts. Verified rather than
+      assumed: `aws sns get-subscription-attributes --subscription-arn <arn>` reports
+      `PendingConfirmation: false`. Re-check this after any change that recreates the
+      subscription
 - [ ] Re-check the cost-allocation tag from 0.C — `aws ce list-cost-allocation-tags`
 
 ### What the first live invocations found
