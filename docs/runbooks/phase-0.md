@@ -6,7 +6,8 @@ green, CI is green, and **zero AWS resources exist beyond guardrails and Terrafo
 ## 0.A — Repo *(done)*
 - [x] Git repo, `.gitignore`, MIT license, README
 - [x] ADR-0001 (no Kafka), ADR-0002 (runtime shape), ADR-0004 (package name)
-- [ ] `gh repo create signal --public --source . --push`
+- [x] `gh repo create signal-brief --public --source . --push` —
+      https://github.com/SouhailBourhim/signal-brief
 
 ## 0.B — Dev machine *(Ryzen box)* *(done)*
 - [x] WSL2 + Ubuntu 24.04 if on Windows; clone **inside** the WSL2 filesystem, never `/mnt/c`
