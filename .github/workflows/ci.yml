@@ -63,6 +63,7 @@ jobs:
           terraform_version: "1.11.0"
       - run: terraform -chdir=infra/terraform/bootstrap fmt -check
       - run: terraform -chdir=infra/terraform/main fmt -check
+      - run: terraform -chdir=infra/terraform/main init -backend=false
       - run: terraform -chdir=infra/terraform/main validate
 
       # Same-repo events only: forked PRs don't get this role's OIDC trust (the
@@ -76,5 +77,5 @@ jobs:
 
       - if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
-          terraform -chdir=infra/terraform/main init
+          terraform -chdir=infra/terraform/main init -reconfigure
           terraform -chdir=infra/terraform/main plan
