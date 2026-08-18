@@ -31,12 +31,17 @@ def assess_source(
     docs_ingested: int,
     last_success_at: datetime | None,
     now: datetime | None = None,
+    gap_reason: str | None = None,
 ) -> SourceHealth:
     """Classify one source.
 
     `stale` is the important state and the reason this is not just a status-code check:
     the common failure is a feed returning 200 with content that has not moved, not a
     500 (SPEC §11). A source can be succeeding and still be dead.
+
+    `gap_reason` comes from a catch-up run (`ops.recovery`) and means something different
+    again: the source is healthy *now*, and an interval is permanently missing anyway.
+    SPEC §6.3 requires that be visible rather than implied by a thin day.
     """
     now = now or utc_now()
     staleness = (
@@ -49,6 +54,8 @@ def assess_source(
         status = "stale"
     elif docs_ingested < config.min_docs_per_window:
         status = "thin"
+    elif gap_reason is not None:
+        status = "gapped"
     else:
         status = "ok"
 
@@ -59,6 +66,7 @@ def assess_source(
         last_success_at=last_success_at,
         staleness_seconds=staleness,
         status=status,
+        gap_reason=gap_reason,
     )
 
 
@@ -83,7 +91,9 @@ class RunHealth:
 
     @property
     def status(self) -> str:
-        if any(s.status in {"stale", "never_succeeded"} for s in self.sources):
+        # `gapped` counts as degraded: an interval nothing can recover is a worse fact
+        # about a run than a thin one, and the footer should not read "ok" over it.
+        if any(s.status in {"stale", "never_succeeded", "gapped"} for s in self.sources):
             return "degraded"
         if any(s.status == "thin" for s in self.sources):
             return "thin"
@@ -107,6 +117,7 @@ class RunHealth:
                     "staleness_seconds": (
                         None if s.staleness_seconds == float("inf") else round(s.staleness_seconds)
                     ),
+                    "gap_reason": s.gap_reason,
                 }
                 for s in self.sources
             ],

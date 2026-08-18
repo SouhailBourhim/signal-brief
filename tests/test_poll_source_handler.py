@@ -81,9 +81,9 @@ def test_stages_payloads_to_s3_and_persists_state(aws_env):
     assert listing["KeyCount"] == len(result["objects"])
 
     # The staged bytes are the documents, intact — the commit job has nothing to recover.
-    restored = read_staging(result["objects"][0], client=s3)
-    assert sum(len(read_staging(uri, client=s3)) for uri in result["objects"]) == result["documents"]
-    assert restored[0].payload
+    restored = [d for uri in result["objects"] for d in read_staging(uri, client=s3)]
+    assert len(restored) == result["documents"]
+    assert all(d.payload for d in restored)
 
     # The whole response has to survive Lambda's JSON serialization of the return value.
     json.dumps(result)

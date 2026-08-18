@@ -1266,6 +1266,11 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+lambda = [
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+]
 spark = [
     { name = "pandas" },
     { name = "pyspark" },
@@ -1288,14 +1293,17 @@ dev = [
 requires-dist = [
     { name = "boto3", specifier = ">=1.35" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "httpx", marker = "extra == 'lambda'", specifier = ">=0.27" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "pandas", marker = "extra == 'spark'", specifier = ">=2.2,<3.0" },
     { name = "pyarrow", specifier = ">=17.0" },
     { name = "pydantic", specifier = ">=2.9" },
+    { name = "pydantic", marker = "extra == 'lambda'", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.5" },
+    { name = "pydantic-settings", marker = "extra == 'lambda'", specifier = ">=2.5" },
     { name = "pyspark", marker = "extra == 'spark'", specifier = ">=4.1,<4.2" },
 ]
-provides-extras = ["spark"]
+provides-extras = ["lambda", "spark"]
 
 [package.metadata.requires-dev]
 dev = [

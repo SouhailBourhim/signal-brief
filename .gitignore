@@ -19,6 +19,8 @@ data/
 out/
 # read-once bronze object cache (SPEC 6.2)
 .cache/
+# Lambda deployment artifact, rebuilt by `make lambda-package`
+build/
 *.log
 
 # Secrets — never commit

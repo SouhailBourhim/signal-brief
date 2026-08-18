@@ -1,6 +1,6 @@
 # Signal — see SPEC.md. Every target here is meant to work from a fresh clone.
 .DEFAULT_GOAL := help
-.PHONY: help setup up down skeleton test lint fmt eval brief clean tf-validate
+.PHONY: help setup up down skeleton test lint fmt eval brief clean tf-validate lambda-package
 
 UV ?= uv
 
@@ -43,6 +43,20 @@ eval: ## score the labeled eval sets and enforce the accuracy floors (SPEC 11)
 brief: ## open the most recent rendered brief
 	@ls -t out/brief-*.html | head -1 | xargs -I{} sh -c 'echo {}; open {} 2>/dev/null || true'
 
+lambda-package: ## build build/lambda/, the poller deployment artifact Terraform zips
+	rm -rf build/lambda
+	# Linux wheels for the Lambda runtime, not this machine's — pydantic-core is
+	# compiled, so a macOS or Windows wheel here fails at import time in AWS with a
+	# stack trace that names nothing useful. ADR-0006.
+	$(UV) pip install --target build/lambda --only-binary :all: \
+		--python-platform x86_64-manylinux2014 --python-version 3.12 \
+		httpx pydantic pydantic-settings
+	cp -r src/signal_core build/lambda/
+	# Flat, so the AWS handler string is `poll_source.handler` (see infra lambda.tf).
+	cp handlers/poll_source.py build/lambda/
+	find build/lambda -name '__pycache__' -type d -prune -exec rm -rf {} +
+	@du -sh build/lambda
+
 tf-validate: ## terraform fmt + validate
 	terraform -chdir=infra/terraform/bootstrap fmt -check
 	terraform -chdir=infra/terraform/main fmt -check
@@ -50,5 +64,5 @@ tf-validate: ## terraform fmt + validate
 		terraform -chdir=infra/terraform/main validate
 
 clean: ## remove generated data and briefs (never touches bronze in S3)
-	rm -rf data out .cache .pytest_cache .ruff_cache .mypy_cache
+	rm -rf data out build .cache .pytest_cache .ruff_cache .mypy_cache
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +

@@ -7,9 +7,19 @@ immutably; collapses syndicated coverage into ranked story clusters; and publish
 at 07:00 Africa/Casablanca with lineage, replay, cost controls, and locally run LLM
 enrichment built in.
 
-**Status: Phase 0.** The walking skeleton runs end to end on a fake source. No real feed,
-no AWS resources, no LLM yet. [`SPEC.md`](SPEC.md) is the specification; this README will
-carry real numbers once the pipeline can compute them.
+**Status: Phase 1, in progress.** Three real pollers (Hacker News, SEC EDGAR, one tech RSS
+feed) run against `bronze.raw_documents` on Iceberg, with the ingest infrastructure written
+in Terraform and planned but **not yet applied** — no billable AWS resource exists beyond
+the Phase 0 guardrails. No LLM yet. [`SPEC.md`](SPEC.md) is the specification;
+[`docs/runbooks/phase-1.md`](docs/runbooks/phase-1.md) is where this phase stands.
+
+**Replay and catch-up are not the same promise.** Replay reprocesses an interval from bytes
+already in `bronze/` — deterministic, and always available. Catch-up re-fetches what was
+missed during downtime, and is bounded by each source's backfill horizon: Hacker News can be
+recovered completely, EDGAR for about a day, and an RSS feed only as far back as its current
+window. What catch-up cannot recover is recorded as a `gap_reason` per source per interval
+in `ops.source_health` and printed in the brief's footer, rather than left to look like a
+quiet day (SPEC §6.3).
 
 ## Quickstart
 

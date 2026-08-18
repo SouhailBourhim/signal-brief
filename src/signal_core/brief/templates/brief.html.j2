@@ -77,6 +77,8 @@
         <td class="{{ 'ok' if s.status == 'ok' else ('thin' if s.status == 'thin' else 'degraded') }}">{{ s.status }}</td>
         <td>{{ s.docs }} docs</td>
         <td>{% if s.staleness_seconds is none %}never{% else %}{{ s.staleness_seconds }}s ago{% endif %}</td>
+        {# SPEC §6.3: a gap catch-up could not close is stated, not implied by a thin day. #}
+        <td class="degraded">{{ s.gap_reason or '' }}</td>
       </tr>
       {% endfor %}
     </table>

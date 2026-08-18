@@ -61,6 +61,15 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.11.0"
+
+      # The poller Lambdas are zipped from build/lambda by `data.archive_file`, so it has
+      # to exist before plan or validate — there is no artifact-less plan. Cheap: three
+      # pure-Python wheels and a copy, ~11 MB (ADR-0006).
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - run: make lambda-package
+
       - run: terraform -chdir=infra/terraform/bootstrap fmt -check
       - run: terraform -chdir=infra/terraform/main fmt -check
       - run: terraform -chdir=infra/terraform/main init -backend=false

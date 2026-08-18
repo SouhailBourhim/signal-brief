@@ -16,6 +16,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Exactly what a poller Lambda imports at runtime, and nothing else — `make
+# lambda-package` installs this list into the zip. boto3 is absent deliberately: the
+# Lambda runtime ships its own, and bundling a second copy costs 30 MB for nothing.
+# ADR-0006 explains why pyarrow is not here either.
+lambda = ["httpx>=0.27", "pydantic>=2.9", "pydantic-settings>=2.5"]
+
 # Kept out of the base install so Lambda artifacts stay small: pollers never
 # import Spark, and `uv pip install .` for the Lambda zip must not pull ~300 MB.
 # Upper bound is Iceberg's, not ours: its Spark runtime is compiled against a specific
