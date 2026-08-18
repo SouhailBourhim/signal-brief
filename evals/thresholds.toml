@@ -1,0 +1,17 @@
+# Accuracy floors enforced by `make eval` and by CI on every PR (SPEC §11).
+#
+# These ratchet UP as real labeled data arrives; they never ratchet down to accommodate a
+# regression. Lowering a floor is a decision that belongs in an ADR, not in a commit that
+# is trying to go green.
+
+[dedup]           # SPEC §7.1 — currently the Phase 0 fixture; Phase 3 adds ~200 real pairs
+min_precision = 1.00   # a false merge silently deletes a story from the brief
+min_recall    = 0.90
+
+[entities]        # SPEC §7.2 — Phase 3, ~300 labeled mentions
+min_precision = 0.0
+min_recall    = 0.0
+
+[enrichment]      # SPEC §7.3 — Phase 4, 100 labeled examples
+min_precision = 0.0
+min_recall    = 0.0

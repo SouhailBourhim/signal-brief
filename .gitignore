@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Project runtime
+# NB: .gitignore has no trailing-comment syntax — a comment after a pattern becomes part
+# of the pattern, and the rule silently stops matching.
+# local bronze/silver/gold roots
+data/
+# rendered briefs
+out/
+# read-once bronze object cache (SPEC 6.2)
+.cache/
+*.log
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+credentials
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

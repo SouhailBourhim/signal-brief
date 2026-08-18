@@ -1,0 +1,56 @@
+[project]
+name = "signal-brief"
+version = "0.0.0"
+description = "Signal — a daily tech/finance/economy brief, and the pipeline that earns it."
+requires-python = ">=3.12,<3.13"
+license = { file = "LICENSE" }
+dependencies = [
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "httpx>=0.27",
+    "pyarrow>=17.0",
+    "jinja2>=3.1",
+]
+
+[project.optional-dependencies]
+# Kept out of the base install so Lambda artifacts stay small: pollers never
+# import Spark, and `uv pip install .` for the Lambda zip must not pull ~300 MB.
+spark = ["pyspark>=4.0"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=5.0",
+    "ruff>=0.7",
+    "mypy>=1.11",
+    "pyspark>=4.0",
+    "pre-commit>=3.8",
+]
+
+[project.scripts]
+signal = "signal_core.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/signal_core"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "PTH", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = ["spark: requires a JVM and PySpark (skipped where unavailable)"]
+
+[tool.mypy]
+python_version = "3.12"
+packages = ["signal_core"]
+ignore_missing_imports = true

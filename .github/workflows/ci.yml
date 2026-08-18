@@ -1,0 +1,64 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Spark 4 requires Java 17+. The skeleton's normalize stage runs on Spark here,
+      # which is the point: CI is where the toolchain gets verified on a machine that is
+      # not the author's.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - run: uv sync --all-extras
+
+      - name: lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: test
+        run: uv run pytest
+
+      - name: walking skeleton (clean clone, with Spark)
+        run: uv run signal skeleton
+
+      - name: brief was actually produced
+        run: |
+          test -f out/brief-*.html || { echo "no brief rendered"; exit 1; }
+          grep -q "pipeline:" out/brief-*.html || { echo "health footer missing"; exit 1; }
+
+      # SPEC §11: an accuracy regression fails the build.
+      - name: eval gates
+        run: uv run python evals/score.py --gate
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: brief
+          path: out/*.html
+
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.11.0"
+      - run: terraform -chdir=infra/terraform/bootstrap fmt -check
+      - run: terraform -chdir=infra/terraform/main fmt -check
+      - run: terraform -chdir=infra/terraform/main init -backend=false
+      - run: terraform -chdir=infra/terraform/main validate

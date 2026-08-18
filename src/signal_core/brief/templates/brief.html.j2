@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signal — {{ date }}</title>
+<style>
+  :root { --bg:#fbfaf8; --fg:#1a1a18; --muted:#6b6b64; --rule:#e2e0da; --accent:#8a5a2b; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16161a; --fg:#e8e6e1; --muted:#9a978f; --rule:#2c2c33; --accent:#d0a068; }
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--fg); margin: 0;
+         font: 16px/1.55 ui-serif, Georgia, "Times New Roman", serif; }
+  main { max-width: 42rem; margin: 0 auto; padding: 3rem 1.25rem 4rem; }
+  header { border-bottom: 2px solid var(--fg); padding-bottom: .75rem; margin-bottom: 2rem; }
+  h1 { font-size: 1.6rem; margin: 0; letter-spacing: .02em; }
+  .date { color: var(--muted); font-size: .85rem; margin-top: .3rem; }
+  article { padding: 1.25rem 0; border-bottom: 1px solid var(--rule); }
+  h2 { font-size: 1.08rem; margin: 0 0 .4rem; line-height: 1.35; }
+  h2 a { color: inherit; text-decoration: none; }
+  h2 a:hover { text-decoration: underline; text-decoration-color: var(--accent); }
+  .meta { color: var(--muted); font-size: .78rem;
+          font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .meta .flag { color: var(--accent); }
+  p.body { margin: .5rem 0 0; color: var(--fg); }
+  footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--rule);
+           font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .74rem;
+           color: var(--muted); }
+  footer table { border-collapse: collapse; margin-top: .6rem; width: 100%; }
+  footer td { padding: .15rem .6rem .15rem 0; }
+  .ok { color: #3f7d3f; } .thin { color: #9a7b1f; } .degraded { color: #a34141; }
+  @media (prefers-color-scheme: dark) {
+    .ok { color: #7ab77a; } .thin { color: #d2b45c; } .degraded { color: #e08585; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Signal</h1>
+    <div class="date">{{ date }} · {{ clusters|length }} stories</div>
+  </header>
+
+  {% for c in clusters %}
+  <article>
+    <h2><a href="{{ c.url_canonical }}">{{ c.title }}</a></h2>
+    <div class="meta">
+      {{ c.publisher_domain }}
+      {% if c.distinct_publisher_count > 1 %}
+        · {{ c.distinct_publisher_count }} publishers ({{ c.publishers|join(', ') }})
+      {% endif %}
+      · score {{ '%.2f'|format(c.score) }}
+      {% for k, v in c.score_components.items() %}· {{ k }} {{ '%.2f'|format(v) }}{% endfor %}
+      {% if c.timestamp_flagged %}<span class="flag">· timestamp unverified</span>{% endif %}
+    </div>
+    <p class="body">{{ c.body_text }}</p>
+  </article>
+  {% else %}
+  <article><p class="body">No stories cleared the threshold.</p></article>
+  {% endfor %}
+
+  {# SPEC §11: the quality layer is visible to anyone who opens the output. #}
+  <footer>
+    <strong class="{{ health.status }}">pipeline: {{ health.status }}</strong>
+    · {{ health.articles_in }} articles in
+    · {{ health.clusters_out }} clusters out
+    · dedup {{ health.dedup_ratio }}x
+    · {{ health.exact_duplicates_removed }} exact dupes removed
+    · cache {{ '%.0f'|format(health.cache_hit_rate * 100) }}%
+    · {{ health.runtime_seconds }}s
+    · ${{ '%.4f'|format(health.estimated_cost_usd) }}
+    <table>
+      {% for s in health.sources %}
+      <tr>
+        <td>{{ s.source_id }}</td>
+        <td class="{{ 'ok' if s.status == 'ok' else ('thin' if s.status == 'thin' else 'degraded') }}">{{ s.status }}</td>
+        <td>{{ s.docs }} docs</td>
+        <td>{% if s.staleness_seconds is none %}never{% else %}{{ s.staleness_seconds }}s ago{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </footer>
+</main>
+</body>
+</html>
