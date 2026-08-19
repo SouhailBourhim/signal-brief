@@ -20,13 +20,18 @@ from signal_core.config import SOURCES, Settings
 from signal_core.contracts import State
 from signal_core.dedup import exact_dedup, group_stories
 from signal_core.ops.health import RunHealth, assess_source
+from signal_core.parse import get_parser
 from signal_core.sources import get_poller
 from signal_core.storage import write_bronze
-from signal_core.transform import normalize_document
+from signal_core.transform import to_article
 
 
 def _normalize_with_spark(bronze_root: Path) -> list[dict[str, Any]]:
-    from signal_core.spark.jobs.normalize import build_session, normalize, split_rejects
+    # Plain, non-Iceberg session: `make skeleton` must run on a fresh clone with no
+    # network beyond PyPI, and `build_iceberg_session` resolves a runtime jar from
+    # Maven on first use (docs/runbooks/phase-2.md 2.C).
+    from signal_core.spark.jobs.normalize import normalize, split_rejects
+    from signal_core.spark.session import build_session
 
     spark = build_session("signal-skeleton")
     try:
@@ -42,21 +47,24 @@ def _normalize_with_spark(bronze_root: Path) -> list[dict[str, Any]]:
 def _normalize_in_process(documents) -> list[dict[str, Any]]:
     """Spark-free fallback so the skeleton still runs without a JVM.
 
-    Identical logic — both paths call `normalize_document` — so this is a transport
-    difference only. CI runs the Spark path; this exists so a contributor without a JVM
-    is not blocked, and it prints loudly so nobody mistakes it for a green Spark run.
+    Identical logic to the Spark path — both call `parse.get_parser` then
+    `transform.to_article` — so this is a transport difference only. `fake` goes through
+    the real parser registry here too (docs/runbooks/phase-2.md 2.B: "`fake` becomes
+    just another parser"), so a break in that path fails the skeleton, not just a
+    Spark-only regression test. CI runs the Spark path; this exists so a contributor
+    without a JVM is not blocked, and it prints loudly so nobody mistakes it for a green
+    Spark run.
     """
-    rows = [
-        normalize_document(
-            {
-                "source_id": d.source_id,
-                "fetched_at": d.fetched_at,
-                "content_hash": d.content_hash,
-                "payload": d.payload,
-            }
-        )
-        for d in documents
-    ]
+    rows: list[dict[str, Any]] = []
+    for d in documents:
+        bronze_row = {
+            "source_id": d.source_id,
+            "fetched_at": d.fetched_at,
+            "content_hash": d.content_hash,
+            "payload": d.payload,
+        }
+        result = get_parser(d.source_id)(d.payload)
+        rows.extend(to_article(item, bronze_row) for item in result.items)
     return [r for r in rows if not r["parse_error"]]
 
 

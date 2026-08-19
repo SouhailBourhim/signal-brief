@@ -1,0 +1,373 @@
+<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+	xmlns:sy="http://purl.org/rss/1.0/modules/syndication/"
+	xmlns:slash="http://purl.org/rss/1.0/modules/slash/"
+	>
+
+<channel>
+	<title>TechCrunch</title>
+	<atom:link href="https://techcrunch.com/feed/" rel="self" type="application/rss+xml" />
+	<link>https://techcrunch.com/</link>
+	<description>Startup and Technology News</description>
+	<lastBuildDate>Tue, 18 Aug 2026 22:50:29 +0000</lastBuildDate>
+	<language>en-US</language>
+	<sy:updatePeriod>
+	hourly	</sy:updatePeriod>
+	<sy:updateFrequency>
+	1	</sy:updateFrequency>
+	<generator>https://wordpress.org/?v=6.9.7</generator>
+
+<image>
+	<url>https://techcrunch.com/wp-content/uploads/2015/02/cropped-cropped-favicon-gradient.png?w=32</url>
+	<title>TechCrunch</title>
+	<link>https://techcrunch.com/</link>
+	<width>32</width>
+	<height>32</height>
+</image>
+	<item>
+		<title>Cursor capitalizes on GitHub frustration, launches rival hosting platform</title>
+		<link>https://techcrunch.com/2026/08/18/cursor-capitalizes-on-github-frustration-launches-rival-hosting-platform/</link>
+
+		<dc:creator><![CDATA[Lucas Ropek]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 22:14:25 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[cursor]]></category>
+		<category><![CDATA[GitHub]]></category>
+		<category><![CDATA[spacexai]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3154081</guid>
+
+					<description><![CDATA[Cursor, known for its AI Code Editor, is launching a new code-hosting platform to rival developers' long preferred favorite, GitHub. ]]></description>
+
+
+
+			</item>
+		<item>
+		<title>DOJ&#8217;s probe into Andreessen Horowitz over board seats baffles VCs</title>
+		<link>https://techcrunch.com/2026/08/18/dojs-probe-into-andreessen-horowitz-over-board-seats-baffles-vcs/</link>
+
+		<dc:creator><![CDATA[Marina Temkin]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 20:36:20 +0000</pubDate>
+				<category><![CDATA[Venture]]></category>
+		<category><![CDATA[Andressen Horowitz]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3154080</guid>
+
+					<description><![CDATA[Since portfolio companies often pivot and expand into competing markets, investors view occasional conflicts of interest as unavoidable for large VC firms.]]></description>
+
+
+
+			</item>
+		<item>
+		<title>TikTok explores peer-to-peer payments via DMs, report says</title>
+		<link>https://techcrunch.com/2026/08/18/tiktok-explores-peer-to-peer-payments-via-dms-report-says/</link>
+
+		<dc:creator><![CDATA[Aisha Malik]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 20:03:56 +0000</pubDate>
+				<category><![CDATA[Apps]]></category>
+		<category><![CDATA[Social]]></category>
+		<category><![CDATA[In Brief]]></category>
+		<category><![CDATA[payments]]></category>
+		<category><![CDATA[TikTok]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3154071</guid>
+
+					<description><![CDATA[If rolled out, the feature would use the social media service’s TikTok Pay offering, which is already available in Southeast Asia for TikTok Shop purchases.]]></description>
+
+
+
+			</item>
+		<item>
+		<title>OpenAI institutes new safeguards after Hugging Face breach</title>
+		<link>https://techcrunch.com/2026/08/18/openai-institutes-new-safeguards-after-hugging-face-breach/</link>
+
+		<dc:creator><![CDATA[Russell Brandom]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 18:00:00 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[Security]]></category>
+		<category><![CDATA[OpenAI]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3154044</guid>
+
+					<description><![CDATA[The new safeguards include more detailed monitoring of models during the development process, as well as greater emphasis on alignment and security during the post-training process.]]></description>
+
+
+
+			</item>
+		<item>
+		<title>Save up to $300 on your TechCrunch Disrupt 2026 pass until August 21 </title>
+		<link>https://techcrunch.com/2026/08/18/save-up-to-300-on-your-techcrunch-disrupt-2026-pass-until-august-21/</link>
+
+		<dc:creator><![CDATA[TechCrunch Events]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 17:31:01 +0000</pubDate>
+				<category><![CDATA[Startups]]></category>
+		<category><![CDATA[TechCrunch Disrupt]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3153590</guid>
+
+					<description><![CDATA[If you’ve been circling around Disrupt, then now’s the best time to lock in your pass and start getting ready to join the rest of the startup community gathering in San Francisco from October 13-15 at Moscone West!   ]]></description>
+
+
+
+			</item>
+		<item>
+		<title>Etched&#8217;s valuation doubles to $21B in a month</title>
+		<link>https://techcrunch.com/2026/08/18/etcheds-valuation-doubles-to-21b-in-a-month/</link>
+
+		<dc:creator><![CDATA[Julie Bort]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 17:21:58 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[Fundraising]]></category>
+		<category><![CDATA[Startups]]></category>
+		<category><![CDATA[etched]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3153956</guid>
+
+					<description><![CDATA[Jane Street has installed Etched's first shipped AI cluster system, and was so impressed, it led another massive round, the startup says.]]></description>
+
+
+
+			</item>
+		<item>
+		<title>Apple overhauls its EU App Store fees, loosens rules for alternative app stores</title>
+		<link>https://techcrunch.com/2026/08/18/apple-overhauls-its-eu-app-store-fees-loosens-rules-for-alternative-app-stores/</link>
+
+		<dc:creator><![CDATA[Sarah Perez]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 17:12:13 +0000</pubDate>
+				<category><![CDATA[Apps]]></category>
+		<category><![CDATA[Commerce]]></category>
+		<category><![CDATA[Apple]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3153952</guid>
+
+					<description><![CDATA[Apple is simplifying its EU App Store fees, replacing its per-install fee with a 5% commission for apps distributed outside the App Store and making it easier for developers to operate alternative app marketplaces.]]></description>
+
+
+
+			</item>
+		<item>
+		<title>Comcast adds motion sensing to millions of its newer routers, with a privacy catch</title>
+		<link>https://techcrunch.com/2026/08/18/comcast-adds-motion-sensing-to-millions-of-its-newer-routers-with-a-privacy-catch/</link>
+
+		<dc:creator><![CDATA[Zack Whittaker]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 16:39:05 +0000</pubDate>
+				<category><![CDATA[Security]]></category>
+		<category><![CDATA[Comcast]]></category>
+		<category><![CDATA[cybersecurity]]></category>
+		<category><![CDATA[In Brief]]></category>
+		<category><![CDATA[privacy]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3153944</guid>
+
+					<description><![CDATA[A new feature added to Comcast's newest routers can detect if there is motion inside your home without needing traditional motion sensors.]]></description>
+
+
+
+			</item>
+		<item>
+		<title>Why Apple&#8217;s camera-equipped AirPods may not be the &#8216;pervert pods&#8217; consumers fear</title>
+		<link>https://techcrunch.com/2026/08/18/why-apples-camera-equipped-airpods-may-not-be-the-pervert-pods-consumers-fear/</link>
+
+		<dc:creator><![CDATA[Sarah Perez]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 16:19:10 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[Hardware]]></category>
+		<category><![CDATA[AirPods]]></category>
+		<category><![CDATA[Apple]]></category>
+		<category><![CDATA[siri]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3153909</guid>
+
+					<description><![CDATA[Apple’s leaked camera-equipped AirPods might avoid the privacy pitfalls of other AI wearables by preventing users from recording photos and videos.]]></description>
+
+
+
+			</item>
+		<item>
+		<title>Bluesky says its recent outage was caused by another DDoS attack</title>
+		<link>https://techcrunch.com/2026/08/18/bluesky-says-its-recent-outage-was-caused-by-another-ddos-attack/</link>
+
+		<dc:creator><![CDATA[Zack Whittaker]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 15:59:48 +0000</pubDate>
+				<category><![CDATA[Security]]></category>
+		<category><![CDATA[Bluesky]]></category>
+		<category><![CDATA[cybersecurity]]></category>
+		<category><![CDATA[ddos]]></category>
+		<category><![CDATA[distributed denial of service]]></category>
+		<category><![CDATA[In Brief]]></category>
+		<category><![CDATA[social media]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3153904</guid>
+
+					<description><![CDATA[This is the latest large-scale DDoS attack to hit the social networking site this year.]]></description>
+
+
+
+			</item>
+		<item>
+		<title>Peacock is raising prices across all of its streaming plans</title>
+		<link>https://techcrunch.com/2026/08/18/peacock-is-raising-prices-across-all-of-its-streaming-plans/</link>
+
+		<dc:creator><![CDATA[Aisha Malik]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 15:26:31 +0000</pubDate>
+				<category><![CDATA[Apps]]></category>
+		<category><![CDATA[Media & Entertainment]]></category>
+		<category><![CDATA[peacock]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3153908</guid>
+
+					<description><![CDATA["These price changes allow Peacock to continue to create the best experience for its viewers, remain competitive in the marketplace, and deliver unique content across all genres," the company wrote on a support page.]]></description>
+
+
+
+			</item>
+		<item>
+		<title>Anthro Energy breaks ground on factory that could pave the road to solid-state batteries</title>
+		<link>https://techcrunch.com/2026/08/18/anthro-energy-breaks-ground-on-factory-that-could-pave-the-road-to-solid-state-batteries/</link>
+
+		<dc:creator><![CDATA[Tim De Chant]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 14:00:00 +0000</pubDate>
+				<category><![CDATA[Climate]]></category>
+		<category><![CDATA[Startups]]></category>
+		<category><![CDATA[battery manufacturing]]></category>
+		<category><![CDATA[Exclusive]]></category>
+		<category><![CDATA[lithium ion batteries]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3153829</guid>
+
+					<description><![CDATA[Battery materials startup Anthro Energy has broken ground on a Louisville factory to make electrolytes, including those for solid-state batteries.]]></description>
+
+
+
+			</item>
+		<item>
+		<title>Warp&#8217;s new system is an out-of-the-box software factory for AI development</title>
+		<link>https://techcrunch.com/2026/08/18/warps-new-system-is-an-out-of-the-box-software-factory-for-ai-development/</link>
+
+		<dc:creator><![CDATA[Russell Brandom]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 14:00:00 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[AI coding tools]]></category>
+		<category><![CDATA[warp]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3153863</guid>
+
+					<description><![CDATA[On Tuesday, Warp introduced Warp Factories, a new infrastructure system designed to make building AI software factories as easy as possible.]]></description>
+
+
+
+			</item>
+		<item>
+		<title>OpenAI launches a safer ChatGPT for teens — years after teens started using it</title>
+		<link>https://techcrunch.com/2026/08/18/openai-launches-a-safer-chatgpt-for-teens-years-after-teens-started-using-it/</link>
+
+		<dc:creator><![CDATA[Sarah Perez]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 13:50:30 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[OpenAI]]></category>
+		<category><![CDATA[Teens]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3153830</guid>
+
+					<description><![CDATA[ChatGPT for Teens adds age-appropriate safety measures, parental controls, and learning tools designed to steer teens away from harmful content — and from using AI to cheat on their homework.]]></description>
+
+
+
+			</item>
+		<item>
+		<title>Perplexity’s free AI offer left it with millions more users in India</title>
+		<link>https://techcrunch.com/2026/08/18/perplexitys-free-ai-offer-left-it-with-millions-more-users-in-india/</link>
+
+		<dc:creator><![CDATA[Jagmeet Singh]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 13:45:40 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[Apps]]></category>
+		<category><![CDATA[Startups]]></category>
+		<category><![CDATA[Airtel]]></category>
+		<category><![CDATA[Perplexity]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3153831</guid>
+
+					<description><![CDATA[Perplexity's India revenue rose about 60% after the Airtel offer ended for new users, even as downloads declined.]]></description>
+
+
+
+			</item>
+		<item>
+		<title>Apple&#8217;s new macOS update reportedly contains a video of AirPods with a camera</title>
+		<link>https://techcrunch.com/2026/08/18/apples-new-macos-update-reportedly-contains-a-video-of-airpods-with-a-camera/</link>
+
+		<dc:creator><![CDATA[Ivan Mehta]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 13:28:51 +0000</pubDate>
+				<category><![CDATA[Gadgets]]></category>
+		<category><![CDATA[AirPods]]></category>
+		<category><![CDATA[Apple]]></category>
+		<category><![CDATA[In Brief]]></category>
+		<category><![CDATA[visual intelligence]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3153763</guid>
+
+					<description><![CDATA[A video in a macOS Tahoe release candidate version shows a user wearing AirPods, looking at a book, and talking to Siri.]]></description>
+
+
+
+			</item>
+		<item>
+		<title>Daniel Ek&#8217;s body-scanning startup Neko Health opens first US office, in New York</title>
+		<link>https://techcrunch.com/2026/08/18/daniel-eks-body-scanning-startup-neko-health-opens-first-us-office-in-new-york/</link>
+
+		<dc:creator><![CDATA[Julie Bort]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 13:00:00 +0000</pubDate>
+				<category><![CDATA[Biotech & Health]]></category>
+		<category><![CDATA[Startups]]></category>
+		<category><![CDATA[TC]]></category>
+		<category><![CDATA[daniel ek]]></category>
+		<category><![CDATA[In Brief]]></category>
+		<category><![CDATA[Neko Health]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3153537</guid>
+
+					<description><![CDATA[The scanning and bloodwork health startup founded by Spotify's founder will officially launch in New York in about a month. ]]></description>
+
+
+
+			</item>
+		<item>
+		<title>Reach Capital raises $265M Fund V to back AI founders building to &#8216;expand human potential&#8217;</title>
+		<link>https://techcrunch.com/2026/08/18/reach-capital-raises-265m-fund-v-to-back-ai-founders-building-to-expand-human-potential/</link>
+
+		<dc:creator><![CDATA[Dominic-Madori Davis]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 11:00:00 +0000</pubDate>
+				<category><![CDATA[Startups]]></category>
+		<category><![CDATA[Venture]]></category>
+		<category><![CDATA[Exclusive]]></category>
+		<category><![CDATA[Reach Capital]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3153447</guid>
+
+					<description><![CDATA[Reach Capital announced Tuesday an oversubscribed $265 million Fund V. ]]></description>
+
+
+
+			</item>
+		<item>
+		<title>Fairphone is launching its latest repairable phone in the US too</title>
+		<link>https://techcrunch.com/2026/08/18/fairphone-is-launching-its-latest-repairable-phone-in-the-us-too/</link>
+
+		<dc:creator><![CDATA[Ivan Mehta]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 11:00:00 +0000</pubDate>
+				<category><![CDATA[Gadgets]]></category>
+		<category><![CDATA[Hardware]]></category>
+		<category><![CDATA[Fairphone]]></category>
+		<category><![CDATA[smartphones]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3153756</guid>
+
+					<description><![CDATA[The Fairphone 6+ is a midrange Android offering, but given the increasing prices of consumer gadgets amid the ongoing component shortages, a repairable device that can be made to last for years may prove a good proposition.]]></description>
+
+
+
+			</item>
+		<item>
+		<title>Einride strikes deal to add 500 Tesla Semis to its fleet</title>
+		<link>https://techcrunch.com/2026/08/18/einride-strikes-deal-to-add-500-tesla-semis-to-its-fleet/</link>
+
+		<dc:creator><![CDATA[Kirsten Korosec]]></dc:creator>
+		<pubDate>Tue, 18 Aug 2026 10:30:00 +0000</pubDate>
+				<category><![CDATA[Transportation]]></category>
+		<category><![CDATA[Amazon]]></category>
+		<category><![CDATA[einride]]></category>
+		<category><![CDATA[Tesla]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3153730</guid>
+
+					<description><![CDATA[The deal will triple the size of Einride's fleet while sweetening the company's sales pitch for its Saga AI software. The Tesla Semis will be available to customers across North America.]]></description>
+
+
+
+			</item>
+	</channel>
+</rss>
