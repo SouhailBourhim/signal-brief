@@ -60,6 +60,23 @@ variable "bronze_bucket" {
   default     = "signal-bronze-481879233905"
 }
 
+variable "athena_results_bucket" {
+  description = "Globally unique bucket for Athena query results. Separate from bronze (SPEC §10.3): bronze is prevent_destroy and the immutable record; query scratch is neither."
+  type        = string
+  default     = "signal-athena-results-481879233905"
+}
+
+variable "admin_iam_user_name" {
+  description = <<-EOT
+    The plain IAM user Terraform and local CLI work run as (ADR-0005). `signal-analyst`
+    trusts this identity to assume it, so ad-hoc queries run under a scoped-down role
+    instead of the admin key directly — SPEC §17: "I query with an admin key" undoes
+    least-privilege even when the identity behind it is trustworthy.
+  EOT
+  type        = string
+  default     = "Souhail_Signal_Admin"
+}
+
 variable "contact_email" {
   description = <<-EOT
     Goes into the pollers' User-Agent and receives alarm notifications. SEC EDGAR
@@ -112,14 +129,33 @@ variable "sources" {
       schedule_expression = "rate(15 minutes)"
       description         = "TechCrunch RSS. Backfill horizon: the feed window only."
     }
+    # Phase 2. Six pollers now run unreserved against a new account's total concurrency
+    # limit of 10, and all six collide at :00/:15/:30/:45. It still fits — source #7 is
+    # where it stops fitting, and where Service Quota L-B99A9384 stops being optional.
+    edgar_formd = {
+      schedule_expression = "rate(15 minutes)"
+      description         = "SEC Form D current filings. Backfill horizon: ~1 day, not complete."
+    }
+    rss_verge = {
+      schedule_expression = "rate(15 minutes)"
+      description         = "The Verge Atom. Backfill horizon: the feed window only."
+    }
+    rss_ars = {
+      schedule_expression = "rate(15 minutes)"
+      description         = "Ars Technica RSS 2.0. Backfill horizon: the feed window only."
+    }
   }
 }
 
 locals {
   # The staging prefix the pollers write to and `spark/jobs/commit_bronze.py` reads.
-  # Bronze itself is written by Spark on commit, under bronze/.
   staging_prefix = "staging"
-  bronze_prefix  = "bronze"
+  # Historically "bronze_prefix": the Iceberg warehouse *root*, not just the bronze
+  # table's location. It already holds `ops.db` (health_snapshot.py, cost_snapshot.py)
+  # and now `silver.db` (2.C) alongside `bronze.db` — value-preserving rename, since
+  # existing table locations are recorded in Glue and don't move (docs/runbooks/
+  # phase-2.md 2.D).
+  warehouse_prefix = "bronze"
 }
 
 data "aws_caller_identity" "current" {}

@@ -119,7 +119,7 @@ output "staging_uri" {
 
 output "warehouse_uri" {
   description = "SIGNAL_ICEBERG_WAREHOUSE — set this and the commit job writes to Glue + S3."
-  value       = "s3://${aws_s3_bucket.bronze.id}/${local.bronze_prefix}"
+  value       = "s3://${aws_s3_bucket.bronze.id}/${local.warehouse_prefix}"
 }
 
 output "state_table_name" {

@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     iceberg_catalog: str = "signal"
     iceberg_warehouse: str = ""
 
+    # Phase 2 querying (infra/terraform/main/query.tf). `enforce_workgroup_configuration`
+    # on the Terraform side means the workgroup's own settings — including the bytes-
+    # scanned cutoff — win regardless of what a client requests.
+    athena_workgroup: str = "signal"
+    athena_database: str = "silver"
+
     @property
     def user_agent(self) -> str:
         """`Name contact@email` — the shape SEC actually accepts. SPEC §6.2.

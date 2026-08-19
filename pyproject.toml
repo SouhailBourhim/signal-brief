@@ -41,7 +41,7 @@ dev = [
     "pre-commit>=3.8",
     # Phase 1: mock S3/DynamoDB and httpx so poller and state-store tests never touch
     # the network or real AWS.
-    "moto[s3,dynamodb,server]>=5.0",
+    "moto[s3,dynamodb,athena,server]>=5.0",
     "respx>=0.21",
 ]
 

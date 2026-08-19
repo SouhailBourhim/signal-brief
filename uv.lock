@@ -1307,7 +1307,7 @@ provides-extras = ["lambda", "spark"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "moto", extras = ["s3", "dynamodb", "server"], specifier = ">=5.0" },
+    { name = "moto", extras = ["s3", "dynamodb", "athena", "server"], specifier = ">=5.0" },
     { name = "mypy", specifier = ">=1.11" },
     { name = "pandas", specifier = ">=2.2,<3.0" },
     { name = "pre-commit", specifier = ">=3.8" },
