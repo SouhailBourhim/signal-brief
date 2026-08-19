@@ -7,12 +7,15 @@ immutably; collapses syndicated coverage into ranked story clusters; and publish
 at 07:00 Africa/Casablanca with lineage, replay, cost controls, and locally run LLM
 enrichment built in.
 
-**Status: Phase 1, in progress.** Three pollers — Hacker News, SEC EDGAR, one tech RSS feed
-— run as scheduled Lambdas and land raw payloads in S3; a local Spark job commits them to
-`bronze.raw_documents` on Iceberg, registered in Glue. The infrastructure is Terraform, and
-applied. No LLM yet. [`SPEC.md`](SPEC.md) is the specification;
-[`docs/runbooks/phase-1.md`](docs/runbooks/phase-1.md) is where this phase stands, including
-what the first live invocations broke.
+**Status: Phase 2, done.** Six pollers — Hacker News, SEC EDGAR + Form D, and three RSS/Atom
+feeds — run as scheduled Lambdas and land raw payloads in S3; a local Spark job commits them
+to `bronze.raw_documents` on Iceberg, registered in Glue. A second Spark job, triggered
+automatically off an Airflow Asset the moment a commit lands, parses that into
+`silver.articles` and `silver.hn_comments`, and Athena answers ad-hoc questions against the
+result with bytes-scanned and cost recorded for every query (`docs/athena.md`). The
+infrastructure is Terraform, and applied. No LLM yet. [`SPEC.md`](SPEC.md) is the
+specification; [`docs/runbooks/phase-2.md`](docs/runbooks/phase-2.md) is where this phase
+stands, including what broke on first real use.
 
 **Replay and catch-up are not the same promise.** Replay reprocesses an interval from bytes
 already in `bronze/` — deterministic, and always available. Catch-up re-fetches what was
@@ -52,19 +55,25 @@ aggregation here is a couple of hundred lines. The project is the four layers ar
 
 ## Measured, not claimed
 
-SPEC §15: never publish a metric the pipeline cannot recompute. Current numbers, produced
-by `make eval` and `make skeleton` on the Phase 0 fixture:
+SPEC §15: never publish a metric the pipeline cannot recompute. Current numbers:
 
 | Metric | Value | Source |
 |---|---|---|
-| Dedup precision / recall | 1.000 / 1.000 (n=55 pairs) | `make eval` |
+| Dedup precision / recall | 1.000 / 1.000 (n=55 pairs) | `make eval`, Phase 0 fixture |
 | Dedup ratio | 11 articles → 7 clusters | `make skeleton` |
+| Ingestion, one production window | 521 bronze rows → 207 articles (19 quarantined, all `hackernews`/dead-item) | `docs/runbooks/phase-2.md` 2.E, real AWS |
+| Athena, `SELECT *` vs. projected vs. partition-pruned, same question | 184,259 / 73,373 / 64,713 bytes scanned | `docs/athena.md`, real AWS |
+| S3 egress, one commit | 3,468,248 bytes | `ops.pipeline_costs`, real AWS |
 | Entity resolution | — | Phase 3 |
 | LLM eval accuracy, cache-hit rate | — | Phase 4 |
-| Cost per day, Athena bytes scanned, S3 egress | — | Phase 4 |
+| Cost per day (full pipeline) | — | Phase 4 — pieces above are real, a full day's total isn't assembled yet |
 
 The dedup numbers are on a synthetic fixture and prove the harness runs, not that the
-clustering is good. Phase 3 replaces them with ~200 real labeled pairs.
+clustering is good. Phase 3 replaces them with ~200 real labeled pairs. Every Athena
+dollar figure behind the bytes-scanned numbers above floors at Athena's real 10 MB
+per-query minimum (`ops/athena.py`) and currently rounds to the same $0.0000477 for all
+three — the lake is still small enough that bytes scanned, not cost, is the metric that
+actually moves; see `docs/athena.md` for why that's stated rather than hidden.
 
 ## Layout
 
@@ -76,6 +85,7 @@ clustering is good. Phase 3 replaces them with ~200 real labeled pairs.
 | `handlers/` | Lambda entry point — one artifact, N functions |
 | `infra/terraform/` | `bootstrap/` (state backend), `main/` (everything else) |
 | `evals/` | Labeled sets, scorers, and the accuracy floors CI enforces |
+| [`docs/athena.md`](docs/athena.md) | Querying the lake: setup, real questions, the `SELECT *` vs. projected vs. partition-pruned measurement |
 | [`docs/how-signal-works.md`](docs/how-signal-works.md) | What each phase is for, in plain English — no prior knowledge assumed |
 | [`docs/decisions/`](docs/decisions/) | ADRs, including the ones that reversed earlier choices |
 | `docs/archive/` | Superseded specs, kept for the decision trail |
@@ -88,7 +98,14 @@ The design's central claim is that this takes 30 minutes:
    `poll(config, state) -> (list[RawDocument], State)`.
 2. Register it in `src/signal_core/sources/__init__.py` and `config.SOURCES` — declaring
    its **backfill horizon**, which determines what catch-up can honestly promise (SPEC §6.3).
-3. Add one entry to the Terraform `sources` map.
+3. Write `src/signal_core/parse/<name>.py` — usually a one-line binding of
+   `feedparse.parse_feed` for RSS/Atom — and register it in `parse/__init__.py`. Without
+   this, the source polls and commits to bronze fine and then fails silently on the
+   silver side the first time `normalize_window` runs.
+4. Add one entry to the Terraform `sources` map.
+
+`tests/test_source_registry.py` asserts all four places agree, so a missed step fails a
+test rather than a Lambda at 3am.
 
 ## Replay and catch-up are different
 

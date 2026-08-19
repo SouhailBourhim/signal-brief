@@ -97,7 +97,7 @@ it, produced a brief.
 
 ---
 
-### Phase 1 — Collect the real thing *(in progress — where we are now)*
+### Phase 1 — Collect the real thing *(collectors live; the day-long switch-off test deferred)*
 
 **In one sentence:** replace the invented news with three real sources, and never lose a
 byte of what they send.
@@ -142,14 +142,16 @@ production. The full day-long switch-off test is still to do.
 
 ---
 
-### Phase 2 — Make it answerable *(not started)*
+### Phase 2 — Make it answerable *(done)*
 
 **In one sentence:** turn the raw archive into something you can ask questions of.
 
 The archive from Phase 1 is faithful but unfriendly — it's the web pages exactly as
 received, in whatever format each site happens to use. Phase 2 turns that into clean,
 uniform rows: one row per article, with a title, a body, a publisher, a date, all in the
-same shape regardless of where it came from.
+same shape regardless of where it came from. Along the way it also added three more
+sources (SEC Form D, The Verge, Ars Technica) on top of Phase 1's three, so the archive
+this phase reads from now holds six.
 
 Data work often describes this as three tiers, by analogy with metal:
 
@@ -163,6 +165,22 @@ is still there to redo it from.
 **How we'll know it worked:** someone unfamiliar with the project can set it up and answer
 a question nobody planned for — and we can state exactly what that question cost to run,
 in cents.
+
+**How it actually turned out to work:** a small "translator" per source turns each one's
+particular format (RSS, Atom, HN's JSON) into the same plain shape, a Spark job turns
+that into real rows on a real queryable table, and a scheduled step keeps doing that
+automatically as new data arrives — no one has to remember to run it. Hacker News
+comments turned out to need their own separate table rather than being squeezed into
+"articles," because they're a fundamentally different kind of thing (a comment doesn't
+have a publisher or a byline) and forcing them into the article shape would have made
+every article count misleading.
+
+Asking a question against the result is a real command now, not a hypothetical:
+`make athena-query Q="..."` prints the rows, how many bytes it had to scan to find them,
+and what that costs — a fraction of a cent, today, because the archive is still small.
+`docs/athena.md` walks through several real questions asked this way, including the
+one this phase's design turned on: does filtering by a *stored, computed* date column
+scan less than filtering by the date a source merely *claims* — and by how much.
 
 ---
 
@@ -299,14 +317,16 @@ quietly does the wrong thing is far more dangerous than one that stops and says 
 | Phase | Status |
 |---|---|
 | 0 — Prove the shape | Done |
-| 1 — Collect the real thing | Collectors live and running; day-long switch-off test outstanding |
-| 2 — Make it answerable | Not started |
+| 1 — Collect the real thing | Collectors live and running; day-long switch-off test deferred by decision |
+| 2 — Make it answerable | Done |
 | 3 — Same story, and who's who | Not started |
 | 4 — Write, rank, send | Not started |
 | 5 — Polish | Not started |
 
 No brief is being emailed yet — that starts in Phase 4. What exists today is a system
-that reliably collects and archives, and tells you honestly when it couldn't.
+that reliably collects and archives, tells you honestly when it couldn't, and now turns
+that archive into rows you can ask real questions of and get a real answer with a real
+price tag attached.
 
 ---
 
