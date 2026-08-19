@@ -112,9 +112,9 @@ def test_rss_tech_every_item_parses_without_error():
     so a failure here means the walker's assumptions are wrong, not the data."""
     result = parse_rss_tech(_fixture("rss_tech", "feed.xml"))
     assert all(item.parse_error is None for item in result.items)
-    assert all(
-        item.published_at is not None for item in result.items
-    ), "every TechCrunch item carries pubDate; a None here would mean the RFC 822 fix regressed"
+    assert all(item.published_at is not None for item in result.items), (
+        "every TechCrunch item carries pubDate; a None here would mean the RFC 822 fix regressed"
+    )
 
 
 # --- rss_ars: RSS 2.0, content:encoded, source #6 -------------------------------------
