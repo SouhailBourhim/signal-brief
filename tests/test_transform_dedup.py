@@ -11,7 +11,8 @@ from signal_core.dedup import (
     group_stories,
     jaccard,
 )
-from signal_core.transform import canonical_url, normalize_document, publisher_domain
+from signal_core.parse import get_parser
+from signal_core.transform import canonical_url, publisher_domain, to_article
 
 
 def _bronze(payload: dict, fetched_at: datetime | None = None) -> dict:
@@ -21,6 +22,17 @@ def _bronze(payload: dict, fetched_at: datetime | None = None) -> dict:
         "content_hash": "raw",
         "payload": json.dumps(payload).encode("utf-8"),
     }
+
+
+def _articles(bronze_row: dict) -> list[dict]:
+    """The two 2.B steps chained: bytes -> `ParsedItem`s -> silver rows."""
+    result = get_parser(bronze_row["source_id"])(bronze_row["payload"])
+    return [to_article(item, bronze_row) for item in result.items]
+
+
+def _article(bronze_row: dict) -> dict:
+    (row,) = _articles(bronze_row)
+    return row
 
 
 def test_canonical_url_strips_tracking_keeps_meaning():
@@ -39,22 +51,48 @@ def test_normalize_quarantines_instead_of_raising():
         "content_hash": "raw",
         "payload": b"not json at all",
     }
-    row = normalize_document(bad)
-    assert row["parse_error"].startswith("payload_not_json")
+    result = get_parser("fake")(bad["payload"])
+    assert result.error is not None and result.error.startswith("payload_not_json")
 
-    row = normalize_document(_bronze({"title": "", "url": ""}))
+    row = _article(_bronze({"title": "", "url": ""}))
     assert row["parse_error"] == "missing_title_or_url"
 
 
 def test_normalize_flags_missing_timestamp():
-    row = normalize_document(_bronze({"title": "T", "body": "B", "url": "https://a.com/x"}))
+    row = _article(_bronze({"title": "T", "body": "B", "url": "https://a.com/x"}))
     assert row["parse_error"] is None
     assert row["timestamp_flagged"] is True
 
 
+def test_event_date_falls_back_to_fetched_at_when_published_at_is_missing():
+    """ADR-0007: a null `published_at` can't be pruned, so `event_date` coalesces to
+    `fetched_at`, which is never null."""
+    now = datetime.now(UTC)
+    row = _article(_bronze({"title": "T", "body": "B", "url": "https://a.com/x"}, fetched_at=now))
+    assert row["published_at"] is None
+    assert row["event_date"] == row["fetched_at"] == now
+
+
+def test_event_date_is_published_at_when_known():
+    now = datetime.now(UTC)
+    published = now - timedelta(hours=2)
+    row = _article(
+        _bronze(
+            {
+                "title": "T",
+                "body": "B",
+                "url": "https://a.com/x",
+                "published_at": published.isoformat(),
+            },
+            fetched_at=now,
+        )
+    )
+    assert row["event_date"] == row["published_at"] == published
+
+
 def test_normalize_accepts_a_credible_timestamp():
     now = datetime.now(UTC)
-    row = normalize_document(
+    row = _article(
         _bronze(
             {
                 "title": "T",
@@ -69,17 +107,15 @@ def test_normalize_accepts_a_credible_timestamp():
 
 
 def test_normalize_survives_a_malformed_timestamp():
-    row = normalize_document(
+    row = _article(
         _bronze({"title": "T", "body": "B", "url": "https://a.com/x", "published_at": "not-a-date"})
     )
     assert row["parse_error"] is None and row["timestamp_flagged"] is True
 
 
 def test_article_id_is_stable_across_tracking_variants():
-    a = normalize_document(_bronze({"title": "T", "body": "B", "url": "https://a.com/x"}))
-    b = normalize_document(
-        _bronze({"title": "T", "body": "B", "url": "https://a.com/x?utm_source=n"})
-    )
+    a = _article(_bronze({"title": "T", "body": "B", "url": "https://a.com/x"}))
+    b = _article(_bronze({"title": "T", "body": "B", "url": "https://a.com/x?utm_source=n"}))
     assert a["article_id"] == b["article_id"]
 
 
@@ -89,21 +125,26 @@ def test_exact_dedup_collapses_byte_identical_reprints():
     assert len(kept) == 2 and removed == 1
 
 
+def _polled_articles(documents) -> list[dict]:
+    articles = []
+    for d in documents:
+        articles.extend(
+            _articles(
+                {
+                    "source_id": d.source_id,
+                    "fetched_at": d.fetched_at,
+                    "content_hash": d.content_hash,
+                    "payload": d.payload,
+                }
+            )
+        )
+    return articles
+
+
 def test_group_stories_collapses_syndication(polled):
     """The headline claim of SPEC §7.1, asserted end to end on the fixture."""
     documents, _ = polled
-    articles = [
-        normalize_document(
-            {
-                "source_id": d.source_id,
-                "fetched_at": d.fetched_at,
-                "content_hash": d.content_hash,
-                "payload": d.payload,
-            }
-        )
-        for d in documents
-    ]
-    articles = [a for a in articles if not a["parse_error"]]
+    articles = [a for a in _polled_articles(documents) if not a["parse_error"]]
     deduped, exact_removed = exact_dedup(articles)
     clusters = group_stories(deduped)
 
@@ -118,17 +159,7 @@ def test_group_stories_collapses_syndication(polled):
 
 def test_no_article_is_lost_to_clustering(polled):
     documents, _ = polled
-    articles = [
-        normalize_document(
-            {
-                "source_id": d.source_id,
-                "fetched_at": d.fetched_at,
-                "content_hash": d.content_hash,
-                "payload": d.payload,
-            }
-        )
-        for d in documents
-    ]
+    articles = _polled_articles(documents)
     deduped, _ = exact_dedup([a for a in articles if not a["parse_error"]])
     clusters = group_stories(deduped)
     assert sum(c["article_count"] for c in clusters) == len(deduped)
@@ -164,17 +195,7 @@ def test_jaccard_is_safe_on_empty_input():
 def test_unrelated_stories_are_not_merged(polled):
     """Over-merging is the failure that makes a brief useless; assert it does not happen."""
     documents, _ = polled
-    articles = [
-        normalize_document(
-            {
-                "source_id": d.source_id,
-                "fetched_at": d.fetched_at,
-                "content_hash": d.content_hash,
-                "payload": d.payload,
-            }
-        )
-        for d in documents
-    ]
+    articles = _polled_articles(documents)
     deduped, _ = exact_dedup([a for a in articles if not a["parse_error"]])
     clusters = group_stories(deduped)
 

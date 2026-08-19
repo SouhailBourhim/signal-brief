@@ -64,7 +64,7 @@ it determines what §6.3's catch-up can honestly promise, and it varies enormous
 | RSS: TechCrunch, The Verge, Ars | Curated tech coverage | 5–30 min | **Feed window only (~1–3 h)** | `pubDate` often wrong or absent; feeds go stale while still returning 200 |
 | [Hacker News API](https://github.com/HackerNews/API) | Community attention, score velocity | 1 min | **Complete** (sequential item ids) | Score is time-dependent — snapshot it, never overwrite |
 | [SEC EDGAR RSS](https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent) | 8-K, S-1, Form D as filed | near real time | **~1 day** via current feed; full via daily index | Requires descriptive `User-Agent` with contact email; fair-access rate limits |
-| SEC **Form D** | Startup fundraises, often ahead of press | daily | Complete | Underused; a genuine scoop source |
+| SEC **Form D** | Startup fundraises, often ahead of press | daily | **~1 day** via current feed; complete via daily index | Underused; a genuine scoop source |
 | [FRED / ALFRED](https://fred.stlouisfed.org/docs/api/fred/) | Macro series **with vintages** | per release | Complete, all vintages | Revisions are the point — see §8 |
 | [GDELT 2.0](https://www.gdeltproject.org/) | Global news stream, tone + entity annotations | 15 min | Complete (file archive) | High volume, noisy, multilingual, files occasionally late or empty. **Read §10 on egress before enabling.** |
 | ECB / Fed / BoE press RSS | Central bank statements | irregular | Feed window | Long docs; value is in the diff against the previous statement |
@@ -72,10 +72,18 @@ it determines what §6.3's catch-up can honestly promise, and it varies enormous
 | arXiv (cs.LG, econ) | Research signal | daily | Complete | v1→v2 are updates, not new papers |
 
 **Phase 1 (3):** one tech RSS feed, Hacker News, SEC EDGAR current filings.
-**Phase 2 (5):** add a second RSS publisher and SEC Form D.
+**Phase 2 (6):** add SEC Form D and *two* more RSS publishers — The Verge and Ars Technica.
 Everything below the line is Phase 4+.
 
+Six rather than the five this section originally planned, for one reason: the constraint below
+is about source #6 specifically, and a constraint nobody reaches is a constraint nobody has
+tested. Ars Technica is that sixth source.
+
 Adding source #6 must be a 30-minute job — that constraint drives §6.
+**Measured 2026-08-19: 16 minutes for all three of Phase 2's sources**, including the Terraform
+apply and live verification against the real endpoints. `docs/runbooks/phase-2.md` records it.
+`tests/test_source_registry.py` is what keeps it true, by failing the build when a source is
+declared in some but not all of `SOURCES`, `sources.REGISTRY`, and Terraform's `var.sources`.
 
 ---
 
@@ -302,7 +310,15 @@ it can be Phase 4 without being at risk.
 - `raw_documents` — `ingest_id, source_id, fetched_at, source_url, http_status, etag, content_hash, payload, payload_format`
 
 **Silver**
-- `articles` — `article_id, source_id, url_canonical, title, body_text, published_at, fetched_at, lang, publisher_domain, authority_score, simhash, content_hash`
+- `articles` — `article_id, source_id, url_canonical, title, body_text, published_at, fetched_at, event_date, lang, publisher_domain, authority_score, simhash, content_hash`
+  (plus `timestamp_flagged`, `story_key`, `parse_error` — operational columns predating this
+  section, carried here for completeness rather than re-litigated)
+- `hn_comments` — `item_id, parent_id, story_id, by, text, created_at, fetched_at, ingest_id,
+  dead, deleted`. Hacker News comments only — not `articles`; see ADR-0007 and
+  `docs/runbooks/phase-2.md`'s velocity finding for why they get their own table
+- `parse_rejects` — `ingest_id, source_id, parse_error, fetched_at, rejected_at`. A bronze row
+  that failed to parse at all (SPEC §6.2 quarantine, at the row granularity — a single bad
+  entry inside an otherwise good feed stays in `articles` with its own `parse_error` instead)
 - `story_clusters` — `cluster_id, first_seen_at, last_updated_at, canonical_article_id, article_count, distinct_publisher_count`
 - `article_cluster_map` — `article_id, cluster_id, similarity, assigned_at, assignment_order_key`
 - `entity_mentions` — `mention_id, article_id, surface_form, char_span, entity_id, confidence, resolution_method`
@@ -318,9 +334,12 @@ it can be Phase 4 without being at risk.
 - `source_health` — `source_id, window_start, docs_ingested, expected_min, last_success_at, staleness_seconds, gap_reason, status`
 - `pipeline_costs` — `run_id, dag_id, task_id, bytes_scanned, athena_cost_usd, lambda_ms, s3_requests, s3_egress_bytes, run_date`
 
-Iceberg partitioning: bronze by `(source_id, ingest_date)`; `articles` by `days(published_at)`;
-gold marts small enough to leave unpartitioned. Every table gets a scheduled maintenance job —
-compaction, snapshot expiry, orphan file cleanup (§11).
+Iceberg partitioning: bronze by `(source_id, ingest_date)`; `articles` by `days(event_date)`,
+where `event_date = coalesce(published_at, fetched_at)` — a deviation from partitioning on
+`published_at` directly, recorded in **ADR-0007** (`published_at` is nullable by design, §6.2,
+and a null partition key can't be pruned); `hn_comments` by `days(created_at)`; `parse_rejects`
+and gold marts small enough to leave unpartitioned. Every table gets a scheduled maintenance
+job — compaction, snapshot expiry, orphan file cleanup (§11).
 
 ---
 

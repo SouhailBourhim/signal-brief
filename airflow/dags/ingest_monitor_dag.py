@@ -20,11 +20,7 @@ from __future__ import annotations
 import pendulum
 from airflow.decorators import dag, task
 from airflow.exceptions import AirflowFailException
-
-# The deployed sources, which is `SOURCES` minus `fake` — the Phase 0 fixture source has
-# no Lambda, no schedule, and no state item, so assessing it would report a permanent
-# outage for something that was never running.
-SOURCE_IDS = ["hackernews", "edgar", "rss_tech"]
+from assets import BRONZE_COMMITTED
 
 
 @dag(
@@ -37,20 +33,48 @@ SOURCE_IDS = ["hackernews", "edgar", "rss_tech"]
     tags=["phase1", "ingest"],
 )
 def ingest_monitor_dag():
-    @task
+    # `outlets`: this is the only task that ever changes bronze.raw_documents, so it's
+    # what `process_dag` (2.E) triggers off of — an Asset event, not a second cron
+    # hoping the commit already finished (docs/runbooks/phase-2.md 2.E).
+    @task(outlets=[BRONZE_COMMITTED])
     def commit_staged() -> dict[str, int]:
         """Staging -> local cache -> bronze.raw_documents. Idempotent at both steps, so
         a re-run costs neither egress nor duplicate rows."""
+        from airflow.sdk import get_current_context
+
         from signal_core.config import settings
         from signal_core.spark.jobs.commit_bronze import commit
+        from signal_core.spark.jobs.cost_snapshot import CostRecord
+        from signal_core.spark.jobs.cost_snapshot import record as record_costs
         from signal_core.spark.session import build_iceberg_session
         from signal_core.staging import sync_staging
+        from signal_core.timeutil import utc_now
 
         sync = sync_staging(settings.bronze_staging_uri, settings.staging_cache_root)
 
         spark = build_iceberg_session("signal-commit-bronze")
         try:
             result = commit(spark, sync.local_root)
+            # SPEC §10.1: egress is the line item nobody budgets. `sync` already
+            # measures it — 2.D's fix is writing it down instead of letting it die once
+            # this task returns, which is what happened before `ops.pipeline_costs`
+            # existed to hold it.
+            record_costs(
+                spark,
+                [
+                    CostRecord(
+                        run_id=get_current_context()["run_id"],
+                        dag_id="ingest_monitor",
+                        task_id="commit_staged",
+                        run_date=utc_now().date(),
+                        s3_egress_bytes=sync.bytes_downloaded,
+                        # `s3_requests` stays unset: `sync.objects` counts objects
+                        # considered, not API calls made (skipped objects cost a local
+                        # stat, not a request), and SyncResult doesn't track the latter.
+                        # SPEC §17 — claim it once it's actually measured, not before.
+                    )
+                ],
+            )
             return {
                 "objects_seen": sync.objects,
                 "objects_downloaded": sync.downloaded,
@@ -66,7 +90,7 @@ def ingest_monitor_dag():
     @task
     def assess_sources(commit_stats: dict[str, int]) -> list[dict]:
         """One verdict per source, from DynamoDB state and the hour that just closed."""
-        from signal_core.config import SOURCES, settings
+        from signal_core.config import DEPLOYED_SOURCE_IDS, SOURCES, settings
         from signal_core.ops.monitor import assess, window_bounds
         from signal_core.spark.jobs.health_snapshot import record
         from signal_core.spark.session import build_iceberg_session
@@ -92,7 +116,7 @@ def ingest_monitor_dag():
 
             verdicts = [
                 assess(SOURCES[source_id], store.load(source_id), counts.get(source_id, 0))
-                for source_id in SOURCE_IDS
+                for source_id in DEPLOYED_SOURCE_IDS
             ]
             record(spark, [v.health for v in verdicts], window_start)
         finally:

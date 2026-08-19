@@ -1,6 +1,6 @@
 # Signal — see SPEC.md. Every target here is meant to work from a fresh clone.
 .DEFAULT_GOAL := help
-.PHONY: help setup up down skeleton test lint fmt eval brief clean tf-validate lambda-package airflow-password
+.PHONY: help setup up down skeleton test lint fmt eval brief clean tf-validate lambda-package airflow-password athena-query
 
 UV ?= uv
 
@@ -48,6 +48,9 @@ eval: ## score the labeled eval sets and enforce the accuracy floors (SPEC 11)
 brief: ## open the most recent rendered brief
 	@ls -t out/brief-*.html | head -1 | xargs -I{} sh -c 'echo {}; open {} 2>/dev/null || true'
 
+athena-query: ## run Q="SELECT ..." [DB=bronze|silver|ops, default silver] against the lake
+	$(UV) run signal athena-query --sql "$(Q)" $(if $(DB),--database $(DB))
+
 lambda-package: ## build build/lambda/, the poller deployment artifact Terraform zips
 	rm -rf build/lambda
 	# Linux wheels for the Lambda runtime, not this machine's — pydantic-core is
@@ -69,5 +72,9 @@ tf-validate: ## terraform fmt + validate
 		terraform -chdir=infra/terraform/main validate
 
 clean: ## remove generated data and briefs (never touches bronze in S3)
+	@# .cache is bind-mounted into every Airflow container (docker-compose.yml). Deleting
+	@# it while `make up` is running breaks that mount until the containers are recreated
+	@# (docs/runbooks/phase-2.md 2.E) — `docker compose up -d --force-recreate
+	@# airflow-scheduler airflow-apiserver airflow-dag-processor` if it happens.
 	rm -rf data out build .cache .pytest_cache .ruff_cache .mypy_cache
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +

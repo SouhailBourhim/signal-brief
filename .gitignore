@@ -42,3 +42,6 @@ credentials
 .DS_Store
 .idea/
 .vscode/
+
+#claude
+CLAUDE.md

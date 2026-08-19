@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     iceberg_catalog: str = "signal"
     iceberg_warehouse: str = ""
 
+    # Phase 2 querying (infra/terraform/main/query.tf). `enforce_workgroup_configuration`
+    # on the Terraform side means the workgroup's own settings — including the bytes-
+    # scanned cutoff — win regardless of what a client requests.
+    athena_workgroup: str = "signal"
+    athena_database: str = "silver"
+
     @property
     def user_agent(self) -> str:
         """`Name contact@email` — the shape SEC actually accepts. SPEC §6.2.
@@ -142,4 +148,49 @@ SOURCES: dict[str, SourceConfig] = {
         rate_limit_per_sec=1.0,
         user_agent=settings.user_agent,
     ),
+    # Phase 2 — three more sources. SPEC §3 asks for a second RSS publisher and SEC
+    # Form D; the third (`rss_ars`) is deliberately source #6, the one §3's "adding
+    # source #6 must be a 30-minute job" claim is measured against.
+    "edgar_formd": SourceConfig(
+        source_id="edgar_formd",
+        url="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=D&output=atom",
+        payload_format=PayloadFormat.XML,
+        # DAY, not COMPLETE. SPEC §3 lists Form D as complete — true of the daily
+        # full-index files, not of this current-filings feed. Claiming COMPLETE would make
+        # plan_catch_up promise a recovery it cannot perform and suppress the gap_reason
+        # §6.3 exists to surface. See sources/edgar_formd.py.
+        backfill_horizon=BackfillHorizon.DAY,
+        freshness_sla_seconds=2700,  # 3x rate(15 minutes)
+        min_docs_per_window=1,
+        rate_limit_per_sec=1.0,  # shares SEC's per-IP fair-access budget with `edgar`
+        timeout_seconds=30.0,  # the same browse-edgar CGI script that needed it for `edgar`
+        user_agent=settings.user_agent,
+    ),
+    "rss_verge": SourceConfig(
+        source_id="rss_verge",
+        url="https://www.theverge.com/rss/index.xml",
+        payload_format=PayloadFormat.XML,
+        backfill_horizon=BackfillHorizon.WINDOW,
+        freshness_sla_seconds=2700,  # 3x rate(15 minutes)
+        min_docs_per_window=1,
+        rate_limit_per_sec=1.0,
+        user_agent=settings.user_agent,
+    ),
+    "rss_ars": SourceConfig(
+        source_id="rss_ars",
+        url="https://feeds.arstechnica.com/arstechnica/index",
+        payload_format=PayloadFormat.XML,
+        backfill_horizon=BackfillHorizon.WINDOW,
+        freshness_sla_seconds=2700,  # 3x rate(15 minutes)
+        min_docs_per_window=1,
+        rate_limit_per_sec=1.0,
+        user_agent=settings.user_agent,
+    ),
 }
+
+# The deployed sources: everything with a Lambda, a schedule, and a state item. `fake` is
+# the Phase 0 fixture source and has none of those, so assessing it would report a
+# permanent outage for something that was never running. Derived rather than listed,
+# because a hardcoded copy in the DAG is exactly how SPEC §3's 30-minute claim quietly
+# stops being true.
+DEPLOYED_SOURCE_IDS: tuple[str, ...] = tuple(s for s in SOURCES if s != "fake")
