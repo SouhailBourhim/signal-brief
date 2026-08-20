@@ -297,8 +297,51 @@ not a body hash), which is the design, not a gap.
 > never advancing it. Worth recording because no test would have caught it: every unit test
 > starts from a 200, which is the one path that already worked.
 
-**Captured 2026-08-20 ~11:20 UTC** (before the outage; `newest` is each source's last
-document):
+### RUN OF RECORD — T0 = **2026-08-20T12:37:25Z**
+
+Ingestion stopped at 12:37:25Z; all six schedules confirmed `DISABLED` immediately after.
+
+**Pipeline state at T0** — every source healthy, zero consecutive failures, and every
+`last_content_change_at` seeded (the gate above, which is what caught the 304 bug):
+
+| source_id | watermark | last_success_at | last_content_change_at |
+|---|---|---|---|
+| hackernews | 49373752 | 12:34:36 | 12:34:36 |
+| edgar | — | 12:29:51 | 12:29:51 |
+| edgar_formd | — | 12:27:58 | 12:27:58 |
+| rss_tech | — | 12:29:17 | 12:29:17 |
+| rss_verge | — | 12:27:23 | 12:27:23 |
+| rss_ars | — | 12:27:15 | 12:27:15 |
+
+`hackernews`'s watermark **49373752** is the number catch-up is measured against: COMPLETE
+horizon means every id above it must eventually arrive.
+
+**Bronze at T0** (`newest` is each source's last *committed* document):
+
+| source_id | bronze rows | newest committed |
+|---|---|---|
+| edgar | 168 | 11:59:42 |
+| edgar_formd | 110 | 11:57:58 |
+| hackernews | 22,593 | 12:04:32 |
+| rss_ars | 6 | 00:57:15 |
+| rss_tech | 65 | 09:44:17 |
+| rss_verge | 54 | 11:57:23 |
+
+> **Expect bronze to keep growing after T0, and do not read that as ingestion still
+> running.** Pollers write to S3 staging; `ingest_monitor` commits staging into bronze
+> hourly, so the two are always a partial hour apart. At T0 there were **912 staged
+> objects (9.7 MB)** not yet committed, the newest from 12:34:37 — polls that happened
+> after the last DAG run. They will land in bronze on the next `ingest_monitor` run, *during*
+> the outage. Staging is a queue and bronze is the record (1.A); this is that distinction
+> showing up in the numbers.
+>
+> This also means the **replay check in Step 5 must compare against bronze counts taken
+> after staging has drained**, not against the table above. Take a fresh count once
+> `ingest_monitor` has run at least once post-T0 with `committed_rows == 0`, and use that
+> as the replay baseline.
+
+<details>
+<summary>Earlier capture at ~11:20 UTC, superseded by the T0 numbers above</summary>
 
 | source_id | bronze rows | newest |
 |---|---|---|
@@ -308,6 +351,37 @@ document):
 | rss_ars | 6 | 00:57:15 |
 | rss_tech | 65 | 09:44:17 |
 | rss_verge | 51 | 11:12:23 |
+
+</details>
+
+### The analyst credentials leaked into the shell and broke the apply *(2026-08-20)*
+
+The first `terraform apply -var poller_schedule_state=DISABLED` failed:
+
+```
+Error acquiring the state lock ... User: arn:aws:sts::...:assumed-role/signal-analyst/1d-before
+is not authorized to perform: s3:PutObject on ... main/terraform.tfstate.tflock
+```
+
+The capture block's `export` had put `signal-analyst` credentials in the interactive shell,
+where they persisted (assume-role sessions last an hour by default) and every later AWS
+command silently inherited them — including Terraform, which then could not write its own
+state lock. Fixed with `unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN`;
+the block above now uses a subshell so the credentials die with it.
+
+Two non-fixes worth naming, because both are tempting and both are wrong:
+
+- **`-lock=false`**, which Terraform's own error message suggests. That advice is for a
+  genuinely stuck lock. Here the lock was fine and the *identity* was wrong; disabling
+  locking would have let a half-privileged apply write state unprotected.
+- **Widening `signal-analyst`.** It blocked two different things today — reading DynamoDB
+  pipeline state, and writing Terraform state — and was right both times. It exists to
+  query the lake. An analyst role that can run Terraform is not an analyst role.
+
+Nothing was changed by the failed apply: it died acquiring the lock before touching any
+resource, left no lock object behind (the `PutObject` was denied, so none was created), and
+all six schedules were still `ENABLED` afterwards. The habit this argues for: run
+`aws sts get-caller-identity` after any `assume-role`, before the next privileged command.
 
 ### Step 2 — Stop ingestion
 
