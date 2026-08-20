@@ -546,11 +546,55 @@ for the day something else chains.
 The cluster-size distribution is finally plausible: 2,598 singletons, 23 pairs, 2 triples,
 one quad, and one real story covered by 8 publishers.
 
+## 3.B.3 — Repairing the 2026-08-19 duplicates *(done 2026-08-20)*
+
+`spark/jobs/repair.py`, then applied to the deployed lake.
+
+**Deleting from the lake needs a reason, and "the table is immutable" is not a reason to keep
+these.** A duplicate row is not a second observation of the world; it is one observation
+recorded twice by an accounting error. The bytes are still in `bronze.raw_documents`, so the
+whole table is reconstructible by replay and this destroys no record — which is the test a
+destructive maintenance job should have to pass before it runs. The job defaults to
+`dry_run=True` for the same reason.
+
+It rewrites whole day-partitions rather than deleting rows. `overwritePartitions` replaces
+exactly the partitions present in the DataFrame in one snapshot, so there is no window in
+which the table is short a row; a DELETE followed by an INSERT would have one, and a failure
+inside it would lose exactly the data the job exists to protect. Every row of every affected
+partition is read back, not just the duplicated ids — an overwrite carrying only the repaired
+rows would erase their partition-mates.
+
+The survivor is the earliest `fetched_at`: the first time the pipeline actually observed the
+article. Where the duplicates are byte-identical the choice is immaterial; where they differ
+it is a re-fetch, and the first observation is what SPEC §6.2's "we saw it ourselves"
+guarantee is about.
+
+### Verified
+
+Dry run, then apply, against real AWS:
+
+| | |
+|---|---|
+| duplicate `article_id`s | 132, each with exactly 2 rows |
+| rows | 2,849 → **2,717** |
+| partitions rewritten | 3 |
+| duplicates remaining | **0** — `count(*) == count(DISTINCT article_id)` |
+
+**The brief's `exact_duplicates_removed` fell from 92 to 1.** That is the finding worth
+keeping: 91 of the 92 "exact duplicates" the footer had been reporting were this defect, not
+syndication. A metric that appeared to measure the world was measuring a bug in the pipeline
+that computed it, and only a repair could tell the two apart.
+
+Duplicates could not be produced through the normal path to test against — a sequential
+re-run MERGEs cleanly — so `test_repair_collapses_duplicate_article_ids` writes them the way
+the incident did: a bare append that bypasses the MERGE, which is what a second concurrent
+writer's `WHEN NOT MATCHED` degenerates into.
+
 ### Still open
 
 - The recall gap remains the headline number to beat: 0.500 held out. That is ADR-0009's
   question, and 3.E's.
-- `dedup_ratio` is 1.05, which is honest rather than disappointing: this corpus really is
+- `dedup_ratio` is 1.02, which is honest rather than disappointing: this corpus really is
   mostly unique documents, and 17 multi-publisher stories is what `breadth` has to rank on.
 
 ## Then
