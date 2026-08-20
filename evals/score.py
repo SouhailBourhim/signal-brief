@@ -143,8 +143,25 @@ def dedup_by_stratum() -> list[Score]:
     return [scores[name] for name in sorted(scores)]
 
 
+# Where each set's labels live, so `main` can tell "nothing labeled yet" apart from
+# "labeled, but nothing to score them against yet". Those are different states and only one
+# of them is anybody's fault.
+LABEL_FILES = {
+    "dedup": EVALS / "dedup" / "pairs.jsonl",
+    "dedup_fixture": EVALS / "dedup" / "pairs.jsonl",
+    "entities": EVALS / "entities" / "mentions.jsonl",
+    "enrichment": EVALS / "enrichment" / "examples.jsonl",
+}
+
+
 def score_entities() -> Score:
-    """Mention-to-entity resolution. SPEC §7.2 — labeled set lands in Phase 3."""
+    """Mention-to-entity resolution. SPEC §7.2.
+
+    300 mentions are labeled (Phase 3.A). Scoring them needs `entities/resolve.py`, which
+    lands in 3.C — and the scorer must call it rather than reimplement it, the same contract
+    `score_dedup` keeps with `is_same_story`. Abstention is a first-class answer here: a
+    correct `unlinked` is a true negative, not a miss, or the resolver learns to guess.
+    """
     return Score("entities")
 
 
@@ -178,7 +195,13 @@ def main(argv: list[str] | None = None) -> int:
         score = SCORERS[name]()
         limits = thresholds.get(name, {})
         if score.support == 0:
-            print(f"{name:12} no labeled examples yet — not scored")
+            labeled = len(_load(LABEL_FILES[name])) if name in LABEL_FILES else 0
+            reason = (
+                f"{labeled} labeled, awaiting a decision function to score against"
+                if labeled
+                else "no labeled examples yet"
+            )
+            print(f"{name:12} {reason} — not scored")
             continue
 
         print(score.line())

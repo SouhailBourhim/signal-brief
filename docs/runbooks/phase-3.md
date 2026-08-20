@@ -142,7 +142,7 @@ retrofitted to flatter a measurement:
 - [x] `evals/entities/README.md` gains the record schema. The labeling *rule* was already
       written; the schema was not, and a rule without a schema cannot be labeled against.
 - [x] `evals/dedup/README.md` documents the candidates/pairs split and the two origins.
-- [x] **252 pairs answered** (194 base-rate + 58 focus). 300 mentions still to answer.
+- [x] **252 pairs answered** (194 base-rate + 58 focus) and **300 mentions answered**.
 - [x] `evals/label_dump.py` / `evals/label_apply.py` — dump candidates, apply answers,
       stamp provenance.
 - [x] `evals/score.py` splits `dedup` from `dedup_fixture` and gains `--by-stratum`.
@@ -257,6 +257,40 @@ Two independent failures, worth separating because 3.B has to fix both:
 The base rate itself is a finding: **0 same-story pairs in 60 uniformly random ones.** A
 `distinct_publisher_count` above 1 should be rare in this corpus, which makes the 3.0
 brief's 22-publisher lead cluster even more clearly an artifact.
+
+### The mention labels, and the rules they forced
+
+**300 answered: 54 linked, 246 unlinked** (244 `not-a-company`, 2 `ambiguous`), across 25
+tickers and 20 slugs. `entities` now reports *"300 labeled, awaiting a decision function to
+score against"* rather than the old "no labeled examples yet", which stopped being true.
+Scoring waits on `entities/resolve.py` in 3.C, because the scorer must call the resolver
+rather than reimplement it — the same contract `score_dedup` keeps with `is_same_story`.
+
+An **82% abstention rate** is not a defect in the sample. It is what a proper-noun heuristic
+over real feeds yields, and it is why `score_entities` has to count a correct `unlinked` as a
+true negative: otherwise a resolver that links nothing looks perfect, and so does one that
+links everything, depending which half you forgot to count.
+
+Four rules were needed that the Phase 0 labeling rule did not settle, all recorded in
+`evals/entities/README.md` as they were decided — before the resolver exists, so they remain
+protocol rather than post-hoc justification:
+
+1. **The id namespace carries a claim.** UPPERCASE is a tradable ticker, `lower-kebab` is an
+   entity without one. SPEC §7.4's market-corroboration component will need exactly that
+   distinction, and encoding it in the id means it cannot drift.
+2. **A span links only if it contains the company's name.** `Meta AI` → `META`, but
+   `ChatGPT`, `AirPods`, `Windows` and `Jira` are unlinked. This is the load-bearing one: an
+   alias dictionary mapping `ChatGPT` to OpenAI is trivial to write and would score well
+   against labels drawn the other way. Drawing the labels first is what stops the dictionary
+   from grading itself. `Venmo` → `PYPL` and `GitHub` → `MSFT` because those are company
+   names; `The Verge` stays `the-verge` because Vox Media is not tradable.
+3. **People are not companies** — and EDGAR Form 4/144 filers are the largest source of
+   company-shaped spans in this corpus.
+4. **A span naming two entities is `ambiguous`**, not a coin flip.
+
+**SPEC §7.2's own example turned up, as a river.** `Amazon` in *"oil discovery near Amazon
+river"* is in the set, unlinked. The rule was written in Phase 0 against a hypothetical
+Meta/metadata case; the real corpus supplied one within the first 300.
 
 ### What broke on first real use
 

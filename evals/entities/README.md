@@ -48,3 +48,53 @@ and a labeled set containing none of them cannot detect that.
   absence of an entity.
 - Below the confidence floor, the correct answer is **unlinked**, not a guess. The metric
   must reward abstention, or the resolver learns to guess.
+
+## Refinements, added while labeling the first 300 (2026-08-20)
+
+Written down as they were decided, and before `entities/resolve.py` exists, so they are
+still protocol rather than post-hoc justification. Each one came up repeatedly in the real
+corpus and the rule above did not settle it.
+
+**`entity_id` namespace.** UPPERCASE is a tradable ticker (`META`, `CMCSA`, `PYPL`).
+`lower-kebab-case` is an entity with no ticker — private, foreign-listed, or a fund
+(`openai`, `unitree`, `chiba-bank`, `pier-88-investment-partners`). The case of the id is
+therefore itself a claim about tradability, which is what SPEC §7.4's market-corroboration
+component will need.
+
+**A span links only if it contains the company's name.** Products and brands are not
+companies, however unambiguously owned:
+
+| Surface form | Answer | Why |
+|---|---|---|
+| `Meta AI` | `META` | contains the company name |
+| `Google Drive` | `GOOGL` | contains the company name |
+| `ChatGPT` | unlinked | a product; linking it to OpenAI is inference, not resolution |
+| `AirPods`, `Windows`, `Chrome`, `Jira` | unlinked | same |
+| `Venmo` | `PYPL` | a company name (a subsidiary), not merely a brand |
+| `GitHub` | `MSFT` | a subsidiary whose parent is the tradable entity |
+| `The Verge` | `the-verge` | a subsidiary whose parent (Vox Media) is *not* tradable, so it stays its own entity |
+
+The line matters because an alias dictionary can easily be built that maps `ChatGPT` to
+OpenAI, and it would then score well against labels that had been drawn the other way. The
+labels are drawn first, so they constrain the dictionary rather than describing it.
+
+**People are not companies.** EDGAR Form 4 and 144 filers are individuals (`King Alan`,
+`GEE DAVID NICHOLAS`), and they are the single largest source of company-shaped spans in
+this corpus.
+
+**A span naming two entities at once is unlinked, `ambiguous`** — `Meta and Google` cannot
+be one `entity_id`, and picking either would be wrong half the time.
+
+**The Meta/metadata case turned up for real, as a river.** `Amazon` in *"oil discovery near
+Amazon river"* is unlinked. This is the example the rule above was written against, and it
+is in the set.
+
+## What the first 300 look like
+
+**54 linked · 246 unlinked** (244 `not-a-company`, 2 `ambiguous`) — 25 distinct tickers and
+20 slugs.
+
+An 82% abstention rate is not a defect in the sample. It is what a proper-noun heuristic
+over real feeds actually yields, and it is the reason `score_entities` must count a correct
+`unlinked` as a true negative: a resolver that links nothing would otherwise look perfect,
+and one that links everything would too, depending on which half you forgot to count.
