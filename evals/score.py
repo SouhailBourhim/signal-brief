@@ -20,7 +20,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from signal_core.dedup import is_same_story
-from signal_core.hashing import simhash64
 
 EVALS = Path(__file__).parent
 
@@ -81,9 +80,9 @@ def _score_dedup(name: str, *, fixture: bool) -> Score:
     for pair in _load(EVALS / "dedup" / "pairs.jsonl"):
         if (pair.get("origin") == FIXTURE_ORIGIN) != fixture:
             continue
-        a_text = f"{pair['a']['title']} {pair['a']['body']}"
-        b_text = f"{pair['b']['title']} {pair['b']['body']}"
-        predicted = is_same_story(a_text, b_text, simhash64(a_text), simhash64(b_text))
+        predicted = is_same_story(
+            pair["a"]["title"], pair["a"]["body"], pair["b"]["title"], pair["b"]["body"]
+        )
         actual = pair["same_story"]
         if predicted and actual:
             score.tp += 1
@@ -128,9 +127,9 @@ def dedup_by_stratum() -> list[Score]:
     for pair in pairs:
         stratum = pair.get("stratum", "unsampled")
         score = scores.setdefault(stratum, Score(stratum))
-        a_text = f"{pair['a']['title']} {pair['a']['body']}"
-        b_text = f"{pair['b']['title']} {pair['b']['body']}"
-        predicted = is_same_story(a_text, b_text, simhash64(a_text), simhash64(b_text))
+        predicted = is_same_story(
+            pair["a"]["title"], pair["a"]["body"], pair["b"]["title"], pair["b"]["body"]
+        )
         actual = pair["same_story"]
         if predicted and actual:
             score.tp += 1

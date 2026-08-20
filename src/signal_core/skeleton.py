@@ -93,8 +93,11 @@ def run(settings: Settings | None = None, use_spark: bool = True, limit: int = 1
 
     print("[4/5] cluster— exact dedup + near-duplicate grouping")
     deduped, exact_removed = exact_dedup(articles)
-    clusters = group_stories(deduped)
+    grouped = group_stories(deduped)
+    clusters = grouped.clusters
     print(f"        {len(articles)} in -> {len(clusters)} clusters ({exact_removed} exact dupes)")
+    if grouped.dissolved:
+        print(f"        {grouped.dissolved} oversized cluster(s) dissolved (SPEC 7.1 guard)")
 
     print("[5/5] brief  — rank + render")
     ranked = rank(clusters, limit=limit)

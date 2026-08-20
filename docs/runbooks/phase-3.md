@@ -333,8 +333,102 @@ Two consequences worth recording now:
    visible in `read_articles` and in `articles_in` instead of being papered over by the
    labeling tool.
 
+## 3.B — Dedup and clustering, part one: the decision *(done 2026-08-20)*
+
+Split in two, as planned: the decision layer first — where `make eval` can measure the win
+without a JVM — then the Spark job, blocking and tables. This is part one.
+
+- [x] `dedup.strip_boilerplate` — SPEC §7.1 stage 1, specified in Phase 0 and never written.
+- [x] Title and body compared separately, never pooled. The recall fix.
+- [x] `prepare` / `decide` — tokens and simhash computed once per article, not once per pair;
+      `decide` is the single shared decision and `is_same_story` wraps it for the eval.
+- [x] Minimum-signal guards on all three branches: below them the comparison **abstains**
+      rather than guessing, the same principle as the entity resolver's confidence floor.
+- [x] `evals/fit_thresholds.py` — every constant fitted, on a train split, reported held out.
+- [x] `MAX_CLUSTER_SHARE` / `MIN_CLUSTER_CAP` — the structural guard on transitive closure.
+- [x] Floors raised off 0.0 in `thresholds.toml`.
+
+### Verified
+
+|  | precision | recall |
+|---|---|---|
+| train (fitted on) | 0.933 | 0.636 |
+| **HELD OUT** | **1.000** | **0.500** |
+| full set (what `make eval` gates) | 0.962 | 0.568 |
+| Phase 0, same pairs | 0.000 | 0.455 |
+
+The brief, same 72-hour window, before and after: **2,769 → 765 clusters with a 1,720-article
+phantom at rank 1**, against **2,769 → 2,277 clusters** whose largest is a real 23-article,
+8-publisher story (Disney suing the FCC) and whose lead is AP and Ars on the same NASA
+decision. Clustering got faster too — 3.2 s to 1.3 s over the same 3.58M pairs — because
+`prepare` runs once per article instead of tokenizing inside the loop.
+
+### What broke on first real use
+
+**Fixing precision broke the fixture, and the fixture was right.** The first cut scored
+precision 1.000 on real pairs and dropped `dedup_fixture` recall to 0.714 — it had stopped
+seeing *"Northwind acquires Lumen"* as *"Lumen to be bought by Northwind"*. The real corpus
+is too thin in genuine rewrites to have caught that; the 55 synthetic pairs exist for exactly
+this and are now a hard constraint in the fitter rather than only a gate.
+
+**Constraining train precision to 1.000 overfits.** Cross-validation inside train showed a
+0.90 constraint reaching the same CV precision with better CV recall — it stops the fit
+chasing one split's particular negatives. Choosing that by looking at the held-out split
+would have spent the split, so the constraint is selected by CV *inside train* under a stated
+rule: never trade precision, but take recall that costs none.
+
+**The pairwise eval cannot certify the clustering. This is the important one.**
+
+After boilerplate stripping the pairwise numbers looked finished — precision 1.000 on every
+base-rate stratum, zero false merges in 194 pairs. The brief still contained a single
+1,575-article cluster holding 59% of the corpus.
+
+Both statements are true, and the gap between them is structural. A 252-pair labeled set
+cannot bound a false-merge rate that a clustering run applies to **3.58M pairs**, and
+union-find takes a transitive closure, so one bad edge merges two components permanently. The
+rate that was invisible in the eval, measured directly over random EDGAR pairs, was **1.9% on
+the simhash branch and 1.4% on the title branch** — tens of thousands of false edges per
+window, and a few well-placed ones chain everything.
+
+Two fixes, and they are different kinds of thing:
+
+1. **A guard the eval could have caught, had it been asked.** Stage 2 was the one branch
+   given no minimum-signal guard — an oversight in this phase's own design. A simhash's
+   discriminative power comes from having features to hash, and an EDGAR filing reduces to
+   ~9 tokens, where collisions inside 12 bits are common. `MIN_SIMHASH_TOKENS = 25` took the
+   cluster from 1,575 to 203. It is **held out of the fitting grid on purpose**: the pairwise
+   objective scores every candidate identically, so fitting it would have produced a
+   confident 0, and the fitter now says so in its output instead.
+2. **A guard no pairwise metric can replace.** `MAX_CLUSTER_SHARE = 0.05` dissolves any
+   component holding more than 5% of the window back into singletons, and reports the count
+   — `ClusterResult.dissolved`, returned rather than logged, because a run that quietly
+   dissolved 1,500 articles looks identical in the brief to one that never formed the
+   cluster. Dissolving is the direction `evals/dedup/README.md`'s asymmetry points: a false
+   split shows a visible, cheap duplicate; a false merge deletes a story nobody learns was
+   missing. It is deterministic and order-independent, so a replay reproduces it exactly.
+
+**The guard's floor had to be measured, not assumed.** `MIN_CLUSTER_CAP` started at 2 and
+promptly dissolved the fixture's legitimate four-publisher event, because 5% of a ten-article
+window is nothing. The largest genuine cluster in a real 72-hour window is 23 articles across
+8 publishers; the false one beside it was 1,575. 50 sits in that gap.
+
+**The labeled set could not distinguish `NEAR_DUPLICATE_DISTANCE` at all** — every value from
+0 to 12 scores identically, because once boilerplate is stripped the title path already
+catches what stage 2 would. So the tie is broken on SPEC §7.1's stated intent rather than on
+noise, and the constant carries that reasoning instead of implying it was measured.
+
+### Still open, carried into 3.B part two
+
+- EDGAR still over-merges within one filer: a fund trust that lodged 47 supplements in a day
+  becomes one 47-article cluster. Bounded and single-publisher, so `breadth` keeps it out of
+  the brief, but it is not right.
+- The 132 duplicate `article_id` rows are untouched. 3.B part two rewrites that MERGE path.
+- `silver.articles.simhash` is now a **blocking** key only — the decision recomputes it over
+  cleaned text. Part two's banded blocking is where that column starts earning its place
+  again.
+
 ## Then
 
-3.B — dedup and clustering in Spark: the boilerplate stripping 3.0 found missing, a recall
-fix for the 26 misses above, and the duplicate-`article_id` MERGE defect. 3.E ratchets the
-floors and ADR-0009 rules on embeddings, against the numbers in this section.
+3.B part two — the Spark job, banded blocking, `silver.story_clusters` /
+`silver.article_clusters`, and the duplicate-`article_id` defect. Then 3.C's resolver, which
+`entities` is already labeled and waiting for.

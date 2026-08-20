@@ -66,7 +66,8 @@ def run(
     print("[3/4] cluster— exact dedup + near-duplicate grouping")
     clustering_started = time.monotonic()
     deduped, exact_removed = exact_dedup(articles)
-    clusters = group_stories(deduped)
+    grouped = group_stories(deduped)
+    clusters = grouped.clusters
     clustering_seconds = time.monotonic() - clustering_started
     # The number 3.B exists to fix. `group_stories` compares every surviving pair, so this
     # grows with the square of the window; record it rather than round it away.
@@ -75,6 +76,14 @@ def run(
         f"({exact_removed} exact dupes) in {clustering_seconds:.1f}s "
         f"[{len(deduped) * max(len(deduped) - 1, 0) // 2:,} pairs compared]"
     )
+    if grouped.dissolved:
+        # Loud on purpose. A dissolved cluster means the same-story rule chained a false
+        # merge across a large component, and a run that hid that would look identical to a
+        # clean one (SPEC §11).
+        print(
+            f"        WARNING: {grouped.dissolved} oversized cluster(s) dissolved, "
+            f"{grouped.dissolved_articles} articles returned to singletons"
+        )
 
     print("[4/4] brief  — rank + render")
     ranked = rank(clusters, limit=limit, now=now)
