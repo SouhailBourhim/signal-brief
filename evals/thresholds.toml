@@ -9,9 +9,52 @@
 # already exists — and label BEFORE writing the matching algorithm, so the answers aren't
 # quietly bent to agree with the implementation they're meant to judge.
 
-[dedup]           # SPEC §7.1 — currently the Phase 0 fixture; Phase 3 adds ~200 real pairs
-min_precision = 1.00   # a false merge silently deletes a story from the brief
+[dedup_fixture]   # SPEC §7.1 — the 55 synthetic Phase 0 pairs, unchanged
+# These are the floors this file has always carried, now pointed at the set they were
+# actually measured on. The fixture's `story_key` IS its ground truth, so 1.00/1.00 is
+# expected and this section is a canary: it proves the scorer still runs. It is not
+# evidence that the clustering is good, and it is scored separately so it cannot be
+# mistaken for evidence of that.
+min_precision = 1.00
 min_recall    = 0.90
+
+[dedup]           # SPEC §7.1 — 252 real pairs from silver.articles, labeled 2026-08-20
+# NOT a lowered floor. `[dedup_fixture]` above keeps the original 1.00/0.90 untouched and
+# still passing; this is a new section for a new set, and it is pinned open the same way
+# `[entities]` below is — labels have arrived, the implementation is not ready to be gated.
+#
+# Measured baseline on the day the labels landed, against Phase 0's `is_same_story`:
+#
+#                     n    precision   recall
+#     near           58      0.000      —        (0 positives exist in this stratum)
+#     borderline     76      0.000     0.000
+#     random         60      0.000      —
+#     focus          58      0.800     0.435
+#     ------------------------------------------
+#     combined      252      0.339     0.426
+#
+# Read the strata, not the combined row. `near`, `borderline` and `random` are base-rate
+# samples and describe what the brief's reader actually sees: **34 merges, every one of them
+# wrong, zero correct.** `focus` is deliberately enriched for the positive class (genuine
+# same-story pairs are rarer than 1-in-60 here), so its 0.800 says how the rule behaves once
+# a plausible candidate is in front of it — not how often it is right in production. The
+# combined row averages the two and describes neither; `--by-stratum` prints the split.
+#
+# Cause is recorded in docs/runbooks/phase-3.md 3.0: an EDGAR body is filing metadata rather
+# than prose, so SPEC §7.1 stage 1's "content hash after boilerplate stripping" — specified,
+# never implemented — is doing no work. Recall is a separate failure: even on `focus`, the
+# rule misses 26 of 46 real same-story pairs.
+#
+# The labels behind these numbers were made by an LLM assistant, not by the reader
+# (`labeler` is stamped on every record). That is a real caveat on what the figure means and
+# it is carried into the README rather than left here: see docs/runbooks/phase-3.md 3.A.
+#
+# 3.B fixes the clustering. 3.E ratchets these up to just below whatever it then measures,
+# and ADR-0009 records both that number and the verdict on embeddings. Until then `make
+# eval` is red on this section by design: a green gate over a clustering that scores zero
+# is the exact fiction SPEC §17 exists to prevent.
+min_precision = 0.0
+min_recall    = 0.0
 
 [entities]        # SPEC §7.2 — Phase 3, ~300 labeled mentions
 min_precision = 0.0

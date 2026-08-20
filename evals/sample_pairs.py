@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import sys
 from collections import defaultdict
@@ -75,6 +76,19 @@ def _pair_class(a: dict[str, Any], b: dict[str, Any]) -> str:
     return "x".join(sorted((_kind(a["source_id"]), _kind(b["source_id"]))))
 
 
+def _is_self_pair(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """Two rows carrying one `article_id`.
+
+    This should be impossible: `normalize_window` MERGEs on `article_id` with
+    `WHEN NOT MATCHED THEN INSERT`. It is not — `silver.articles` holds 132 duplicate ids
+    across 2,849 rows, found by this sampler emitting an article paired with itself
+    (docs/runbooks/phase-3.md, 3.A). Skipped here rather than deduplicated upstream, so the
+    defect stays visible in `read_articles` and in the brief's `articles_in` count instead
+    of being quietly papered over by the labeling tool.
+    """
+    return a["article_id"] == b["article_id"]
+
+
 def _pair_id(a: dict[str, Any], b: dict[str, Any]) -> str:
     """Order-independent, so the same pair drawn twice is recognisably the same pair."""
     lo, hi = sorted((a["article_id"], b["article_id"]))
@@ -111,6 +125,8 @@ def _stratify(
     for i in range(len(articles)):
         for j in range(i + 1, len(articles)):
             a, b = articles[i], articles[j]
+            if _is_self_pair(a, b):
+                continue
             # Byte-identical reprints are removed by `exact_dedup` before clustering ever
             # sees them, so labeling one tests nothing the rule actually decides.
             if a["content_hash"] == b["content_hash"]:
@@ -167,6 +183,55 @@ def _allocate(
     return chosen
 
 
+def _focus_pairs(
+    articles: list[dict[str, Any]], n: int, rng: random.Random
+) -> list[tuple[int, int]]:
+    """Pairs from the sub-population where a same-story pair is *possible at all*.
+
+    The first draw returned 194 pairs containing exactly one positive, which makes recall a
+    statement about a single example rather than a measurement. The cause is structural, not
+    a sampling bug: this corpus is 63% SEC filings, each a distinct company's distinct
+    filing, and genuine syndication across three RSS feeds inside 72 hours is rare.
+
+    So this mode restricts to the non-filing articles — where two sources can cover one
+    event — and ranks pairs by IDF-weighted **title** token overlap. Same-event coverage
+    shares names ("OpenAI", "Hugging Face") even when the prose differs completely.
+
+    Two properties keep this from being cherry-picking. It ranks on titles only, while
+    `is_same_story` decides on title *and* body, so it is not simply re-finding what the
+    rule already merges. And the pairs are labeled blind, tagged `focus`, and scored as
+    their own stratum — the base rate stays measurable from the `random` stratum, and a
+    precision computed over an enriched sample is never reported as if it were the base
+    rate.
+    """
+    pool = [i for i, a in enumerate(articles) if _kind(a["source_id"]) != "filing"]
+    titles = {i: content_tokens(articles[i]["title"]) for i in pool}
+
+    frequency: dict[str, int] = defaultdict(int)
+    for tokens in titles.values():
+        for token in tokens:
+            frequency[token] += 1
+    total = len(pool) or 1
+
+    scored: list[tuple[float, tuple[int, int]]] = []
+    for x in range(len(pool)):
+        for y in range(x + 1, len(pool)):
+            i, j = pool[x], pool[y]
+            if _is_self_pair(articles[i], articles[j]):
+                continue
+            shared = titles[i] & titles[j]
+            if not shared:
+                continue
+            # Rare shared words carry the signal; "the AI startup" does not.
+            weight = sum(math.log(total / frequency[t]) for t in shared)
+            if weight > 0:
+                scored.append((weight, (i, j)))
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    del rng  # ranked, not sampled — kept in the signature for symmetry with _stratify
+    return [pair for _, pair in scored[:n]]
+
+
 def _record(a: dict[str, Any], b: dict[str, Any], stratum: str, origin: str) -> dict[str, Any]:
     return {
         "pair_id": _pair_id(a, b),
@@ -189,6 +254,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=0, help="fixed, so a draw is reproducible")
     parser.add_argument("--origin", default=None, help="defaults to silver-<YYYY-MM>")
     parser.add_argument("--out", type=Path, default=EVALS / "dedup" / "candidates.jsonl")
+    parser.add_argument(
+        "--focus",
+        action="store_true",
+        help="draw only from where same-story pairs can exist (see _focus_pairs)",
+    )
     args = parser.parse_args(argv)
 
     from signal_core.brief.read import read_articles
@@ -201,16 +271,22 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     rng = random.Random(args.seed)
-    buckets = _stratify(articles, rng)
-    for (stratum, pair_class), pairs in sorted(buckets.items()):
-        print(f"  {stratum:<11} {pair_class:<15} {len(pairs):>5} sampled")
+    if args.focus:
+        chosen = _focus_pairs(articles, args.n, rng)
+        stratum_of = dict.fromkeys(chosen, "focus")
+        print(f"  focus       {len(chosen):>5} ranked by IDF-weighted title overlap")
+    else:
+        buckets = _stratify(articles, rng)
+        for (stratum, pair_class), pairs in sorted(buckets.items()):
+            print(f"  {stratum:<11} {pair_class:<15} {len(pairs):>5} sampled")
+        chosen = _allocate(buckets, args.n)
+        stratum_of = {pair: stratum for (stratum, _), pairs in buckets.items() for pair in pairs}
 
     origin = args.origin or f"silver-{now:%Y-%m}"
     labeled = _already_labeled()
-    stratum_of = {pair: stratum for (stratum, _), pairs in buckets.items() for pair in pairs}
 
     records, emitted = [], set()
-    for i, j in _allocate(buckets, args.n):
+    for i, j in chosen:
         record = _record(articles[i], articles[j], stratum_of[(i, j)], origin)
         if record["pair_id"] in labeled or record["pair_id"] in emitted:
             continue

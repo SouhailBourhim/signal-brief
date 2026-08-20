@@ -59,8 +59,9 @@ SPEC §15: never publish a metric the pipeline cannot recompute. Current numbers
 
 | Metric | Value | Source |
 |---|---|---|
-| Dedup precision / recall | 1.000 / 1.000 (n=55 pairs) | `make eval`, Phase 0 fixture |
-| Dedup ratio | 11 articles → 7 clusters | `make skeleton` |
+| Dedup precision / recall, **real pairs** | **0.000 / 0.000** base-rate strata · 0.800 / 0.435 candidate-enriched (n=252) | `evals/score.py --by-stratum`, labeled 2026-08-20 |
+| Dedup precision / recall, Phase 0 fixture | 1.000 / 1.000 (n=55) | `make eval` — a harness canary, not evidence |
+| Dedup ratio | 11 → 7 clusters (fake) · 2,769 → 765 (real, and **wrong** — see below) | `make skeleton` / `signal brief` |
 | Ingestion, one production window | 521 bronze rows → 207 articles (19 quarantined, all `hackernews`/dead-item) | `docs/runbooks/phase-2.md` 2.E, real AWS |
 | Athena, `SELECT *` vs. projected vs. partition-pruned, same question | 184,259 / 73,373 / 64,713 bytes scanned | `docs/athena.md`, real AWS |
 | S3 egress, one commit | 3,468,248 bytes | `ops.pipeline_costs`, real AWS |
@@ -69,9 +70,22 @@ SPEC §15: never publish a metric the pipeline cannot recompute. Current numbers
 | Cost per day (full pipeline) | — | Phase 4A — pieces above are real, a full day's total isn't assembled yet |
 | Consecutive daily briefs read | — | Phase 3 starts the count (SPEC §12's brief ladder) |
 
-The dedup numbers are on a synthetic fixture and prove the harness runs, not that the
-clustering is good. Phase 3 replaces them with ~200 real labeled pairs. Every Athena
-dollar figure behind the bytes-scanned numbers above floors at Athena's real 10 MB
+The fixture's 1.000/1.000 proved the harness runs, not that the clustering is good — and
+Phase 3's 252 real labeled pairs showed how much daylight sat between those two claims. On a
+base-rate sample the Phase 0 rule makes 34 merges and **every one is wrong**, and it misses
+26 of 46 genuine same-story pairs; one cluster in the first real brief swallowed 64% of the
+corpus. Cause, per-stratum split and fix are in [`docs/runbooks/phase-3.md`](docs/runbooks/phase-3.md).
+The numbers stay published while they are bad — a metric you report only once it flatters
+you is not a metric.
+
+Two caveats carried on purpose. The `focus` stratum is **enriched for same-story pairs**
+(genuine ones are rarer than 1-in-60 here), so its 0.800 describes the rule given a
+plausible candidate, not its hit rate in production — read the strata, never the average.
+And these labels were made by an LLM assistant rather than by the reader (`labeler` is
+stamped on every record), so the figure measures agreement with a model, not with the person
+the brief is for.
+
+Every Athena dollar figure behind the bytes-scanned numbers above floors at Athena's real 10 MB
 per-query minimum (`ops/athena.py`) and currently rounds to the same $0.0000477 for all
 three — the lake is still small enough that bytes scanned, not cost, is the metric that
 actually moves; see `docs/athena.md` for why that's stated rather than hidden.

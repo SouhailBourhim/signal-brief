@@ -142,7 +142,10 @@ retrofitted to flatter a measurement:
 - [x] `evals/entities/README.md` gains the record schema. The labeling *rule* was already
       written; the schema was not, and a rule without a schema cannot be labeled against.
 - [x] `evals/dedup/README.md` documents the candidates/pairs split and the two origins.
-- [ ] ~200 pairs and ~300 mentions answered, at roughly 20/day alongside the build.
+- [x] **252 pairs answered** (194 base-rate + 58 focus). 300 mentions still to answer.
+- [x] `evals/label_dump.py` / `evals/label_apply.py` — dump candidates, apply answers,
+      stamp provenance.
+- [x] `evals/score.py` splits `dedup` from `dedup_fixture` and gains `--by-stratum`.
 
 Neither sampler pre-fills an answer. `hamming` and `jaccard` are used to *stratify* — to
 find pairs where the decision is hard — and never to guess; `sample_mentions.py` does not
@@ -194,7 +197,98 @@ Mention offsets are into `title + "\n" + body_text` **as stored**, not into a cl
 `silver.articles` is immutable and the cleaning rule is not — 3.B is about to change it —
 so an offset into cleaned text would silently point somewhere else afterwards.
 
+### Who labeled these, and what that costs the claim
+
+**The 252 pair labels were made by an LLM assistant, not by the reader.** Every record
+carries `"labeler": "claude-opus-5"`, and `evals/label_apply.py` requires the field rather
+than defaulting it.
+
+This is a real caveat, not a disclaimer. SPEC §12 frames labeling as the author's judgement,
+and the brief exists to be useful to one specific reader; "dedup precision 0.339" therefore
+means *agreement between the rule and a model*, not agreement with the person the brief is
+for. Where the two would differ is exactly where it matters — a roundup, a follow-up that
+adds one new fact, a press release beside the story written from it. The README states the
+provenance beside the number.
+
+The subset worth a human review pass is small and identifiable: the 39 false positives and
+27 false negatives. Everything else is a pair both the rule and the labeler call the same way.
+
+### The first draw had almost no positives, and that was structural
+
+194 pairs came back with **one** positive. Not a sampling bug: the corpus is 63% SEC
+filings, each a distinct company's distinct filing, and genuine syndication across three RSS
+feeds inside 72 hours is rare. Recall over one example is not a measurement.
+
+So `sample_pairs.py --focus` was added: it restricts to the non-filing articles — where two
+sources *can* cover one event — and ranks pairs by IDF-weighted **title** token overlap. It
+ranks on titles while `is_same_story` decides on title and body, so it is not merely
+re-finding what the rule already merges; pairs are labeled blind, tagged `focus`, and scored
+as their own stratum. 58 drawn, **46 positives**.
+
+### Verified — the first honest dedup measurement
+
+`uv run python evals/score.py --by-stratum`:
+
+| stratum | n | positives | precision | recall |
+|---|---|---|---|---|
+| `near` | 58 | 0 | 0.000 | — |
+| `borderline` | 76 | 1 | 0.000 | 0.000 |
+| `random` | 60 | 0 | 0.000 | — |
+| `focus` | 58 | 46 | **0.800** | **0.435** |
+| combined | 252 | 47 | 0.339 | 0.426 |
+
+**Read the strata, not the combined row.** `near`, `borderline` and `random` are base-rate
+samples and describe what the brief's reader actually sees: 34 merges, every one of them
+wrong, zero correct. `focus` is enriched for the positive class, so its 0.800 says how the
+rule behaves once a plausible candidate is in front of it. Averaging the two describes
+neither, which is why `stratum` is on every record and why `--by-stratum` exists.
+
+Two independent failures, worth separating because 3.B has to fix both:
+
+- **Precision.** Every merge on a representative sample is a false merge. 3.0 named the
+  cause — EDGAR bodies are filing metadata, so SPEC §7.1 stage 1's boilerplate stripping,
+  specified and never implemented, is doing no work.
+- **Recall.** Even on `focus`, the rule misses **26 of 46** real same-story pairs. Those are
+  cases like AP's *"NASA calls off Swift rescue mission"* against Ars's *"NASA calls off
+  mission to rescue Swift gamma-ray observatory"* — one event, two outlets, few shared
+  content words. This is the gap SPEC §7.1 stage 3 exists to close, and it is the evidence
+  ADR-0009 will weigh when it rules on embeddings.
+
+The base rate itself is a finding: **0 same-story pairs in 60 uniformly random ones.** A
+`distinct_publisher_count` above 1 should be rare in this corpus, which makes the 3.0
+brief's 22-publisher lead cluster even more clearly an artifact.
+
+### What broke on first real use
+
+**`silver.articles` holds 132 duplicate `article_id` rows across 2,849.** Found because the
+sampler emitted articles paired with themselves.
+
+`normalize_window` MERGEs on `article_id` with `WHEN NOT MATCHED THEN INSERT`, so this
+should be impossible. Two shapes in the data:
+
+    -- same article_id, byte-identical, same fetched_at to the microsecond
+    020c4b73…  hackernews  fetched_at 2026-08-19 11:29:27.205641  x2
+
+    -- same article_id, re-fetched 15 minutes later, same content_hash
+    015a85e6…  edgar       fetched_at 11:44:42.122208 / 11:59:42.015826
+
+The second shape is a source re-serving an entry across two hourly windows; the first is the
+same bronze row normalized twice. Either way the MERGE did not match an existing row, and
+the within-batch `dropDuplicates(["article_id"])` cannot see across runs. Not yet diagnosed
+to a root cause — that belongs with 3.B, which is already rewriting this path.
+
+Two consequences worth recording now:
+
+1. **`exact_duplicates_removed` in the brief footer is partly counting this defect**, not
+   syndication. Both shapes share a `content_hash`, so `exact_dedup` collapses them and the
+   3.0 brief reported them among its 92 "exact dupes". A metric measuring a bug while
+   appearing to measure the world.
+2. The sampler **skips** self-pairs rather than deduplicating upstream, so the defect stays
+   visible in `read_articles` and in `articles_in` instead of being papered over by the
+   labeling tool.
+
 ## Then
 
-3.B — dedup and clustering in Spark, and the boilerplate stripping 3.0 found missing.
-Thresholds stay untouched until the labels above exist.
+3.B — dedup and clustering in Spark: the boilerplate stripping 3.0 found missing, a recall
+fix for the 26 misses above, and the duplicate-`article_id` MERGE defect. 3.E ratchets the
+floors and ADR-0009 rules on embeddings, against the numbers in this section.
