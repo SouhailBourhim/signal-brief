@@ -4,6 +4,11 @@
 # regression. Lowering a floor is a decision that belongs in an ADR, not in a commit that
 # is trying to go green.
 
+# SPEC §12: the ~600 labels these floors are waiting on are scheduled work, not a step at
+# the end of a phase. Label incrementally against real `silver.articles` data — which
+# already exists — and label BEFORE writing the matching algorithm, so the answers aren't
+# quietly bent to agree with the implementation they're meant to judge.
+
 [dedup]           # SPEC §7.1 — currently the Phase 0 fixture; Phase 3 adds ~200 real pairs
 min_precision = 1.00   # a false merge silently deletes a story from the brief
 min_recall    = 0.90
@@ -12,6 +17,6 @@ min_recall    = 0.90
 min_precision = 0.0
 min_recall    = 0.0
 
-[enrichment]      # SPEC §7.3 — Phase 4, 100 labeled examples
+[enrichment]      # SPEC §7.3 — Phase 4B, 100 labeled examples
 min_precision = 0.0
 min_recall    = 0.0

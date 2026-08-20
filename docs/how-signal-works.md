@@ -186,10 +186,29 @@ scan less than filtering by the date a source merely *claims* — and by how muc
 
 ### Phase 3 — Work out what's the same, and who's who *(not started)*
 
-**In one sentence:** collapse forty articles into one story, and figure out which real
-companies are being discussed.
+**In one sentence:** collapse forty articles into one story, figure out which real
+companies are being discussed — and start actually reading a brief every morning while
+that gets built.
 
-This is the heart of the project, and it's two hard problems.
+**First, before any of the hard parts: a deliberately bad brief.** The very first task of
+this phase is to point the existing page-builder at the real archive and start producing a
+daily page from real articles. It won't be good. Stories won't be grouped, there's no AI
+summary, nothing gets emailed — it's just the real articles from the last day, sorted by
+recency and how many outlets carried them, in a file you open in a browser.
+
+The reason to do it first is that the project's actual goal is *reading it every morning
+for a month*, and that's the one thing no amount of extra effort can speed up — a month
+takes a month. Waiting until everything is polished before the first real brief means the
+clock starts as late as possible, and it means discovering "these aren't the stories I
+actually care about" only after all the sophisticated machinery is built around them.
+Better to find that out now, while the sources and the scoring are still cheap to change.
+
+It's also nearly free to do: the page-builder, the scoring code, and the HTML template
+have all existed and been running since Phase 0 — against fake data. Pointing them at real
+data is wiring, not new construction. Everything after this improves a page that already
+exists rather than building toward one that doesn't.
+
+Then the two hard problems.
 
 **Grouping the same story.** Handled in four passes, cheapest first, because the cheap
 methods catch most cases and the expensive method is only worth running on the remainder:
@@ -212,14 +231,53 @@ A wrong link is worse than no link.
 
 **How we'll know it worked:** both are graded against several hundred examples labelled by
 hand, and the scores are published. Most projects of this kind claim these features work.
-Very few say how well.
+Very few say how well. And by the end of this phase you've been reading a real brief every
+morning for weeks — a rough one, but a real one.
+
+**A note on the labelling.** Those "several hundred hand-labelled examples" are about 500
+judgement calls made one at a time by a person, and they're the least interesting work in
+the whole project — which is exactly why they get put off until they become a wall. So
+they're deliberately spread out: roughly twenty a day while the code is being written,
+against the real archive that already exists. They're also done *before* the matching code,
+not after, so the answers aren't quietly bent to agree with whatever was just built.
 
 ---
 
-### Phase 4 — Write it, rank it, send it *(not started)*
+### Phase 4A — Rank it and send it *(not started)*
 
-**In one sentence:** an AI writes the summaries, a scoring system decides what's worth
-your morning, and the brief starts arriving.
+**In one sentence:** the scoring system decides what's worth your morning, and the brief
+starts arriving in your inbox instead of sitting in a file.
+
+**The ranking decides what you don't see.** A brief is useful because of what it leaves
+out. Stories score on: how genuinely new the narrative is, how many independent outlets
+carried it, how fast attention is accelerating, whether it touches things you care about,
+whether the market visibly reacted, and your own thumbs-up/down from previous mornings.
+
+The scoring weights are **set by hand and stay set by hand** — one person's daily marks
+are far too little data to learn from, and pretending otherwise would produce a system
+that overfits to last week's mood. But because the brief has been arriving since Phase 3,
+those weights get set against months of real reading rather than guessed at cold.
+
+This phase also clears the small pile of things earlier phases knowingly left open: proving
+the day-long switch-off recovery against the real deployed system rather than only in
+tests, fixing a blind spot where a frozen feed still looks healthy, and adding a second
+Hacker News collector — the current one sees each story exactly once, at birth, when its
+score is 1, so "how fast is this gaining attention" is currently unanswerable. Each of
+those gates a claim the project wants to make honestly, so each one is listed rather than
+remembered.
+
+**How we'll know it worked:** you read it three mornings in a row and mark it up.
+
+---
+
+### Phase 4B — Let an AI help, and remember what was revised *(not started)*
+
+**In one sentence:** a local AI writes the summaries, and the economic figures start
+keeping track of their own corrections.
+
+These two are grouped together because they're the two things that most make this not a
+news reader, and putting them in their own phase is what stops them being squeezed out by
+more urgent-feeling plumbing.
 
 **The AI part is deliberately small and tightly governed.** A language model runs on the
 developer's own computer — nothing is sent to an external AI service — and does three
@@ -238,15 +296,6 @@ system:
   asked of a different model gives a different answer, and pretending otherwise makes
   results irreproducible.
 
-**The ranking decides what you don't see.** A brief is useful because of what it leaves
-out. Stories score on: how genuinely new the narrative is, how many independent outlets
-carried it, how fast attention is accelerating, whether it touches things you care about,
-whether the market visibly reacted, and your own thumbs-up/down from previous mornings.
-
-The scoring weights are **set by hand and stay set by hand** — one person's daily marks
-are far too little data to learn from, and pretending otherwise would produce a system
-that overfits to last week's mood.
-
 **The revisions problem.** Economic figures get revised for months after publication.
 Most systems overwrite the old number and silently destroy the record. Signal keeps two
 separate dates for every figure: *the period it describes*, and *the date it was
@@ -255,8 +304,15 @@ rather than an archaeology project — and lets the brief say things like *"payr
 down 46,000 across the prior two months"*, which is often more important than the headline
 figure and is routinely buried.
 
-**How we'll know it worked:** you read the brief three mornings in a row and mark it up.
-And a 30-day re-run reproduces the archive, the cleaning, and the grouping identically.
+This part can be built late without losing anything, because the data source serves every
+past version of every figure on demand — nothing is lost by starting later. That's a
+statement about the *data*, though, not about the schedule: it originally shared a phase
+with the whole delivery pipeline, which is precisely what put it at risk of being dropped
+when that phase ran long. Hence its own phase.
+
+**How we'll know it worked:** a 30-day re-run reproduces the archive, the cleaning, and the
+grouping identically — with the AI answers coming back from the cache rather than being
+re-asked, at a published hit rate.
 
 ---
 
@@ -270,6 +326,14 @@ those notes get revisited against real operating experience.
 
 The test is 14 consecutive daily briefs, and a written before-and-after justification for
 anything added.
+
+**One thing that used to live here has a deadline instead of a phase.** The plan includes
+deliberately spending a week trying one expensive cloud service, measuring what it costs,
+and then deleting it — so the project can say "I evaluated this, here's the bill, here's
+why I chose the cheaper thing" rather than name-dropping it. That week runs on free signup
+credits which **expire on a fixed date** (roughly February 2027). Left in the last phase, a
+delay anywhere earlier wouldn't postpone it — it would cancel it permanently. So it's now a
+deadline to hit whenever there's a spare week, not a step to reach.
 
 ---
 
@@ -319,14 +383,21 @@ quietly does the wrong thing is far more dangerous than one that stops and says 
 | 0 — Prove the shape | Done |
 | 1 — Collect the real thing | Collectors live and running; day-long switch-off test deferred by decision |
 | 2 — Make it answerable | Done |
-| 3 — Same story, and who's who | Not started |
-| 4 — Write, rank, send | Not started |
+| 3 — Same story, and who's who *(now opens with the first real brief)* | Not started |
+| 4A — Rank it and send it | Not started |
+| 4B — AI summaries, and revision history | Not started |
 | 5 — Polish | Not started |
 
-No brief is being emailed yet — that starts in Phase 4. What exists today is a system
-that reliably collects and archives, tells you honestly when it couldn't, and now turns
-that archive into rows you can ask real questions of and get a real answer with a real
-price tag attached.
+No brief is being produced from real data yet — that starts at the very beginning of
+Phase 3, and it starts deliberately rough. Email delivery comes later, in 4A. What exists
+today is a system that reliably collects and archives, tells you honestly when it couldn't,
+and now turns that archive into rows you can ask real questions of and get a real answer
+with a real price tag attached.
+
+*Phase 4 was one phase until 2026-08-20; it held ten separate deliverables, including both
+of the things this project most wants to be judged on. It was split so those two can't be
+crowded out by more urgent-feeling plumbing. The reasoning is written down in
+`docs/decisions/ADR-0008`.*
 
 ---
 

@@ -1,7 +1,10 @@
 # LLM enrichment labeled examples — SPEC §7.3
 
-Empty until Phase 4. Target 100 labeled examples, scored per model digest and prompt
+Empty until Phase 4B. Target 100 labeled examples, scored per model digest and prompt
 version so swapping a model is a measurement rather than a vibe.
+
+Unlike the dedup and entity sets, this one genuinely cannot start early: it labels
+*clusters*, which do not exist until Phase 3 produces them.
 
 ## Labeling rule
 
