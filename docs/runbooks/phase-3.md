@@ -210,8 +210,20 @@ for. Where the two would differ is exactly where it matters — a roundup, a fol
 adds one new fact, a press release beside the story written from it. The README states the
 provenance beside the number.
 
-The subset worth a human review pass is small and identifiable: the 39 false positives and
-27 false negatives. Everything else is a pair both the rule and the labeler call the same way.
+**That review happened.** The 66 pairs where the rule and the labeler disagreed — 39 false
+positives, 27 false negatives — were the whole reviewable surface; every other pair is one
+they already agree on. The reader worked the seven genuinely contestable ones and **overrode
+three**, all in the same cluster: a multi-product leak roundup (*"Apple Accidentally Leaked
+More Than 10 New Products"*) is **not** the same story as coverage of one product from it,
+and an op-ed responding to a leak is not the same story as the leak. Those records now carry
+`"labeler": "souhail-bourhim"` and `"reviewed_from": "claude-opus-5"`, so the set says who
+made the call that stands and who made the one it replaced.
+
+The sensitivity was computed before the review and is worth keeping: flipping *every*
+contestable label moved precision only 0.339 → 0.373. The three overrides that actually
+landed changed recall 0.426 → 0.455 and left precision untouched. **Neither failure the
+measurement identifies rests on a disputed judgement** — the 34 wrong merges on base-rate
+strata and the ~23 missed real pairs survive any reading of the hard cases.
 
 ### The first draw had almost no positives, and that was structural
 
@@ -234,8 +246,8 @@ as their own stratum. 58 drawn, **46 positives**.
 | `near` | 58 | 0 | 0.000 | — |
 | `borderline` | 76 | 1 | 0.000 | 0.000 |
 | `random` | 60 | 0 | 0.000 | — |
-| `focus` | 58 | 46 | **0.800** | **0.435** |
-| combined | 252 | 47 | 0.339 | 0.426 |
+| `focus` | 58 | 43 | **0.800** | **0.465** |
+| combined | 252 | 44 | 0.339 | 0.455 |
 
 **Read the strata, not the combined row.** `near`, `borderline` and `random` are base-rate
 samples and describe what the brief's reader actually sees: 34 merges, every one of them
@@ -248,7 +260,7 @@ Two independent failures, worth separating because 3.B has to fix both:
 - **Precision.** Every merge on a representative sample is a false merge. 3.0 named the
   cause — EDGAR bodies are filing metadata, so SPEC §7.1 stage 1's boilerplate stripping,
   specified and never implemented, is doing no work.
-- **Recall.** Even on `focus`, the rule misses **26 of 46** real same-story pairs. Those are
+- **Recall.** Even on `focus`, the rule misses **23 of 43** real same-story pairs. Those are
   cases like AP's *"NASA calls off Swift rescue mission"* against Ars's *"NASA calls off
   mission to rescue Swift gamma-ray observatory"* — one event, two outlets, few shared
   content words. This is the gap SPEC §7.1 stage 3 exists to close, and it is the evidence

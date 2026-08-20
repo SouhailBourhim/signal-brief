@@ -59,7 +59,7 @@ SPEC §15: never publish a metric the pipeline cannot recompute. Current numbers
 
 | Metric | Value | Source |
 |---|---|---|
-| Dedup precision / recall, **real pairs** | **0.000 / 0.000** base-rate strata · 0.800 / 0.435 candidate-enriched (n=252) | `evals/score.py --by-stratum`, labeled 2026-08-20 |
+| Dedup precision / recall, **real pairs** | **0.000 / 0.000** base-rate strata · 0.800 / 0.465 candidate-enriched (n=252) | `evals/score.py --by-stratum`, labeled 2026-08-20 |
 | Dedup precision / recall, Phase 0 fixture | 1.000 / 1.000 (n=55) | `make eval` — a harness canary, not evidence |
 | Dedup ratio | 11 → 7 clusters (fake) · 2,769 → 765 (real, and **wrong** — see below) | `make skeleton` / `signal brief` |
 | Ingestion, one production window | 521 bronze rows → 207 articles (19 quarantined, all `hackernews`/dead-item) | `docs/runbooks/phase-2.md` 2.E, real AWS |
@@ -73,7 +73,7 @@ SPEC §15: never publish a metric the pipeline cannot recompute. Current numbers
 The fixture's 1.000/1.000 proved the harness runs, not that the clustering is good — and
 Phase 3's 252 real labeled pairs showed how much daylight sat between those two claims. On a
 base-rate sample the Phase 0 rule makes 34 merges and **every one is wrong**, and it misses
-26 of 46 genuine same-story pairs; one cluster in the first real brief swallowed 64% of the
+23 of 43 genuine same-story pairs; one cluster in the first real brief swallowed 64% of the
 corpus. Cause, per-stratum split and fix are in [`docs/runbooks/phase-3.md`](docs/runbooks/phase-3.md).
 The numbers stay published while they are bad — a metric you report only once it flatters
 you is not a metric.
@@ -81,9 +81,10 @@ you is not a metric.
 Two caveats carried on purpose. The `focus` stratum is **enriched for same-story pairs**
 (genuine ones are rarer than 1-in-60 here), so its 0.800 describes the rule given a
 plausible candidate, not its hit rate in production — read the strata, never the average.
-And these labels were made by an LLM assistant rather than by the reader (`labeler` is
-stamped on every record), so the figure measures agreement with a model, not with the person
-the brief is for.
+And these labels were made by an LLM assistant and then reviewed by the reader, who overrode
+three (`labeler` is stamped on every record, `reviewed_from` on every overridden one) — so
+the figure measures agreement with a model on the bulk of the set, spot-checked where the
+rule and the labeler disagreed.
 
 Every Athena dollar figure behind the bytes-scanned numbers above floors at Athena's real 10 MB
 per-query minimum (`ops/athena.py`) and currently rounds to the same $0.0000477 for all

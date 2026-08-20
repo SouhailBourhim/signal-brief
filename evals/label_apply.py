@@ -11,8 +11,9 @@ against machine-made labels answers a different question than one computed again
 reader's. Recording it in the data is what keeps the distinction from quietly evaporating
 between here and the README.
 
-    uv run python evals/label_apply.py pairs   --labels FILE.json --labeler NAME
-    uv run python evals/label_apply.py mentions --labels FILE.json --labeler NAME
+    uv run python evals/label_apply.py pairs         --labels FILE.json --labeler NAME
+    uv run python evals/label_apply.py mentions      --labels FILE.json --labeler NAME
+    uv run python evals/label_apply.py relabel-pairs --labels FILE.json --labeler NAME
 """
 
 from __future__ import annotations
@@ -37,6 +38,37 @@ def _write(path: Path, records: list[dict[str, Any]]) -> None:
     path.write_text(
         "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records), encoding="utf-8"
     )
+
+
+def _relabel_pairs(labels: dict[str, Any], labeler: str) -> tuple[int, int]:
+    """Overwrite answers already in `pairs.jsonl`, keeping the trail of who changed what.
+
+    This is the review path: a second labeler disagreeing with the first. The new `labeler`
+    replaces the old one and `reviewed_from` records what it used to be, so a record always
+    says who made the call that stands and who made the one it replaced. Silently
+    overwriting would leave the set looking like it had one author all along, which is the
+    detail that matters most when the first author was a model.
+    """
+    path = EVALS / "dedup" / "pairs.jsonl"
+    records = _read(path)
+
+    changed = 0
+    for record in records:
+        if record["pair_id"] not in labels:
+            continue
+        value = labels[record["pair_id"]]
+        if not isinstance(value, bool):
+            raise ValueError(f"{record['pair_id']}: same_story must be a bool, got {value!r}")
+        if record.get("same_story") == value and record.get("labeler") == labeler:
+            continue
+        if (previous := record.get("labeler")) and previous != labeler:
+            record["reviewed_from"] = previous
+        record["same_story"] = value
+        record["labeler"] = labeler
+        changed += 1
+
+    _write(path, records)
+    return changed, sum(1 for r in records if "same_story" not in r)
 
 
 def _apply_pairs(labels: dict[str, Any], labeler: str) -> tuple[int, int]:
@@ -86,13 +118,17 @@ def _apply_mentions(labels: dict[str, Any], labeler: str) -> tuple[int, int]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("which", choices=("pairs", "mentions"))
+    parser.add_argument("which", choices=("pairs", "mentions", "relabel-pairs"))
     parser.add_argument("--labels", type=Path, required=True, help="JSON {id: answer}")
     parser.add_argument("--labeler", required=True, help="who or what made these judgements")
     args = parser.parse_args(argv)
 
     labels = json.loads(args.labels.read_text(encoding="utf-8"))
-    apply = _apply_pairs if args.which == "pairs" else _apply_mentions
+    apply = {
+        "pairs": _apply_pairs,
+        "relabel-pairs": _relabel_pairs,
+        "mentions": _apply_mentions,
+    }[args.which]
     applied, remaining = apply(labels, args.labeler)
     print(f"{args.which}: applied {applied}, {remaining} still unanswered")
     if applied != len(labels):

@@ -29,9 +29,9 @@ min_recall    = 0.90
 #     near           58      0.000      —        (0 positives exist in this stratum)
 #     borderline     76      0.000     0.000
 #     random         60      0.000      —
-#     focus          58      0.800     0.435
+#     focus          58      0.800     0.465
 #     ------------------------------------------
-#     combined      252      0.339     0.426
+#     combined      252      0.339     0.455
 #
 # Read the strata, not the combined row. `near`, `borderline` and `random` are base-rate
 # samples and describe what the brief's reader actually sees: **34 merges, every one of them
@@ -43,11 +43,13 @@ min_recall    = 0.90
 # Cause is recorded in docs/runbooks/phase-3.md 3.0: an EDGAR body is filing metadata rather
 # than prose, so SPEC §7.1 stage 1's "content hash after boilerplate stripping" — specified,
 # never implemented — is doing no work. Recall is a separate failure: even on `focus`, the
-# rule misses 26 of 46 real same-story pairs.
+# rule misses 23 of 43 real same-story pairs.
 #
-# The labels behind these numbers were made by an LLM assistant, not by the reader
-# (`labeler` is stamped on every record). That is a real caveat on what the figure means and
-# it is carried into the README rather than left here: see docs/runbooks/phase-3.md 3.A.
+# The labels behind these numbers were made by an LLM assistant and then reviewed by the
+# reader, who overrode three of them; `labeler` is stamped on every record and
+# `reviewed_from` records what an overridden one used to say. That is a real caveat on what
+# the figure means and it is carried into the README rather than left here: see
+# docs/runbooks/phase-3.md 3.A.
 #
 # 3.B fixes the clustering. 3.E ratchets these up to just below whatever it then measures,
 # and ADR-0009 records both that number and the verdict on embeddings. Until then `make
