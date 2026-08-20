@@ -135,6 +135,66 @@ retrofitted to flatter a measurement:
    permanent and unbounded, and a cluster holding 64% of the corpus should have been an
    error, not a headline.
 
+## 3.A — Labeling starts *(sampled 2026-08-20; labeling ongoing)*
+
+- [x] `evals/sample_pairs.py` — stratified candidate pairs into `evals/dedup/candidates.jsonl`.
+- [x] `evals/sample_mentions.py` — candidate mentions into `evals/entities/mentions.jsonl`.
+- [x] `evals/entities/README.md` gains the record schema. The labeling *rule* was already
+      written; the schema was not, and a rule without a schema cannot be labeled against.
+- [x] `evals/dedup/README.md` documents the candidates/pairs split and the two origins.
+- [ ] ~200 pairs and ~300 mentions answered, at roughly 20/day alongside the build.
+
+Neither sampler pre-fills an answer. `hamming` and `jaccard` are used to *stratify* — to
+find pairs where the decision is hard — and never to guess; `sample_mentions.py` does not
+consult the entity dictionary at all. Both properties exist for the same reason SPEC §12
+puts labeling before the matcher: a label set shaped by the rule it judges measures
+nothing.
+
+### The sampler had to be built around 3.0's finding
+
+`sec.gov` is 63% of the corpus and 82% of random EDGAR pairs clear `SAME_STORY_JACCARD`. A
+uniform draw would therefore have been mostly one degenerate case, and a published number
+computed over it would describe SEC filings rather than this pipeline. So pairs are
+stratified twice — by similarity band (`near` / `borderline` / `random`) and by which kinds
+of source they join — with a 40% cap on any one class.
+
+Filings are still represented, deliberately. That is where the rule fails, and a label set
+that excluded them would report a precision the brief does not have.
+
+Measured on the first draw: **194 candidates, `sec.gov` in 88 of them (45%)** — down from
+63% of the corpus, without excluding it. Stratum split `borderline=76 near=58 random=60`.
+
+The third, uniform-random stratum is not redundant. `near` and `borderline` sit on the
+current rule's decision boundary by construction, and recall measured only near a boundary
+is a flattering number.
+
+### Verified — the strata produce pairs worth a human's time
+
+A `near` pair the rule would merge and a human would not:
+
+    A [sec.gov]  4 - TRINET GROUP, INC. (0000937098) (Issuer)
+    B [cato.org] Who Will Pay for Democratic Socialism's $200T Cost?
+
+A `borderline` pair that is a genuine judgement call:
+
+    A [kernelkennel.com] Packing Malware in Rosetta 2
+    B [github.com]       Rust arrayref 0.3.10 crate installs malware
+
+300 candidate mentions drawn across 261 distinct surface forms, capped at 25% from filings
+— an EDGAR title carries its company name *and* its CIK, so those mentions are structurally
+free to resolve, and letting them fill the sample would publish an accuracy earned on the
+easy half of the corpus.
+
+Roughly a tenth of the mention candidates are filing boilerplate (`Filed`, `AccNo`,
+`Filer`, `Show HN`), capped at four occurrences each. These are kept rather than filtered:
+a resolver that links them is wrong, and a labeled set containing none of them cannot
+detect that.
+
+Mention offsets are into `title + "\n" + body_text` **as stored**, not into a cleaned copy.
+`silver.articles` is immutable and the cleaning rule is not — 3.B is about to change it —
+so an offset into cleaned text would silently point somewhere else afterwards.
+
 ## Then
 
-3.A — labeling, against the real articles above.
+3.B — dedup and clustering in Spark, and the boilerplate stripping 3.0 found missing.
+Thresholds stay untouched until the labels above exist.
