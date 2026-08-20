@@ -54,11 +54,20 @@ def poll(config: SourceConfig, state: State) -> tuple[list[RawDocument], State]:
             documents.append(_fetch_item(client, config, item_id))
             watermark = item_id
 
+        now = utc_now()
+        # SPEC §11's content-movement signal, in this source's own terms. There is no
+        # body to hash here — a poll fetches many items, each already unique by id — so
+        # the honest question is whether HN produced anything new since last time, which
+        # is exactly "did the watermark advance". A frozen `maxitem` means `start >
+        # maxitem`, the range is empty, and this correctly records no movement while
+        # `last_success_at` still advances (the fetch did work).
+        content_moved = bool(documents)
         new_state = state.model_copy(
             update={
                 "watermark": watermark,
-                "last_success_at": utc_now(),
+                "last_success_at": now,
                 "consecutive_failures": 0,
+                "last_content_change_at": (now if content_moved else state.last_content_change_at),
             }
         )
         return documents, new_state

@@ -82,3 +82,88 @@ def test_edgar_sends_a_descriptive_user_agent_with_contact_email():
     # from EDGAR — "Your Request Originates from an Undeclared Automated Tool" — which
     # this project learned the expensive way. See Settings.user_agent.
     assert "(" not in sent_ua and "http" not in sent_ua and "/" not in sent_ua
+
+
+# --- SPEC §11's content-movement signal (docs/decisions/ADR-0009) -------------------
+
+
+@respx.mock
+def test_first_poll_counts_as_content_movement(config):
+    """No prior content to be identical to. Seeding this as "unchanged" would report
+    every brand-new source as a dead feed until its second distinct body arrived."""
+    respx.get(config.url).mock(return_value=httpx.Response(200, content=b"<rss>one</rss>"))
+
+    _, state = rss_tech.poll(config, State(source_id=config.source_id))
+
+    assert state.last_content_change_at is not None
+    assert state.last_content_hash is not None
+
+
+@respx.mock
+def test_an_unchanged_200_body_does_not_advance_content_change(config):
+    """The dead-feed case, and the one a status code cannot reveal: both SEC sources
+    serve no validators, so a frozen feed 200s a byte-identical body forever."""
+    respx.get(config.url).mock(return_value=httpx.Response(200, content=b"<rss>same</rss>"))
+
+    _, first = rss_tech.poll(config, State(source_id=config.source_id))
+    _, second = rss_tech.poll(config, first)
+
+    # The fetch is healthy and keeps advancing...
+    assert second.last_success_at > first.last_success_at
+    # ...while the content has demonstrably not moved.
+    assert second.last_content_change_at == first.last_content_change_at
+
+
+@respx.mock
+def test_a_changed_200_body_advances_content_change(config):
+    respx.get(config.url).mock(return_value=httpx.Response(200, content=b"<rss>one</rss>"))
+    _, first = rss_tech.poll(config, State(source_id=config.source_id))
+
+    respx.get(config.url).mock(return_value=httpx.Response(200, content=b"<rss>two</rss>"))
+    _, second = rss_tech.poll(config, first)
+
+    assert second.last_content_change_at > first.last_content_change_at
+    assert second.last_content_hash != first.last_content_hash
+
+
+@respx.mock
+def test_a_304_seeds_content_change_when_it_has_never_been_set(config):
+    """A source that 304s from its very first poll — `rss_ars` does — would otherwise hold
+    None forever, and `assess_source` reads None as "skip the dead-feed check". The
+    lowest-volume source would have been the one exempt from dead-feed detection.
+
+    Found in production on 2026-08-20, not in tests: five of six sources had the field set
+    within minutes of deploy and `rss_ars` never did."""
+    respx.get(config.url).mock(return_value=httpx.Response(304))
+
+    _, state = rss_tech.poll(config, State(source_id=config.source_id, etag='"v1"'))
+
+    assert state.last_content_change_at is not None
+
+
+@respx.mock
+def test_a_304_does_not_advance_content_change(config):
+    """A 304 is the server stating outright that nothing moved — the cleanest possible
+    evidence for the check, and previously the clearest way to look healthy while dead."""
+    respx.get(config.url).mock(return_value=httpx.Response(200, content=b"<rss>one</rss>"))
+    _, first = rss_tech.poll(config, State(source_id=config.source_id))
+
+    respx.get(config.url).mock(return_value=httpx.Response(304))
+    _, second = rss_tech.poll(config, first)
+
+    assert second.last_success_at > first.last_success_at
+    assert second.last_content_change_at == first.last_content_change_at
+
+
+@respx.mock
+def test_a_failed_fetch_does_not_advance_content_change(config):
+    """An error says nothing about whether the publisher is alive, so it must not reset
+    the dead-feed clock — that would let a flapping source mask a frozen one."""
+    respx.get(config.url).mock(return_value=httpx.Response(200, content=b"<rss>one</rss>"))
+    _, first = rss_tech.poll(config, State(source_id=config.source_id))
+
+    respx.get(config.url).mock(return_value=httpx.Response(503, content=b"nope"))
+    _, second = rss_tech.poll(config, first)
+
+    assert second.consecutive_failures == 1
+    assert second.last_content_change_at == first.last_content_change_at

@@ -22,6 +22,46 @@ from airflow.decorators import dag, task
 from airflow.exceptions import AirflowFailException
 from assets import BRONZE_COMMITTED
 
+# How many past windows form a source's volume baseline. 24 hourly windows is a full day,
+# so the baseline spans a whole diurnal cycle — a shorter one taken at 04:00 would make
+# every source look like it collapsed at 09:00.
+BASELINE_WINDOWS = 24
+
+
+def _volume_baselines(spark, window_start) -> dict[str, float]:
+    """Median documents per window per source, over the last `BASELINE_WINDOWS` closed
+    windows before this one. SPEC §11's volume anomaly detection.
+
+    Median, not mean: an outage's own zero-windows land in this table too, and a mean
+    lets them drag the baseline down until the outage looks like the new normal — the
+    metric quietly re-calibrating to the failure it exists to detect.
+
+    Returns nothing for a source without history; `assess_source` then skips the relative
+    check and falls back to the static floor, which is the correct behaviour on a fresh
+    deploy rather than a special case.
+    """
+    from datetime import timedelta
+
+    from signal_core.spark.jobs.health_snapshot import ensure_table
+
+    # This reads `ops.source_health` before `record()` writes to it, so on the very first
+    # run of a fresh deployment the table does not exist yet. Creating it here rather than
+    # catching the failure keeps the query below unconditional — an empty table returns no
+    # rows, which is already the "no history" case handled by the caller.
+    ensure_table(spark)
+
+    baseline_start = window_start - timedelta(hours=BASELINE_WINDOWS)
+    rows = spark.sql(
+        f"""
+        SELECT source_id, percentile_approx(docs_ingested, 0.5) AS median_docs
+        FROM ops.source_health
+        WHERE window_start >= TIMESTAMP '{baseline_start:%Y-%m-%d %H:%M:%S}'
+          AND window_start <  TIMESTAMP '{window_start:%Y-%m-%d %H:%M:%S}'
+        GROUP BY source_id
+        """
+    ).collect()
+    return {row.source_id: float(row.median_docs) for row in rows if row.median_docs is not None}
+
 
 @dag(
     dag_id="ingest_monitor",
@@ -113,9 +153,15 @@ def ingest_monitor_dag():
                 """
             ).collect()
             counts = {row.source_id: row.n for row in rows}
+            baselines = _volume_baselines(spark, window_start)
 
             verdicts = [
-                assess(SOURCES[source_id], store.load(source_id), counts.get(source_id, 0))
+                assess(
+                    SOURCES[source_id],
+                    store.load(source_id),
+                    counts.get(source_id, 0),
+                    baseline_docs=baselines.get(source_id),
+                )
                 for source_id in DEPLOYED_SOURCE_IDS
             ]
             record(spark, [v.health for v in verdicts], window_start)
@@ -137,14 +183,20 @@ def ingest_monitor_dag():
 
     @task
     def raise_on_degraded(verdicts: list[dict]) -> None:
-        """Fail the run when a source is stale or gapped.
+        """Fail the run when any source is in trouble.
 
         A task that always succeeds is not monitoring. Failing here is what puts the
         source in Airflow's own alerting path — the CloudWatch alarms in
         infra/terraform/main only see whether the Lambda *ran*, which a dead-but-200 feed
         (SPEC §11) passes with full marks.
+
+        The set of failing statuses is imported, never written out here. A local literal
+        is what let `thin` become a status `assess_source` could return and this task had
+        never heard of, so a source producing zero documents ran green.
         """
-        degraded = [v for v in verdicts if v["status"] in {"stale", "never_succeeded", "gapped"}]
+        from signal_core.ops.health import FAILING_STATUSES
+
+        degraded = [v for v in verdicts if v["status"] in FAILING_STATUSES]
         if degraded:
             raise AirflowFailException(f"degraded sources: {degraded}")
 

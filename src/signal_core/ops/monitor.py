@@ -35,15 +35,24 @@ def assess(
     *,
     window_start: datetime | None = None,
     now: datetime | None = None,
+    baseline_docs: float | None = None,
 ) -> SourceVerdict:
     """Assess one source over one window, planning catch-up if it has been down.
 
     An outage is defined by `last_success_at`, not by a missing schedule run: EventBridge
     firing on time while every fetch fails is exactly as much of an outage as the
     schedule being disabled, and only the watermark can tell the difference.
+
+    `baseline_docs` is this source's own recent typical output, supplied by the caller
+    (`ingest_monitor` reads it from `ops.source_health`) rather than computed here, for
+    the same reason the document count is: this module stays free of Spark so the
+    interesting part — what counts as unhealthy — is unit-testable without a JVM.
     """
     now = ensure_utc(now or utc_now())
     last_success = ensure_utc(state.last_success_at) if state.last_success_at else None
+    last_content_change = (
+        ensure_utc(state.last_content_change_at) if state.last_content_change_at else None
+    )
 
     catch_up: CatchUpPlan | None = None
     if last_success is not None and (now - last_success).total_seconds() > (
@@ -60,6 +69,8 @@ def assess(
         last_success_at=last_success,
         now=now,
         gap_reason=catch_up.gap_reason if catch_up else None,
+        last_content_change_at=last_content_change,
+        baseline_docs=baseline_docs,
     )
     # `window_start` is carried by the caller into ops.source_health; nothing here needs
     # it, and inventing a default would put a wrong timestamp in a history table.

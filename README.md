@@ -65,8 +65,9 @@ SPEC §15: never publish a metric the pipeline cannot recompute. Current numbers
 | Athena, `SELECT *` vs. projected vs. partition-pruned, same question | 184,259 / 73,373 / 64,713 bytes scanned | `docs/athena.md`, real AWS |
 | S3 egress, one commit | 3,468,248 bytes | `ops.pipeline_costs`, real AWS |
 | Entity resolution | — | Phase 3 |
-| LLM eval accuracy, cache-hit rate | — | Phase 4 |
-| Cost per day (full pipeline) | — | Phase 4 — pieces above are real, a full day's total isn't assembled yet |
+| LLM eval accuracy, cache-hit rate | — | Phase 4B |
+| Cost per day (full pipeline) | — | Phase 4A — pieces above are real, a full day's total isn't assembled yet |
+| Consecutive daily briefs read | — | Phase 3 starts the count (SPEC §12's brief ladder) |
 
 The dedup numbers are on a synthetic fixture and prove the harness runs, not that the
 clustering is good. Phase 3 replaces them with ~200 real labeled pairs. Every Athena

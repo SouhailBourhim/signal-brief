@@ -12,13 +12,13 @@ and `docs/archive/PROJECT_START.md` (the narrowed execution plan). Those two dis
 
 | Conflict | v2 design said | PROJECT_START said | **Resolved** |
 |---|---|---|---|
-| Bitemporal macro (ALFRED) | Core differentiator (§8) | Explicitly deferred | **Kept, scheduled as Phase 4.** It is one of the four things that stop this being an aggregator; deferring it indefinitely guts the README's lead. It is late, not optional. |
+| Bitemporal macro (ALFRED) | Core differentiator (§8) | Explicitly deferred | **Kept, scheduled as Phase 4B** (Phase 4 until ADR-0008 split it). It is one of the four things that stop this being an aggregator; deferring it indefinitely guts the README's lead. It is late, not optional. |
 | Kafka | Core of the architecture | Kept in MVP, but its consumer was deferred | **Cut from Phases 1–4. Re-entry criteria in §14.** In the MVP it sat between a local Spark job and a local Spark job, with `bronze/` already the replay source of truth — a topic with no independent consumer and no process boundary. |
 | Spark Structured Streaming | Core (consumes Kafka) | Deferred | **Deferred with Kafka.** Batch Spark on the 15-minute cadence is the same code and the same correctness story without the exactly-once argument. |
 | dbt | In the stack table | Deferred | **Phase 5.** Gold marts are hand-written SQL until there are enough models for dbt's tests and lineage to pay for themselves. |
 | pgvector | In the stack table | Deferred | **Deferred, with arithmetic (§14).** The working set is ~1k–3k vectors; that is a numpy array, not a database. |
 | Sources at start | Start with 5 | MVP with 3 | **3 in Phase 1, 5 by end of Phase 2.** Three proves the adapter contract; the fourth and fifth prove it was worth having. |
-| Phase count | 4 | 5 | **5** (v2's Phase 1 splits into ingest and lake/query). |
+| Phase count | 4 | 5 | **5** (v2's Phase 1 splits into ingest and lake/query). Since amended: Phase 0 was always real but unlisted, and ADR-0008 split Phase 4 into 4A/4B — see §12 for the current shape. |
 | Repo layout | `spark/`, `enrich/`, `dbt/` | `processing/`, `streaming/`, `warehouse/` | **Single tree in §13.** |
 | Backfill acceptance test | "reproduces byte-identical output" | "reproducible from raw S3 objects" | **Rewritten (§12).** Byte-identical is not achievable across incremental clustering and an LLM stage, and claiming it invites exactly the question you cannot answer. |
 | "Replay" | Used for two different things | Same | **Split into replay vs catch-up (§6.3).** They have different guarantees and only one of them is always possible. |
@@ -269,22 +269,34 @@ A brief is useful because of what it **omits**. Score each cluster:
 |---|---|
 | Novelty | Embedding distance to the last 30 days of clusters — recycled narratives sink |
 | Breadth | Count of *independent* publishers (§7.1 makes this honest) |
-| Velocity | HN score slope, mention-rate acceleration |
+| Velocity | HN score slope, mention-rate acceleration — **blocked on a source change**, see below |
 | Relevance | Your watchlist of companies, technologies, macro series |
 | Market corroboration | Did the linked ticker or rate move beyond its normal range? |
 | Feedback | Your morning thumbs up/down |
+
+**Velocity is not currently buildable, and that is a source-design problem, not a ranking one.**
+`sources/hackernews.py` walks item ids forward from a watermark, so every item is fetched exactly
+once — at creation, when its score is 1 and it has no comments. §3 says "snapshot it, never
+overwrite"; there are no second snapshots to slope against. A second poller over `topstories.json`
+that re-fetches and snapshots current scores is what unblocks it, and it is listed in §12's
+carried-forward table for 4A. Until it lands, velocity stays out of `WEIGHTS` rather than being
+approximated by something that is not velocity. (Comment arrival rate per story *is* derivable from
+single-fetch data — which is part of why `silver.hn_comments` earns its place; see
+`docs/runbooks/phase-2.md`.)
 
 **Weights are hand-set and stay hand-set.** One reader's daily marks are instrumentation, not a
 training set — a weekly refit on tens of labels overfits to last week's mood and is indefensible in
 an interview. Store `score_components` as a map so every ranking decision is explainable after the
 fact, and revisit automated fitting only if the feedback table passes several hundred marked items.
-The deliverable here is explainability, not learning.
+The brief ladder (§12) is what makes that threshold reachable rather than theoretical: marks start
+accumulating in Phase 3, not at the end of Phase 4. The deliverable here is explainability, not
+learning.
 
 ---
 
 ## 8. The bitemporal macro store
 
-**Phase 4. Not optional** — this is differentiator #4 and the README leads with it.
+**Phase 4B. Not optional** — this is differentiator #4 and the README leads with it.
 
 Macro data is revised for months after first publication. A normal pipeline overwrites and quietly
 destroys the record; this one keeps two time axes:
@@ -299,8 +311,15 @@ thing coverage routinely buries and which often matters more than the headline p
 bitemporal modeling against genuinely revising data is a senior warehouse skill that arrives here
 naturally instead of being bolted on for show.
 
-ALFRED serves every vintage, so this is backfillable from a standing start — which is exactly why
-it can be Phase 4 without being at risk.
+ALFRED serves every vintage, so this is backfillable from a standing start — no history is lost by
+building it late, and it depends on nothing in Phases 2-3.
+
+That argument was originally used to justify putting it in Phase 4, and it only ever covered *data*
+risk. **Schedule risk is the opposite** (ADR-0008): sharing a row with the ranker, the renderer,
+the mailer and the maintenance DAG is what put it at risk, because when a ten-item phase runs long,
+the plumbing feels mandatory and the differentiator is what slips. Hence 4B, where the two things
+the README leads with — this and §7.3's governed LLM stage — are the whole phase and cannot be
+crowded out by anything else.
 
 ---
 
@@ -374,7 +393,7 @@ accounted for this, and it is the one cost that scales with the noisiest source.
 - Record `s3_egress_bytes` in `ops.pipeline_costs` alongside Athena bytes scanned, and put both in
   the README. **Verified against AWS's own pricing page (2026-08-18): 100 GB/month free data
   transfer out to the internet, aggregated across all services and regions except China and
-  GovCloud; $0.09/GB for the next 10 TB after that.** Re-verify before Phase 4 if this paragraph
+  GovCloud; $0.09/GB for the next 10 TB after that.** Re-verify before Phase 4A if this paragraph
   is more than a few months old — AWS has changed this allowance before.
 
 ### 10.2 Guardrails, before the first line of code
@@ -394,6 +413,16 @@ Budget one time-boxed week to run the gold layer through Redshift Serverless, or
 job, or a one-shard Kinesis stream — document the cost and the trade-off against the local
 equivalent, then `terraform destroy`. "I evaluated X, here is what it cost and why I chose Y" beats
 name-dropping X.
+
+**This has a deadline, not a phase.** It was Phase 5 until ADR-0008; sitting in the last phase,
+behind the largest one, meant a slip would not delay it but *end* it — the credits expire on the
+§10 clock whether or not the phase is reached. It depends on nothing else in the plan, so run it
+whenever there is a spare week before the ceiling.
+
+> **Credit expiry: approximately 2027-02-18** — six months from the first `terraform apply`
+> (2026-08-18). **Read the exact date off the AWS billing console and replace this line with it.**
+> An inferred date is not a deadline, and this is the one item in the plan that cannot be
+> recovered by working harder afterwards.
 
 ---
 
@@ -419,16 +448,72 @@ name-dropping X.
 ## 12. Build phases
 
 Do not start a phase until the previous one has a working demo and documentation.
+Per-phase progress, including what broke on first real use, lives in
+[`docs/runbooks/phase-N.md`](docs/runbooks/).
+
+**Carrying an item forward is allowed; losing track of it is not.** Phase 1's 1.D was
+deferred by decision and Phase 2 shipped without it — a defensible call, because 1.D gates a
+README claim rather than any Phase 2 work. What makes that safe rather than sloppy is that
+it stays visible: anything carried forward is named in the runbook it came from *and* in the
+receiving phase's row below, so it is gated by an acceptance test rather than by memory.
 
 | Phase | Deliverable | Acceptance test |
 |---|---|---|
-| **1. Ingest** | Terraform-provisioned S3 / Glue / DynamoDB / budgets / alarms; 3 Lambda pollers on schedule; `bronze.raw_documents` Iceberg table; local Airflow coordinating monitoring and recovery | Stop ingestion for a day, restart. **Replay** reprocesses the stored interval with no duplicates and no gaps; **catch-up** recovers what each source's backfill horizon allows and records `gap_reason` for the rest (§6.3) |
-| **2. Lake + query** | 5 sources; Spark normalize → `silver.articles`; Glue-registered Iceberg; Athena serving queries; partitioning rationale documented | A stranger runs `make up` and answers an ad-hoc question in Athena; bytes scanned and cost recorded for that query |
-| **3. Cluster + resolve** | Spark dedup, clustering, entity resolution; both labeled eval sets committed | Reported precision/recall on both, reproducible via `make eval` |
-| **4. Enrich + publish + correctness** | Ollama stage with cache and evals; ranker; HTML brief emailed at 07:00; ALFRED bitemporal macro; maintenance DAG; CI; cost and egress tracking | You read it three mornings running and the feedback loop records your marks. A 30-day backfill: **bronze bytes, normalization, hashing, simhash and entity resolution reproduce identically; clustering reproduces within a stated tolerance given a recorded ordering key; enrichment resolves from cache with a published hit rate.** Compaction delta measured |
-| **5. Platform polish** | dbt migration of silver→gold; Kafka + Structured Streaming **if and only if §14's criteria are met**; the §10.4 credit experiment | 14+ consecutive daily briefs; each re-added component has a written before/after justification |
+| **0. Foundation** *(done)* | Repo, ADRs, §10.2 guardrails before any billable resource; walking skeleton (fake source → brief); CI; eval harness with enforced floors | Fresh clone runs `make setup && make skeleton && make test && make eval` green, CI green, **zero AWS resources beyond guardrails and Terraform state** |
+| **1. Ingest** *(done; 1.D open)* | Terraform-provisioned S3 / Glue / DynamoDB / budgets / alarms; 3 Lambda pollers on schedule; `bronze.raw_documents` Iceberg table; local Airflow coordinating monitoring and recovery | Stop ingestion for a day, restart. **Replay** reprocesses the stored interval with no duplicates and no gaps; **catch-up** recovers what each source's backfill horizon allows and records `gap_reason` for the rest (§6.3). **Carried to 4A** — the mechanism is proven in `tests/test_replay_catchup.py`; against the deployed pipeline it is not |
+| **2. Lake + query** *(done)* | 6 sources; Spark normalize → `silver.articles`, `silver.hn_comments`, `silver.parse_rejects`; Glue-registered Iceberg; Athena serving queries; partitioning rationale documented (ADR-0007); `ops.pipeline_costs` recording bytes scanned and S3 egress | A stranger runs `make up` and answers an ad-hoc question in Athena; bytes scanned and cost recorded for that query |
+| **3. Cluster + resolve** | **3.0 first: a real brief** — the existing renderer pointed at real `silver.articles`, ugly ranking, no enrichment, no email. Then: Spark dedup, clustering, entity resolution; both labeled eval sets committed | Reported precision/recall on both, reproducible via `make eval` — **and you have been reading a real brief every morning since 3.0**, not a fake one |
+| **4A. Publish** | Ranker over real clusters; HTML brief with §11's health footer, emailed at 07:00; maintenance DAG; **plus the four carried-forward items below** | You read it three mornings running and the feedback loop records your marks. **1.D proven against the deployed pipeline**, not just in tests. Compaction delta measured |
+| **4B. Enrich + macro** | Ollama stage with content-hash cache, Pydantic validation and evals (§7.3); ALFRED bitemporal macro store (§8) | A 30-day backfill: **bronze bytes, normalization, hashing, simhash and entity resolution reproduce identically; clustering reproduces within a stated tolerance given a recorded ordering key; enrichment resolves from cache with a published hit rate** |
+| **5. Platform polish** | dbt migration of silver→gold; Kafka + Structured Streaming **if and only if §14's criteria are met** | 14+ consecutive daily briefs; each re-added component has a written before/after justification |
 
-Phase 4 is the one people skip and the one interviewers probe. It is not optional.
+Phase 4 is the one people skip and the one interviewers probe. It is not optional — which is
+why it is now two phases rather than one ten-item row that can be half-finished and called
+done. **ADR-0008** records the split and the reasoning; 4A/4B rather than a renumber, so
+existing "Phase 4" references stay valid.
+
+### The brief ladder
+
+The brief appears in Phase 3 and improves monotonically, rather than arriving at the end:
+
+| | Reads from | Ranked by | Delivered |
+|---|---|---|---|
+| **3.0** | `silver.articles` | recency + breadth (Phase 0's ranker, unchanged) | `make brief` |
+| **3.x** | real clusters, resolved entities | same | `make brief` |
+| **4A** | same | §7.4's full component set | email, 07:00 |
+| **4B** | + enrichment, + macro revisions | same | email, 07:00 |
+
+§1's success criterion is behavioural — *read daily for a month without maintaining it* —
+and calendar time is the one input that cannot be compressed by working harder. So the
+reading starts as early as something real can be read, which is Phase 3: `brief/ranker.py`,
+`brief/render.py` and the Jinja template have all been running since Phase 0, so 3.0 is a
+wiring job rather than new code. It also means §7.4's hand-set weights get tuned against
+real mornings, and the feedback table has a chance to reach §14's "several hundred marked
+items" before the question of automated fitting is worth asking.
+
+### Carried forward into 4A
+
+These are open, recorded in the runbooks, and each gates a claim the README is meant to
+make. Listed here because a deliverable that appears in no phase row gets found late:
+
+| Item | Recorded in | Gates |
+|---|---|---|
+| **1.D** — the day-long switch-off test | `docs/runbooks/phase-1.md` | The replay/catch-up claim, §16 item 6 |
+| **Stale-but-successful feed detection** — measure staleness from `last_content_change_at`, not `last_success_at` | `docs/runbooks/phase-2.md` | The health footer's freshness claims, §11 |
+| **HN score-velocity poller** — a second poller over `topstories.json`; the forward id walk fetches each item once, at score 1, so there is nothing to slope | `docs/runbooks/phase-2.md` | §7.4's velocity component |
+| **`project` cost-allocation tag** | `docs/runbooks/phase-1.md` | §10.3's per-project cost answer |
+
+### Labeled sets are work, and they start now
+
+~600 hand labels gate two phase acceptances: ~200 article pairs (§7.1) and ~300 mentions
+(§7.2) for Phase 3, ~100 enrichment examples (§7.3) for 4B. `evals/dedup/pairs.jsonl`
+currently holds 55 synthetic Phase 0 pairs; `evals/entities/` and `evals/enrichment/` are
+empty, with `evals/thresholds.toml`'s floors pinned at `0.0` waiting for them.
+
+Label **incrementally against the real `silver.articles` data that already exists**, not in
+one block once the code is written — 20 pairs a day through Phase 3's build reaches 200 by
+the time the clusterer needs them. Label **before** writing the matching algorithm, so the
+labels are not quietly shaped to flatter the implementation they will judge.
 
 ---
 
@@ -532,12 +617,22 @@ Consolidated from both superseded documents; these override convenience everywhe
   stop the stack growing back.
 - **Feed fragility.** RSS feeds die. §11's dead-feed detection is what keeps the "ran 60 days
   uninterrupted" claim true.
-- **The credit clock.** Six months. Re-read §10 before adding any AWS service.
+- **The credit clock.** Six months. Re-read §10 before adding any AWS service, and note that
+  §10.4's evaluation is the one deliverable with a hard external deadline — it expires rather than
+  slips.
+- **Back-loading the thing that defines success.** §1's criterion is behavioural and needs calendar
+  time nothing else can substitute for. The brief ladder in §12 exists to start that clock in
+  Phase 3 rather than at the end of Phase 4; if the ladder gets skipped "to do it properly later,"
+  this risk comes straight back.
+- **The labeled sets.** ~600 hand labels gate two phase acceptances and are the least interesting
+  work in the project, which is exactly why they slip. §12 schedules them incrementally against
+  data that already exists; a block of 600 left until the code is ready is a stalled phase.
 - **Egress creep.** The one bill that grows quietly with source volume. §10.1.
 - **LLM drift.** Pinned digests and the eval suite are what stop a model swap silently degrading the
   brief.
-- **Over-claiming reproducibility.** The Phase 4 acceptance test says exactly which stages are
-  bit-reproducible and which are not. Keep it that way; the precision is the point.
+- **Over-claiming reproducibility.** The Phase 4B acceptance test says exactly which stages are
+  bit-reproducible and which are not. Keep it that way; the precision is the point — ADR-0008 split
+  Phase 4 without touching a word of that test's wording, for exactly this reason.
 
 ---
 

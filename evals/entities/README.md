@@ -1,6 +1,12 @@
 # Entity resolution labeled mentions — SPEC §7.2
 
-Empty until Phase 3. Target ~300 hand-labeled mentions.
+Target ~300 hand-labeled mentions, gating Phase 3's acceptance (SPEC §12).
+
+**Start now, not when the resolver is written.** `silver.articles` already holds real
+articles to label against, and ~20 mentions a day through Phase 3's build reaches the
+target by the time the code needs it. Labeling before the matching algorithm exists is
+also the point of the rule below — it can't be tuned to flatter an implementation that
+hasn't been written yet.
 
 ## Labeling rule (written before labeling, per `../README.md`)
 

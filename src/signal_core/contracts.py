@@ -102,6 +102,17 @@ class State(BaseModel):
     seen: tuple[str, ...] = ()
     last_success_at: datetime | None = None
     consecutive_failures: int = 0
+    # SPEC §11's dead-feed detection: "the common failure is a feed returning 200 with
+    # stale content, not a 500". `last_success_at` cannot see that — it advances on a 304
+    # and on an unchanged 200 alike, so a permanently frozen feed reports zero staleness
+    # forever. These two are the signal that actually moves only when the *content* does.
+    #
+    # How each poller sets them differs, because the honest signal differs: `feed.py`
+    # compares the body's `content_hash` against `last_content_hash`; `hackernews.py` has
+    # no body to hash — its content moved iff the watermark advanced. `last_content_hash`
+    # stays None for the latter, deliberately.
+    last_content_change_at: datetime | None = None
+    last_content_hash: str | None = None
 
     SEEN_CAP: int = Field(default=5000, exclude=True)
 
@@ -128,7 +139,19 @@ class SourceConfig(BaseModel):
     url: str
     payload_format: PayloadFormat
     backfill_horizon: BackfillHorizon
+    # How long since the last *successful fetch* before the source is `stale`. Answers
+    # "is the poller working?" — set at ~3x the deployed cadence.
     freshness_sla_seconds: int
+    # How long since the last *content change* before the source is `dead_feed`. Answers
+    # the different question "is the feed still alive?", and is necessarily far longer:
+    # a healthy RSS feed legitimately publishes nothing for hours, and SEC files nothing
+    # over a weekend. None disables the check for sources where content movement isn't a
+    # meaningful signal. SPEC §11.
+    content_staleness_sla_seconds: int | None = None
+    # Minimum bronze documents per assessment window before the source is `thin`. Note
+    # this counts *documents*, not feed items, so its correct value depends on whether
+    # the source uses conditional GET: a 304 yields no document at all, which makes zero
+    # the normal reading for a feed that mostly 304s. See config.SOURCES.
     min_docs_per_window: int = 0
     rate_limit_per_sec: float = 1.0
     # Per-source because sources differ enormously: EDGAR's browse-edgar endpoint is a

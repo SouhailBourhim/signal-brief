@@ -104,3 +104,40 @@ def test_caps_items_per_poll_to_bound_one_invocation(config, monkeypatch):
 
     assert len(documents) == 2
     assert state.watermark == 102  # capped well short of maxitem=1000
+
+
+# --- SPEC §11's content-movement signal, in this source's terms ---------------------
+
+
+@respx.mock
+def test_new_items_count_as_content_movement(config):
+    """No body to hash here — a poll fetches many items, each unique by id — so the
+    honest signal is whether HN produced anything new, i.e. did the watermark advance."""
+    respx.get(f"{config.url}/maxitem.json").mock(return_value=httpx.Response(200, text="101"))
+    respx.get(f"{config.url}/item/101.json").mock(
+        return_value=httpx.Response(200, text='{"id":101,"type":"story"}')
+    )
+
+    documents, state = hackernews.poll(config, State(source_id=config.source_id, watermark=100))
+
+    assert len(documents) == 1
+    assert state.last_content_change_at is not None
+
+
+@respx.mock
+def test_a_frozen_maxitem_does_not_advance_content_change(config):
+    """HN reachable, returning 200s, and producing nothing new. The fetch is healthy and
+    must keep reporting so; the content clock must not move, or an hour of a dead API
+    reads exactly like an hour of a busy one."""
+    respx.get(f"{config.url}/maxitem.json").mock(return_value=httpx.Response(200, text="100"))
+    respx.get(f"{config.url}/item/100.json").mock(
+        return_value=httpx.Response(200, text='{"id":100,"type":"story"}')
+    )
+    _, first = hackernews.poll(config, State(source_id=config.source_id, watermark=99))
+
+    # maxitem stays put: nothing new exists to walk to.
+    documents, second = hackernews.poll(config, first)
+
+    assert documents == []
+    assert second.last_success_at > first.last_success_at
+    assert second.last_content_change_at == first.last_content_change_at

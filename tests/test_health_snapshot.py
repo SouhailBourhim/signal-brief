@@ -38,10 +38,15 @@ def _verdicts(now):
     return [
         assess(
             SOURCES["hackernews"],
-            # hackernews polls every minute and its SLA is 60s — two minutes of silence
-            # would already be stale, which is the point of a per-source SLA.
-            State(source_id="hackernews", last_success_at=now - timedelta(seconds=20)),
-            docs_in_window=40,
+            # Fetching seconds ago and producing at its normal rate: hackernews runs
+            # 119-919 documents an hour in production, so 600 is an ordinary window and
+            # the row this records should read `ok`.
+            State(
+                source_id="hackernews",
+                last_success_at=now - timedelta(seconds=20),
+                last_content_change_at=now - timedelta(seconds=20),
+            ),
+            docs_in_window=600,
             now=now,
         ),
         assess(

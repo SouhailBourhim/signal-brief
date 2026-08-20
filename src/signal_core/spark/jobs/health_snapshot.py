@@ -29,15 +29,29 @@ HEALTH_DDL = """
     last_success_at timestamp,
     staleness_seconds double,
     gap_reason string,
-    status string
+    status string,
+    content_staleness_seconds double,
+    baseline_docs double
 """
 
 # Same columns without the constraints: `NOT NULL` is table DDL, and Spark's DataFrame
 # schema parser rejects it.
 HEALTH_SCHEMA = """
     source_id string, window_start timestamp, docs_ingested int, expected_min int,
-    last_success_at timestamp, staleness_seconds double, gap_reason string, status string
+    last_success_at timestamp, staleness_seconds double, gap_reason string, status string,
+    content_staleness_seconds double, baseline_docs double
 """
+
+# Columns added after the table was first deployed. `CREATE TABLE IF NOT EXISTS` is a
+# no-op against the live table in AWS, so a new column in HEALTH_DDL would never reach it
+# and the MERGE below would fail on a column the target doesn't have. Iceberg's schema
+# evolution is metadata-only — no data rewrite — so this is cheap and idempotent; existing
+# rows read back NULL for the new columns, which is the truth about windows assessed
+# before these signals existed.
+_ADDED_COLUMNS = (
+    ("content_staleness_seconds", "double"),
+    ("baseline_docs", "double"),
+)
 
 
 def ensure_table(spark: SparkSession, table: str = HEALTH_TABLE) -> None:
@@ -51,6 +65,12 @@ def ensure_table(spark: SparkSession, table: str = HEALTH_TABLE) -> None:
         TBLPROPERTIES ('format-version' = '2')
         """
     )
+    # Spark SQL has no `ADD COLUMN IF NOT EXISTS`, so the existing schema is what makes
+    # this idempotent — re-adding a present column is an AnalysisException, not a no-op.
+    existing = set(spark.table(table).columns)
+    for column, sql_type in _ADDED_COLUMNS:
+        if column not in existing:
+            spark.sql(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
 
 
 def record(
@@ -75,6 +95,11 @@ def record(
             None if h.staleness_seconds == float("inf") else float(h.staleness_seconds),
             h.gap_reason,
             h.status,
+            # None here means "this source has no content-movement signal", which is a
+            # different fact from "content is fresh" — the column stays NULL rather than
+            # inventing a zero that would read as the latter.
+            None if h.content_staleness_seconds is None else float(h.content_staleness_seconds),
+            None if h.baseline_docs is None else float(h.baseline_docs),
         )
         for h in healths
     ]
