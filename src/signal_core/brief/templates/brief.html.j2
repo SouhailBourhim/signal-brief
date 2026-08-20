@@ -77,6 +77,9 @@
         <td class="{{ 'ok' if s.status == 'ok' else ('thin' if s.status == 'thin' else 'degraded') }}">{{ s.status }}</td>
         <td>{{ s.docs }} docs</td>
         <td>{% if s.staleness_seconds is none %}never{% else %}{{ s.staleness_seconds }}s ago{% endif %}</td>
+        {# SPEC §11: fetch staleness and content staleness answer different questions, and
+           only the second can see a feed returning 200 with content that never moves. #}
+        <td>{% if s.content_staleness_seconds is not none %}content {{ s.content_staleness_seconds }}s ago{% endif %}</td>
         {# SPEC §6.3: a gap catch-up could not close is stated, not implied by a thin day. #}
         <td class="degraded">{{ s.gap_reason or '' }}</td>
       </tr>

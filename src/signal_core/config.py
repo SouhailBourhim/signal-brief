@@ -90,6 +90,23 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# `min_docs_per_window` counts **bronze documents per hour**, not feed items, and the
+# right value therefore depends on whether the source uses conditional GET — a 304 yields
+# no document at all. Measured against 41 hours of real production data, 2026-08-20:
+#
+# | source      | docs/hour observed | conditional GET | floor | dead-feed SLA |
+# |-------------|--------------------|-----------------|-------|---------------|
+# | hackernews  | 119-919            | n/a (id walk)   | 50    | 1 h           |
+# | edgar       | 4 (steady)         | none served     | 1     | 96 h          |
+# | edgar_formd | 4 (steady)         | none served     | 1     | 96 h          |
+# | rss_tech    | 0-4, many zeros    | ETag            | 0     | 48 h          |
+# | rss_verge   | 0-4, many zeros    | weak ETag       | 0     | 48 h          |
+# | rss_ars     | 0-1, mostly zero   | Last-Modified   | 0     | 72 h          |
+#
+# The two SEC sources serve no validators (`browse-edgar` is a CGI script), so every poll
+# is a full body and a floor of 1 means "the poller ran". The RSS sources mostly 304, so
+# zero documents in an hour is their normal reading and a floor above 0 fires constantly —
+# which is why dead-feed detection, not the floor, is what covers them. SPEC §11.
 SOURCES: dict[str, SourceConfig] = {
     # Phase 0 — no network, no AWS. Exists so the contract has a second implementer
     # before the real ones are written.
@@ -115,7 +132,16 @@ SOURCES: dict[str, SourceConfig] = {
         # trains the alert away — the failure mode SPEC §11 is trying to avoid, arrived at
         # from the other direction. Change this and var.sources together.
         freshness_sla_seconds=900,
-        min_docs_per_window=0,  # a quiet minute on HN is normal, not a failure
+        # Was 0, commented "a quiet minute on HN is normal, not a failure" — true of a
+        # minute, but the assessment window is an *hour* (`monitor.window_bounds`), and
+        # HN runs 119-919 documents an hour in production. A floor of 0 meant the
+        # highest-volume source in the pipeline could go completely silent and report
+        # `ok`. 50 is well under the observed floor and still unmistakably "dead".
+        min_docs_per_window=50,
+        # HN emits continuously; an hour with no new item ids at all is a dead API, not
+        # a quiet patch. This is the one source where content movement is fast enough for
+        # the content SLA to be short.
+        content_staleness_sla_seconds=3600,
         rate_limit_per_sec=5.0,
         # Short, because one poll is up to 200 of these: a generous per-request timeout
         # multiplies into a killed invocation, and a slow item is not worth waiting for
@@ -130,7 +156,15 @@ SOURCES: dict[str, SourceConfig] = {
         # Current feed only recovers ~1 day; the daily index fallback is Phase 2+. SPEC §3.
         backfill_horizon=BackfillHorizon.DAY,
         freshness_sla_seconds=2700,  # 3x rate(15 minutes)
+        # Serves no validators, so every poll is a full body: 4 documents an hour,
+        # steady. Zero means the poller broke, not that SEC was quiet.
         min_docs_per_window=1,
+        # 96 h, not 45 min: SEC files on business days only, so the longest legitimate
+        # silence is a holiday weekend — Thursday-Friday closed puts ~4 days between the
+        # last filing and the next. The check is for a *permanently* frozen feed, so it
+        # sits past the longest legitimate gap rather than near the average one; firing
+        # every Thanksgiving is how an alert gets trained away (SPEC §11).
+        content_staleness_sla_seconds=345600,
         rate_limit_per_sec=1.0,  # SEC fair-access limits; a descriptive User-Agent is required
         # browse-edgar is a CGI script, not a static file, and 10s was not enough from
         # Lambda — measured, not guessed.
@@ -144,7 +178,11 @@ SOURCES: dict[str, SourceConfig] = {
         # Only what is still in the feed survives an outage. SPEC §3, §6.3.
         backfill_horizon=BackfillHorizon.WINDOW,
         freshness_sla_seconds=2700,  # 3x rate(15 minutes)
-        min_docs_per_window=1,
+        # 0, not 1: this feed serves an ETag and mostly 304s, so most hours produce no
+        # document at all. A floor of 1 reported a perfectly healthy feed as `thin` on
+        # every quiet hour — the alert-training failure §11 warns about.
+        min_docs_per_window=0,
+        content_staleness_sla_seconds=172800,  # 48 h without a new item is a dead feed
         rate_limit_per_sec=1.0,
         user_agent=settings.user_agent,
     ),
@@ -161,7 +199,8 @@ SOURCES: dict[str, SourceConfig] = {
         # §6.3 exists to surface. See sources/edgar_formd.py.
         backfill_horizon=BackfillHorizon.DAY,
         freshness_sla_seconds=2700,  # 3x rate(15 minutes)
-        min_docs_per_window=1,
+        min_docs_per_window=1,  # unconditional, same as `edgar`
+        content_staleness_sla_seconds=345600,  # 96 h — SEC holiday weekends, as above
         rate_limit_per_sec=1.0,  # shares SEC's per-IP fair-access budget with `edgar`
         timeout_seconds=30.0,  # the same browse-edgar CGI script that needed it for `edgar`
         user_agent=settings.user_agent,
@@ -172,7 +211,8 @@ SOURCES: dict[str, SourceConfig] = {
         payload_format=PayloadFormat.XML,
         backfill_horizon=BackfillHorizon.WINDOW,
         freshness_sla_seconds=2700,  # 3x rate(15 minutes)
-        min_docs_per_window=1,
+        min_docs_per_window=0,  # weak ETag, mostly 304s — see the table above
+        content_staleness_sla_seconds=172800,  # 48 h
         rate_limit_per_sec=1.0,
         user_agent=settings.user_agent,
     ),
@@ -182,7 +222,10 @@ SOURCES: dict[str, SourceConfig] = {
         payload_format=PayloadFormat.XML,
         backfill_horizon=BackfillHorizon.WINDOW,
         freshness_sla_seconds=2700,  # 3x rate(15 minutes)
-        min_docs_per_window=1,
+        # The lowest-volume source: 6 documents across 41 measured hours, because it
+        # serves `Last-Modified` and 304s nearly every poll. Its healthy state is zero.
+        min_docs_per_window=0,
+        content_staleness_sla_seconds=259200,  # 72 h, matching its lower publish rate
         rate_limit_per_sec=1.0,
         user_agent=settings.user_agent,
     ),

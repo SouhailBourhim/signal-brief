@@ -44,6 +44,10 @@ def _to_item(state: State) -> dict[str, Any]:
             item["watermark_kind"] = "datetime"
     if state.last_success_at is not None:
         item["last_success_at"] = state.last_success_at.isoformat()
+    if state.last_content_change_at is not None:
+        item["last_content_change_at"] = state.last_content_change_at.isoformat()
+    if state.last_content_hash is not None:
+        item["last_content_hash"] = state.last_content_hash
     return item
 
 
@@ -70,6 +74,12 @@ def _from_item(source_id: str, item: dict[str, Any] | None) -> State:
             datetime.fromisoformat(item["last_success_at"]) if item.get("last_success_at") else None
         ),
         consecutive_failures=int(item.get("consecutive_failures", 0)),
+        last_content_change_at=(
+            datetime.fromisoformat(item["last_content_change_at"])
+            if item.get("last_content_change_at")
+            else None
+        ),
+        last_content_hash=item.get("last_content_hash"),
     )
 
 

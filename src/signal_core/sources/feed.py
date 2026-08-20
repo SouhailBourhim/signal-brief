@@ -54,8 +54,26 @@ def poll_feed(
     now = utc_now()
 
     if response.status_code == 304:
-        # Healthy and unchanged — most polls should land here (SPEC §6.2).
-        new_state = state.model_copy(update={"last_success_at": now, "consecutive_failures": 0})
+        # Healthy and unchanged — most polls should land here (SPEC §6.2). Deliberately
+        # does NOT *advance* `last_content_change_at`: a 304 is the server stating outright
+        # that the content has not moved, which is the exact case §11's dead-feed check
+        # exists to accumulate.
+        #
+        # It does **seed** it when unset, which is not the same thing. A source that 304s
+        # from its very first poll — `rss_ars` does, it serves `Last-Modified` and changes
+        # roughly once every seven hours — would otherwise hold `None` until it happened to
+        # publish, and `assess_source` reads `None` as "no signal, skip the check". The
+        # lowest-volume source, the one most likely to die unnoticed, would have been the
+        # one source exempt from dead-feed detection. Found in production, 2026-08-20.
+        #
+        # Seeding to `now` starts the clock when observation starts, which is the most that
+        # can be honestly claimed: nothing is knowable about content movement before the
+        # first poll. If the feed published moments before, the clock is late by that much —
+        # bounded, and in the conservative direction (late to flag, never early).
+        update: dict[str, object] = {"last_success_at": now, "consecutive_failures": 0}
+        if state.last_content_change_at is None:
+            update["last_content_change_at"] = now
+        new_state = state.model_copy(update=update)
         return [], new_state
 
     if not response.is_success:
@@ -70,6 +88,7 @@ def poll_feed(
     payload = response.content
     etag = response.headers.get("etag", state.etag)
     last_modified = response.headers.get("last-modified", state.last_modified)
+    payload_hash = content_hash(payload)
     doc = RawDocument(
         ingest_id=_ingest_id(config.source_id),
         source_id=config.source_id,
@@ -79,18 +98,30 @@ def poll_feed(
         outcome=FetchOutcome.OK if payload else FetchOutcome.EMPTY,
         etag=etag,
         last_modified=last_modified,
-        content_hash=content_hash(payload),
+        content_hash=payload_hash,
         payload=payload,
         payload_format=config.payload_format,
         latency_ms=latency_ms,
         byte_count=len(payload),
     )
+    # A 200 whose body is byte-identical to the last one is the dead-feed case SPEC §11
+    # names: the fetch succeeded, and nothing moved. Advancing `last_content_change_at`
+    # here would erase the only evidence of it. Both SEC sources make this concrete —
+    # `browse-edgar` is a CGI script serving no validators, so every poll is a full body
+    # and a status code can never reveal a frozen feed (docs/runbooks/phase-2.md 2.A).
+    #
+    # First-ever poll (`last_content_hash is None`) counts as a change: there is no prior
+    # content for it to be identical to, and seeding it as unchanged would report a
+    # brand-new source as dead until its second distinct body arrived.
+    content_moved = state.last_content_hash != payload_hash
     new_state = state.model_copy(
         update={
             "etag": etag,
             "last_modified": last_modified,
             "last_success_at": now,
             "consecutive_failures": 0,
+            "last_content_hash": payload_hash,
+            "last_content_change_at": (now if content_moved else state.last_content_change_at),
         }
     )
     return [doc], new_state
