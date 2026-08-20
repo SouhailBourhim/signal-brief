@@ -87,6 +87,27 @@ variable "contact_email" {
   default     = "bourhimsouhail@gmail.com"
 }
 
+variable "poller_schedule_state" {
+  description = <<-EOT
+    ENABLED or DISABLED for every poller schedule at once. Exists for SPEC §12's Phase 1
+    acceptance test (1.D), which requires stopping ingestion for a day and restarting it.
+
+    Declarative rather than `aws scheduler update-schedule` by hand, for two reasons.
+    That CLI call is a full replace — it re-sends the target and flexible-time-window or
+    silently drops them, so hand-disabling six schedules risks losing the retry policy on
+    the way back. And with the state unmanaged, Terraform assumes the ENABLED default:
+    any `terraform apply` during the outage — including one for an unrelated change —
+    would quietly switch ingestion back on and void a test that takes a day to run.
+  EOT
+  type        = string
+  default     = "ENABLED"
+
+  validation {
+    condition     = contains(["ENABLED", "DISABLED"], var.poller_schedule_state)
+    error_message = "poller_schedule_state must be ENABLED or DISABLED."
+  }
+}
+
 variable "poller_reserved_concurrency" {
   description = <<-EOT
     Reserved concurrent executions per poller. -1 means unreserved, which is the only

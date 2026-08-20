@@ -146,6 +146,10 @@ resource "aws_scheduler_schedule" "poller" {
   name       = "${var.name_prefix}-poll-${each.key}"
   group_name = "default"
 
+  # Managed, not left to the ENABLED default, so 1.D's day-long switch-off is a variable
+  # rather than six CLI calls Terraform would undo on the next apply. See main.tf.
+  state = var.poller_schedule_state
+
   # OFF: these cadences are already slower than each source moves, so spreading
   # invocations buys nothing and makes "when should this have run?" harder to answer
   # when the staleness check fires.

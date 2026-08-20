@@ -423,8 +423,16 @@ or a Makefile comment before this repeats: `make clean` and a running `make up` 
 - [x] Walked the stranger path **within this checkout** — `make setup`, both skeleton
       paths, `make test` (175 passed), `make lint`, `make tf-validate` from a clean
       `data/`/`out/`/`.cache/staging`. **Not from a literal fresh `git clone`**: none of
-      Phase 2's work is committed yet, and committing is the user's call, not made here
-      unprompted. Every `docs/athena.md` command was run verbatim against the real,
+      Phase 2's work was committed at the time, and committing is the user's call, not
+      made here unprompted.
+- [x] **Re-walked from a literal fresh clone, 2026-08-20**, once PR #1 was merged — the
+      half of this acceptance test that had to wait for a commit to exist. Cloned the
+      merged `main` into a scratch directory and ran the stranger's sequence against a
+      brand-new venv: `make setup`, `make skeleton` (real JVM) and `make skeleton-nospark`
+      (**11 raw documents → 11 articles → 7 clusters, byte-identical on both paths**),
+      `make test` (**175 passed**), `make lint`, `make eval` (all gates passed). Nothing
+      in the clone needed a step the README does not list, which is the actual claim this
+      test makes. Every `docs/athena.md` command was run verbatim against the real,
       already-applied infrastructure, which is how its first bug was caught: the setup
       example queried `bronze.raw_documents` without `--database bronze` against a CLI
       that defaults to `silver` — `TABLE_NOT_FOUND`, live, on the exact command a stranger
@@ -445,7 +453,17 @@ or a Makefile comment before this repeats: `make clean` and a running `make up` 
 
 ## Open findings
 
-### Stale-but-successful feeds are still undetectable *(found 2026-08-19, not yet fixed)*
+### Stale-but-successful feeds are still undetectable *(found 2026-08-19 — **fixed 2026-08-20**, see `phase-1.md` 1.E)*
+
+**Resolved.** `State.last_content_change_at` now carries the signal, and `assess_source`
+reports `dead_feed` against a separate, much longer per-source SLA. The investigation that
+closed it found three more layers of the same hole — Hacker News's floor of 0, the absent
+volume anomaly detection, and `thin` never failing the DAG — all recorded in 1.E. The
+original diagnosis below stands as written; it was correct and understated the scope.
+
+<details>
+<summary>Original finding, kept for the trail</summary>
+
 
 `ops/health.py::assess_source` computes staleness from `State.last_success_at`, and
 `feed.poll_feed` advances that on **every** successful fetch — including a 304, and including a
@@ -463,6 +481,13 @@ needs two new `State` fields and one change in `feed.poll_feed`. **Not scheduled
 Phase 1 monitoring gap that Phase 2 doubles the exposure of, and it should be fixed before the
 brief's health footer starts making freshness claims in Phase 4.
 
+</details>
+
+*The shape of that fix was right, and one detail of it was wrong: "measure staleness from
+that instead" would have **replaced** the fetch clock, losing the ability to detect a
+broken poller. Both clocks are kept — they answer different questions, and `dead_feed` is
+a separate status from `stale` for the same reason.*
+
 ### HN score velocity is structurally unavailable *(found 2026-08-19)*
 
 `sources/hackernews.py` walks item ids **forward** from a watermark, so every item is fetched
@@ -477,5 +502,23 @@ Phase 4, and it has to land before §7.4's velocity component can honestly be cl
 
 ## Then
 
-Phase 3 (SPEC §12): Spark dedup, clustering, and entity resolution, with both labeled eval sets
-committed and precision/recall reproducible via `make eval`.
+**Phase 3 (SPEC §12), reshaped by ADR-0008 after this phase closed.** Two changes to what the
+original plan said comes next:
+
+1. **3.0 is a real brief, before any clustering work.** Point `brief/render.py` at real
+   `silver.articles` instead of the skeleton's local Parquet — Phase 0's ranker unchanged
+   (recency + breadth), no enrichment, no email. It will be a bad brief. It starts the
+   daily-reading clock §1 measures success by, two phases earlier than the original plan,
+   and it costs almost nothing: the ranker, renderer and template have all been running
+   since Phase 0 against fake data. Everything after it improves a page already being read.
+2. **Labeling starts immediately and runs alongside the build**, against the real articles
+   this phase produced — not in one block once the clusterer is done. ~200 pairs + ~300
+   mentions is ~500 judgement calls; at ~20/day it lands with the code, and labeling before
+   writing the matcher keeps the labels honest.
+
+Then the original scope: Spark dedup, clustering, and entity resolution, with both labeled
+eval sets committed and precision/recall reproducible via `make eval`.
+
+**Both open findings above are now scheduled**, in 4A rather than floating — stale-feed
+detection and the HN score-velocity poller are named in SPEC §12's carried-forward table
+alongside Phase 1's 1.D, each against the claim it gates.

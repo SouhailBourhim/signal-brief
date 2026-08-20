@@ -25,9 +25,12 @@ green, CI is green, and **zero AWS resources exist beyond guardrails and Terrafo
 - [x] Budgets at $5 and $20; Cost Anomaly Detection; **confirmed the alert email arrives** —
       already confirmed for bourhimsouhail@gmail.com via AWS's auto-created default
       subscription; tightened its threshold from $100/40% to $1
-- [ ] Activate `project` as a cost-allocation tag — still pending; tracked in the Phase 1
-      runbook now, since the 2026-08-18 ingest apply is what finally gave the tag a
-      resource that costs something to attach to
+- [x] Activate `project` as a cost-allocation tag — **done 2026-08-20**. Pending for two
+      days, and not for anything in this repo: `list-cost-allocation-tags` reads *billing*
+      data, so a tag only becomes activatable after AWS processes a period in which a
+      tagged resource actually cost money. Once the ingest apply gave it one, it appeared
+      as `Inactive` and one `update-cost-allocation-tags-status` call flipped it to
+      `Active`. §10.3's "what did ingestion cost?" is answerable per project from here on
 - [x] Verify the current free-tier egress allowance; write the real number into SPEC §10.1 —
       100 GB/month confirmed against AWS's own pricing page, unchanged
 - [x] `terraform -chdir=infra/terraform/bootstrap apply -var state_bucket=<unique>`, then
