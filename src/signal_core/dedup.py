@@ -38,7 +38,9 @@ eval harness, and `evals/score.py` scores it rather than a reimplementation.
 from __future__ import annotations
 
 import html
+import math
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -311,6 +313,28 @@ def authority(domain: str) -> float:
     return _AUTHORITY.get(domain, DEFAULT_AUTHORITY)
 
 
+def blocking_keys(tokens: frozenset[str], frequency: dict[str, int], threshold: float) -> list[str]:
+    """The tokens an article must be indexed under for a Jaccard join to be **exact**.
+
+    Prefix filtering, not LSH. Sort a set by descending global frequency and keep the first
+    `|A| - ceil(t*|A|) + 1` tokens: any two sets with Jaccard >= t are then guaranteed to
+    share at least one kept token, so blocking on them loses no candidate pair. That is a
+    stronger property than banded LSH offers, and it is available here only because the
+    decision is a token-overlap threshold rather than a distance.
+
+    Rarest-first is what makes it cheap as well as exact — a bucket keyed on "ai" is most of
+    the corpus, one keyed on "unitree" is two articles.
+
+    3.0 measured all-pairs at 3.58M comparisons in 1.3s, so this is not needed for speed
+    today; it is what stops the job being quadratic as the lake grows.
+    """
+    if not tokens:
+        return []
+    ordered = sorted(tokens, key=lambda t: (-frequency.get(t, 0), t))
+    keep = len(ordered) - math.ceil(threshold * len(ordered)) + 1
+    return ordered[len(ordered) - max(keep, 1) :]
+
+
 def exact_dedup(articles: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
     """Collapse byte-identical reprints. Returns (kept, removed_count)."""
     seen: set[str] = set()
@@ -363,19 +387,21 @@ class ClusterResult:
     dissolved_articles: int = 0
 
 
-def group_stories(articles: list[dict[str, Any]]) -> ClusterResult:
-    """Group articles into story clusters. SPEC §7.1 stages 2-4.
+def group_edges(articles: list[dict[str, Any]], edges: Iterable[tuple[str, str]]) -> ClusterResult:
+    """Connected components over a supplied edge list, then stages 3-4. SPEC §7.1.
 
-    Union-find over two signals: simhash proximity (same text) and content-word Jaccard
-    (same event). Either one merges, because they catch disjoint cases.
+    Split out from `group_stories` so the in-process path and the Spark job share one
+    implementation of everything that happens *after* the pairwise decision — the size
+    guard, canonical selection, the publisher count. They differ only in how they arrive at
+    the edges: all-pairs here, blocked candidates there. Two copies of this would eventually
+    disagree about what a cluster is, and only one of them would be the one being measured.
 
-    O(n^2) and honestly so: at a few hundred articles per window that is microseconds,
-    and the banded-LSH blocking that makes it scale belongs with the Phase 3 rewrite,
-    where there will be volume to justify it.
+    Order-independent: connected components do not depend on edge order, and canonical
+    selection breaks ties on `(-authority, fetched_at, article_id)`. A replay reproduces a
+    run exactly rather than within a tolerance.
     """
+    index_of = {article["article_id"]: i for i, article in enumerate(articles)}
     parent = list(range(len(articles)))
-    # Once per article, not once per pair — see `Prepared`.
-    prepared = [prepare(a["title"], a["body_text"]) for a in articles]
 
     def find(i: int) -> int:
         while parent[i] != i:
@@ -388,10 +414,8 @@ def group_stories(articles: list[dict[str, Any]]) -> ClusterResult:
         if ra != rb:
             parent[rb] = ra
 
-    for i in range(len(articles)):
-        for j in range(i + 1, len(articles)):
-            if decide(prepared[i], prepared[j]):
-                union(i, j)
+    for left, right in edges:
+        union(index_of[left], index_of[right])
 
     grouped: dict[int, list[dict[str, Any]]] = {}
     for index, article in enumerate(articles):
@@ -434,6 +458,9 @@ def group_stories(articles: list[dict[str, Any]]) -> ClusterResult:
                 "publishers": sorted(publishers),
                 "timestamp_flagged": head["timestamp_flagged"],
                 "story_key": head.get("story_key"),
+                # Every member, so the Spark job can write the article -> cluster map
+                # without re-deriving membership it already computed here.
+                "article_ids": sorted(m["article_id"] for m in members),
             }
         )
     return ClusterResult(
@@ -441,6 +468,24 @@ def group_stories(articles: list[dict[str, Any]]) -> ClusterResult:
         dissolved=dissolved,
         dissolved_articles=dissolved_articles,
     )
+
+
+def group_stories(articles: list[dict[str, Any]]) -> ClusterResult:
+    """Group articles into story clusters, comparing every pair. SPEC §7.1 stages 2-4.
+
+    O(n^2) and honestly so: 3.0 measured 3.58M comparisons in 1.3 s, which is why the
+    in-process path used by `make skeleton` and `signal brief` still runs it whole. The
+    Spark job blocks first (`spark/jobs/cluster.py`) and hands its edges to `group_edges`;
+    both then follow identical code.
+    """
+    prepared = [prepare(a["title"], a["body_text"]) for a in articles]
+    edges = [
+        (articles[i]["article_id"], articles[j]["article_id"])
+        for i in range(len(articles))
+        for j in range(i + 1, len(articles))
+        if decide(prepared[i], prepared[j])
+    ]
+    return group_edges(articles, edges)
 
 
 def dedup_ratio(articles_in: int, clusters_out: int) -> float:

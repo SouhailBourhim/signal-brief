@@ -21,3 +21,13 @@ from airflow.sdk import Asset
 # environment-dependent (a local Hadoop catalog in tests, s3:// on AWS), so a real path
 # would be wrong in one of the two places this Asset is used.
 BRONZE_COMMITTED = Asset("iceberg://bronze/raw_documents")
+
+# Emitted by `process`'s normalize_articles. Nothing consumes it on a schedule — `cluster`
+# runs on a daily cron instead, because recomputing a 72-hour window on every hourly commit
+# is 24x the work for one brief. It is declared anyway so the dependency is visible in
+# Airflow's asset graph rather than living only in a cron expression, and so 4A's
+# maintenance DAG has something to hang off.
+SILVER_COMMITTED = Asset("iceberg://silver/articles")
+
+# Emitted by `cluster`. 4A's brief and mailer are its consumers.
+CLUSTERS_COMMITTED = Asset("iceberg://silver/story_clusters")

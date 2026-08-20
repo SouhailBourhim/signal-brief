@@ -188,9 +188,22 @@ _TBLPROPERTIES = """
     TBLPROPERTIES (
         'format-version' = '2',
         'write.parquet.compression-codec' = 'zstd',
-        'write.target-file-size-bytes' = '134217728'
+        'write.target-file-size-bytes' = '134217728',
+        'write.merge.isolation-level' = 'serializable'
     )
 """
+
+# `MERGE ... WHEN NOT MATCHED THEN INSERT` is **not** a uniqueness constraint. It compiles to
+# an append, and Iceberg appends never conflict with each other, so two writers that both
+# read a pre-insert snapshot both find NOT MATCHED and both insert. `silver.articles` carries
+# 132 duplicate `article_id` rows from exactly that — all of them fetched inside one hour on
+# 2026-08-19, the session where `process` was first unpaused and manually triggered alongside
+# its own schedule (docs/runbooks/phase-3.md 3.B).
+#
+# Serializable isolation makes the second writer fail loudly instead of duplicating quietly.
+# Applied by ALTER as well as by CREATE, because `CREATE TABLE IF NOT EXISTS` is a no-op
+# against a live table — the same reason `health_snapshot` has to ALTER its added columns.
+_ADDED_PROPERTIES = (("write.merge.isolation-level", "serializable"),)
 
 ARTICLES_DDL = """
     article_id string NOT NULL,
@@ -282,6 +295,9 @@ def ensure_tables(
         f"CREATE TABLE IF NOT EXISTS {rejects_table} ({PARSE_REJECTS_DDL}) "
         f"USING iceberg {_TBLPROPERTIES}"
     )
+    for table in (articles_table, comments_table, rejects_table):
+        for name, value in _ADDED_PROPERTIES:
+            spark.sql(f"ALTER TABLE {table} SET TBLPROPERTIES ('{name}' = '{value}')")
 
 
 def _bronze_window(

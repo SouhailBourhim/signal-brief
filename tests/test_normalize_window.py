@@ -390,3 +390,25 @@ def test_hn_comments_window_unresolvable_ancestor_keeps_best_known_id(spark, sta
     normalize_hn_comments_window(spark, *_window(now))
     row = spark.table(COMMENTS_TABLE).collect()[0]
     assert row.story_id == "800"
+
+
+def test_article_id_stays_unique_across_reruns(spark, staging):
+    """`silver.articles` MERGEs on `article_id`, so re-running a window must not duplicate.
+
+    Sequential by construction, so it does not reproduce the concurrent case that actually
+    put 132 duplicate ids in the deployed table — MERGE's NOT MATCHED clause compiles to an
+    append, and Iceberg appends do not conflict. It pins the contract, and the table property
+    `ensure_tables` now sets (serializable merge isolation) is what makes the concurrent
+    writer fail instead of duplicate.
+    """
+    from signal_core.spark.jobs.normalize import normalize_window
+
+    now = utc_now()
+    payload = _fixture("rss_tech", "feed.xml")
+    _commit(spark, staging, [_doc(1, source_id="rss_tech", payload=payload, fetched_at=now)])
+    normalize_window(spark, *_window(now))
+    normalize_window(spark, *_window(now))
+
+    rows = spark.table(ARTICLES_TABLE).count()
+    distinct = spark.table(ARTICLES_TABLE).select("article_id").distinct().count()
+    assert rows == distinct, f"{rows - distinct} duplicate article_id rows after a re-run"

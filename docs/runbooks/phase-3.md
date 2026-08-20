@@ -427,8 +427,94 @@ noise, and the constant carries that reasoning instead of implying it was measur
   cleaned text. Part two's banded blocking is where that column starts earning its place
   again.
 
+## 3.B — part two: the Spark job *(done 2026-08-20)*
+
+- [x] `spark/jobs/cluster.py` — `cluster_window`, the two tables, and their DDL.
+- [x] `dedup.blocking_keys` — prefix filtering, and `dedup.group_edges`, so the Spark path
+      and the in-process path share every step after the pairwise decision.
+- [x] `airflow/dags/cluster_dag.py` on a daily cron; `SILVER_COMMITTED` /
+      `CLUSTERS_COMMITTED` assets; `process` now emits the first of them.
+- [x] Serializable merge isolation on `silver`'s tables, for the duplicate-`article_id`
+      defect below.
+
+### Blocking is prefix filtering, not LSH — because it can be exact here
+
+The plan called for banded LSH. Banding a 64-bit simhash at Hamming ≤ 12 needs ≥ 13 bands,
+so ≤ 4-bit bands, so 16 buckets per band — which at 2,700 articles proposes *more* pairs than
+all-pairs does. LSH does not work at this threshold.
+
+It also solves the wrong problem. The decision is now a **token-overlap threshold**, not a
+distance, and for that there is an exact method: sort a token set by descending global
+frequency and index the article under its first `|A| - ceil(t*|A|) + 1` tokens. Any two sets
+with Jaccard ≥ t are then guaranteed to share an indexed token, so blocking loses no
+candidate — a strictly stronger guarantee than LSH offers. Rarest-first is what also makes it
+cheap: a bucket keyed on `ai` is most of the corpus, one keyed on `unitree` is two articles.
+Simhash banding survives only for stage 2, where approximate is all a blocking key has to be.
+
+**Measured on a real 72-hour window: 447,427 candidate pairs against all-pairs' 3,581,826 —
+12.5%, an 8x reduction, with 10,840 surviving edges.**
+
+### Verified — the job against real AWS
+
+| | |
+|---|---|
+| articles in / clusters out | 2,769 → **2,284** |
+| candidate pairs | 447,427 (12.5% of all-pairs) |
+| edges after the decision | 10,840 |
+| oversized clusters dissolved | 1 (203 articles) |
+| blocking keys dropped | 3 |
+| `ordering_key` | `fetched_at,article_id@6a2bdbb9dcaa4c61` |
+| runtime | 27 s, including JVM start and Iceberg jar resolution |
+
+`silver.story_clusters` and `silver.article_clusters` are live in Glue and queryable:
+2,284 clusters, largest 47 articles, **18 of them covered by more than one publisher** —
+which is the number the brief's `breadth` component actually has to work with.
+
+### What broke on first real use
+
+**Blocking is exact; the bucket cap is not, and the difference shows up only at scale.**
+The Spark job returns 2,284 clusters where all-pairs returns 2,277. Prefix filtering did not
+lose those seven: `MAX_BLOCK_SIZE` did. Three keys held more than 400 articles and were
+dropped rather than exploded into 320k pairs each, and dropping a bucket drops the candidate
+pairs inside it.
+
+Seven clusters in 2,284 is the measured price, `blocking_keys_dropped` reports it rather
+than swallowing it, and `test_blocking_finds_every_pair_all_pairs_would` now **asserts the
+precondition** — `blocking_keys_dropped == 0` — instead of claiming an exactness the cap can
+void. A test that silently depended on a fixture too small to trip the cap would have gone
+green forever while the property it named stopped being true.
+
+**The duplicate `article_id` rows are one incident, and the mechanism is worth knowing.**
+All 132 ids are confined to articles fetched inside a single hour — 2026-08-19 11:00–12:00
+UTC — which is 2.E's session, where `process` was first unpaused and manually triggered
+alongside its own schedule.
+
+`MERGE ... WHEN NOT MATCHED THEN INSERT` is **not a uniqueness constraint**. It compiles to
+an append, and Iceberg appends never conflict with one another, so two writers that both read
+a pre-insert snapshot both find NOT MATCHED and both insert. `max_active_runs=1` stops two
+DAG *runs*; it does not stop a manual trigger racing a scheduled one.
+
+`ensure_tables` now sets `write.merge.isolation-level = serializable`, by `ALTER` as well as
+`CREATE` — `CREATE TABLE IF NOT EXISTS` is a no-op against a live table, the same trap
+`health_snapshot` hit with added columns in 1.E. A conflicting second writer now fails loudly
+instead of duplicating quietly. `test_article_id_stays_unique_across_reruns` pins the
+contract, while being honest that it is sequential and cannot reproduce the concurrent case.
+
+**The 132 existing duplicate rows are still in the table.** Removing them is a destructive
+write to the lake and it needs a decision, not a commit: they are collapsed by
+`exact_dedup` before clustering, so nothing downstream is wrong today — but
+`exact_duplicates_removed` in the brief footer is counting them as if they were syndication.
+
+### Still open
+
+- EDGAR over-merges within a single filer: a fund trust that lodged 47 supplements in a day
+  becomes one 47-article cluster. Bounded, single-publisher, so `breadth` keeps it out of the
+  brief — but a filing is not a story and this is the largest cluster in the table.
+- The recall gap remains the headline number to beat: 0.500 held out. That is ADR-0009's
+  question, and 3.E's.
+
 ## Then
 
-3.B part two — the Spark job, banded blocking, `silver.story_clusters` /
-`silver.article_clusters`, and the duplicate-`article_id` defect. Then 3.C's resolver, which
-`entities` is already labeled and waiting for.
+3.C — entity resolution, which `evals/entities`'s 300 labeled mentions are already waiting
+for. Then 3.D wires the brief onto these tables, and 3.E ratchets the floors and writes
+ADR-0009.
