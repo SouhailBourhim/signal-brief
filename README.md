@@ -61,7 +61,7 @@ SPEC §15: never publish a metric the pipeline cannot recompute. Current numbers
 |---|---|---|
 | Dedup precision / recall, **real pairs** | **1.000 / 0.500** held out · 0.962 / 0.568 full set (n=252) | `evals/fit_thresholds.py`, labeled 2026-08-20 |
 | Dedup precision / recall, Phase 0 fixture | 1.000 / 1.000 (n=55) | `make eval` — a harness canary, not evidence |
-| Dedup ratio | 11 → 7 clusters (fake) · 2,769 → 2,277 (real) | `make skeleton` / `signal brief` |
+| Dedup ratio | 11 → 7 clusters (fake) · 2,768 → 2,631 (real; 17 multi-publisher stories) | `make skeleton` / `signal brief` |
 | Ingestion, one production window | 521 bronze rows → 207 articles (19 quarantined, all `hackernews`/dead-item) | `docs/runbooks/phase-2.md` 2.E, real AWS |
 | Athena, `SELECT *` vs. projected vs. partition-pruned, same question | 184,259 / 73,373 / 64,713 bytes scanned | `docs/athena.md`, real AWS |
 | S3 egress, one commit | 3,468,248 bytes | `ops.pipeline_costs`, real AWS |

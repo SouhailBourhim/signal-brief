@@ -249,6 +249,18 @@ class Prepared:
     title: frozenset[str]
     body: frozenset[str]
     simhash: int
+    # Long digit runs — accession numbers, CIKs, docket numbers. Dropped from the token sets
+    # because they add nothing to a topical overlap, but kept here because they are the
+    # document's *identity*, and identity is what tells two filings apart when everything
+    # else about them agrees.
+    identifiers: frozenset[str] = frozenset()
+
+
+def identifiers(text: str) -> frozenset[str]:
+    """The long digit runs `content_tokens` drops. SPEC §7.1 stage 4's tie-breaker."""
+    return frozenset(
+        t for t in _TOKEN.findall(strip_boilerplate(text or "").lower()) if _LONG_DIGITS.match(t)
+    )
 
 
 def prepare(title: str, body: str) -> Prepared:
@@ -258,6 +270,7 @@ def prepare(title: str, body: str) -> Prepared:
         title=content_tokens(title or ""),
         body=content_tokens(body or ""),
         simhash=simhash64(f"{clean_title} {clean_body}".strip()),
+        identifiers=identifiers(f"{title or ''} {body or ''}"),
     )
 
 
@@ -277,6 +290,18 @@ def decide(a: Prepared, b: Prepared) -> bool:
     3. Bodies that agree, when both are substantial. Never pooled with titles: a headline
        against 120 tokens of prose scores near zero however well the headline matches.
     """
+    # A veto, checked before any evidence for merging. Two documents that each carry
+    # identifiers and carry *different* ones are different documents, however completely the
+    # rest of them agrees. This is what tells 47 filings by one fund trust apart: their titles
+    # are byte-identical ("497 - ALLSPRING FUNDS TRUST (0001081400) (Filer)", title overlap
+    # 1.000) and the only thing that distinguishes them is the accession number.
+    #
+    # It fires only when BOTH sides have identifiers, so ordinary prose — which has none — is
+    # untouched, and asymmetric evidence (one side has an id, the other doesn't) is not
+    # treated as disagreement.
+    if a.identifiers and b.identifiers and a.identifiers != b.identifiers:
+        return False
+
     a_signal, b_signal = len(a.title) + len(a.body), len(b.title) + len(b.body)
     near_readable = a_signal >= MIN_SIMHASH_TOKENS and b_signal >= MIN_SIMHASH_TOKENS
     if near_readable and hamming(a.simhash, b.simhash) <= NEAR_DUPLICATE_DISTANCE:

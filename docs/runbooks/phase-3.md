@@ -505,13 +505,53 @@ write to the lake and it needs a decision, not a commit: they are collapsed by
 `exact_dedup` before clustering, so nothing downstream is wrong today — but
 `exact_duplicates_removed` in the brief footer is counting them as if they were syndication.
 
+## 3.B.2 — A filing is not a story *(done 2026-08-20)*
+
+The largest cluster in the table was 47 filings by one fund trust, lodged on one day. Their
+titles are **byte-identical** — `497 - ALLSPRING FUNDS TRUST (0001081400) (Filer)`, title
+overlap 1.000 — and the only thing that distinguishes them is the accession number, which
+3.B had thrown away as a "long digit identifier".
+
+That was the right instinct applied one step too far. A CIK adds nothing to a *topical*
+overlap, so it belongs out of the token sets. But an accession number is the document's
+**identity**, and identity is exactly what tells two documents apart when everything else
+about them agrees.
+
+So `prepare` keeps identifiers alongside the token sets, and `decide` opens with a veto:
+**two documents that each carry identifiers and carry different ones are different
+documents**, however completely the rest of them agrees. It fires only when both sides have
+them, so ordinary prose — which has none — is untouched, and one-sided evidence is not read
+as disagreement.
+
+### Verified
+
+The labeled set is **unchanged**: precision 0.962, recall 0.568, fixture 1.000/1.000, and
+the fit still selects the same thresholds. That is the expected result and it is the reason
+to check — news prose carries no long identifiers, so a rule aimed at filings should cost
+nothing on news, and now it is measured rather than assumed.
+
+The corpus is transformed:
+
+| | before | after |
+|---|---|---|
+| edges surviving the decision | 10,840 | **49** |
+| clusters | 2,284 | 2,631 |
+| oversized clusters dissolved | 1 (203 articles) | **0** |
+| largest cluster | 47 articles, 1 publisher | **22 articles, 8 publishers** |
+
+Nearly every edge was an EDGAR false merge. The size guard is now inert on this corpus —
+which is the right state for it: a structural backstop that never has to fire, still there
+for the day something else chains.
+
+The cluster-size distribution is finally plausible: 2,598 singletons, 23 pairs, 2 triples,
+one quad, and one real story covered by 8 publishers.
+
 ### Still open
 
-- EDGAR over-merges within a single filer: a fund trust that lodged 47 supplements in a day
-  becomes one 47-article cluster. Bounded, single-publisher, so `breadth` keeps it out of the
-  brief — but a filing is not a story and this is the largest cluster in the table.
 - The recall gap remains the headline number to beat: 0.500 held out. That is ADR-0009's
   question, and 3.E's.
+- `dedup_ratio` is 1.05, which is honest rather than disappointing: this corpus really is
+  mostly unique documents, and 17 multi-publisher stories is what `breadth` has to rank on.
 
 ## Then
 

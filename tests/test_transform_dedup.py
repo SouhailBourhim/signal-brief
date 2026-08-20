@@ -237,6 +237,34 @@ def test_a_headline_against_a_long_body_still_matches():
     assert is_same_story(*ap, *ars)
 
 
+def test_two_filings_by_one_company_are_two_stories():
+    """A fund trust lodging 47 supplements in a day is 47 filings, not one story. Their
+    titles are byte-identical — title overlap 1.000 — so only the accession number tells
+    them apart, which is why `prepare` keeps identifiers instead of discarding them."""
+    a = (
+        "497 - ALLSPRING FUNDS TRUST (0001081400) (Filer)",
+        "<b>Filed:</b> 2026-08-20 <b>AccNo:</b> 0001081400-26-000347 <b>Size:</b> 46 KB",
+    )
+    b = (
+        "497 - ALLSPRING FUNDS TRUST (0001081400) (Filer)",
+        "<b>Filed:</b> 2026-08-20 <b>AccNo:</b> 0001081400-26-000352 <b>Size:</b> 46 KB",
+    )
+    assert not is_same_story(*a, *b)
+    # The same filing, fetched twice, still merges: identical identifiers are agreement.
+    assert is_same_story(*a, *a)
+
+
+def test_the_identity_veto_leaves_prose_alone():
+    """It fires only when both sides carry identifiers, so ordinary coverage — which carries
+    none — is untouched, and one-sided evidence is not read as disagreement."""
+    ap = ("NASA calls off Swift rescue mission", "")
+    ars = (
+        "NASA calls off mission to rescue Swift gamma-ray observatory",
+        "<p>Filing 0001081400 was unrelated. " + "The observatory could not be reached. " * 20,
+    )
+    assert is_same_story(*ap, *ars)
+
+
 def test_thresholds_stay_ordered():
     """A body is long enough that incidental overlap accumulates, so it must never be the
     looser of the two. Cheap guard against a retune inverting them by accident."""

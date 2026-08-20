@@ -38,7 +38,7 @@ ARTICLE_CLUSTERS_TABLE = "silver.article_clusters"
 
 # Bump on any change to the decision, the thresholds, or the blocking. A mixed table is
 # then diagnosable rather than a mystery, and ADR-0009's measurement trail stays checkable.
-ALGO_VERSION = "3.B.1"
+ALGO_VERSION = "3.B.2"
 
 # A blocking key held by more than this many articles is dropped rather than exploded: one
 # token shared by 800 filings would emit 320k candidate pairs on its own. Dropping it costs
