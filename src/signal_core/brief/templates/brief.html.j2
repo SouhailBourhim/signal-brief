@@ -69,6 +69,7 @@
     · {{ health.exact_duplicates_removed }} exact dupes removed
     · cache {{ '%.0f'|format(health.cache_hit_rate * 100) }}%
     · {{ health.runtime_seconds }}s
+    · {{ '{:,}'.format(health.bytes_scanned) }} bytes scanned
     · ${{ '%.4f'|format(health.estimated_cost_usd) }}
     <table>
       {% for s in health.sources %}
