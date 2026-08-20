@@ -390,3 +390,73 @@ def test_hn_comments_window_unresolvable_ancestor_keeps_best_known_id(spark, sta
     normalize_hn_comments_window(spark, *_window(now))
     row = spark.table(COMMENTS_TABLE).collect()[0]
     assert row.story_id == "800"
+
+
+def test_article_id_stays_unique_across_reruns(spark, staging):
+    """`silver.articles` MERGEs on `article_id`, so re-running a window must not duplicate.
+
+    Sequential by construction, so it does not reproduce the concurrent case that actually
+    put 132 duplicate ids in the deployed table — MERGE's NOT MATCHED clause compiles to an
+    append, and Iceberg appends do not conflict. It pins the contract, and the table property
+    `ensure_tables` now sets (serializable merge isolation) is what makes the concurrent
+    writer fail instead of duplicate.
+    """
+    from signal_core.spark.jobs.normalize import normalize_window
+
+    now = utc_now()
+    payload = _fixture("rss_tech", "feed.xml")
+    _commit(spark, staging, [_doc(1, source_id="rss_tech", payload=payload, fetched_at=now)])
+    normalize_window(spark, *_window(now))
+    normalize_window(spark, *_window(now))
+
+    rows = spark.table(ARTICLES_TABLE).count()
+    distinct = spark.table(ARTICLES_TABLE).select("article_id").distinct().count()
+    assert rows == distinct, f"{rows - distinct} duplicate article_id rows after a re-run"
+
+
+def test_repair_collapses_duplicate_article_ids(spark, staging):
+    """`spark/jobs/repair.py`. Duplicates cannot be produced through the normal path — a
+    sequential re-run MERGEs cleanly — so this writes them the way the incident did: an
+    append that bypasses the MERGE entirely, which is exactly what a second concurrent
+    writer's `WHEN NOT MATCHED` clause degenerates into."""
+    from signal_core.spark.jobs.normalize import normalize_window
+    from signal_core.spark.jobs.repair import find_duplicates, repair_duplicates
+
+    now = utc_now()
+    payload = _fixture("rss_tech", "feed.xml")
+    _commit(spark, staging, [_doc(1, source_id="rss_tech", payload=payload, fetched_at=now)])
+    normalize_window(spark, *_window(now))
+
+    clean_rows = spark.table(ARTICLES_TABLE).count()
+    spark.table(ARTICLES_TABLE).limit(3).writeTo(ARTICLES_TABLE).append()
+    assert spark.table(ARTICLES_TABLE).count() == clean_rows + 3
+    assert find_duplicates(spark, ARTICLES_TABLE).count() == 3
+
+    planned = repair_duplicates(spark, ARTICLES_TABLE, dry_run=True)
+    assert planned.dry_run and planned.duplicate_ids == 3
+    assert planned.rows_removed == 3
+    # A dry run must not touch the table.
+    assert spark.table(ARTICLES_TABLE).count() == clean_rows + 3
+
+    done = repair_duplicates(spark, ARTICLES_TABLE, dry_run=False)
+    assert not done.dry_run
+    assert done.rows_after == clean_rows
+    assert find_duplicates(spark, ARTICLES_TABLE).count() == 0
+    # Partition-mates of the repaired rows must survive the overwrite.
+    assert spark.table(ARTICLES_TABLE).select("article_id").distinct().count() == clean_rows
+
+
+def test_repair_is_a_no_op_on_a_clean_table(spark, staging):
+    from signal_core.spark.jobs.normalize import normalize_window
+    from signal_core.spark.jobs.repair import repair_duplicates
+
+    now = utc_now()
+    _commit(spark, staging, [_doc(1, payload=_fixture("rss_tech", "feed.xml"), fetched_at=now)])
+    normalize_window(spark, *_window(now))
+    before = spark.table(ARTICLES_TABLE).count()
+
+    result = repair_duplicates(spark, ARTICLES_TABLE, dry_run=False)
+
+    assert result.duplicate_ids == 0
+    assert result.rows_removed == 0
+    assert spark.table(ARTICLES_TABLE).count() == before

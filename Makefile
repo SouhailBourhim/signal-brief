@@ -1,6 +1,6 @@
 # Signal — see SPEC.md. Every target here is meant to work from a fresh clone.
 .DEFAULT_GOAL := help
-.PHONY: help setup up down skeleton test lint fmt eval brief clean tf-validate lambda-package airflow-password athena-query
+.PHONY: help setup up down skeleton test lint fmt eval brief brief-open clean tf-validate lambda-package airflow-password athena-query
 
 UV ?= uv
 
@@ -45,8 +45,16 @@ fmt: ## autoformat
 eval: ## score the labeled eval sets and enforce the accuracy floors (SPEC 11)
 	$(UV) run python evals/score.py --gate
 
-brief: ## open the most recent rendered brief
-	@ls -t out/brief-*.html | head -1 | xargs -I{} sh -c 'echo {}; open {} 2>/dev/null || true'
+brief: ## build today's brief from real silver.articles, then open it
+	$(UV) run signal brief
+	@$(MAKE) --no-print-directory brief-open
+
+brief-open: ## open the most recent rendered brief without rebuilding
+	@# wslview first: this is a WSL2 project (ADR-0002) and `open` is macOS-only, so the
+	@# original one-liner silently printed a path and opened nothing on the machine the
+	@# brief is actually read on every morning. Phase 3's acceptance is a reading habit.
+	@ls -t out/brief-*.html | head -1 | xargs -I{} sh -c \
+		'echo {}; wslview {} 2>/dev/null || xdg-open {} 2>/dev/null || open {} 2>/dev/null || true'
 
 athena-query: ## run Q="SELECT ..." [DB=bronze|silver|ops, default silver] against the lake
 	$(UV) run signal athena-query --sql "$(Q)" $(if $(DB),--database $(DB))

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
-from assets import BRONZE_COMMITTED
+from assets import BRONZE_COMMITTED, SILVER_COMMITTED
 
 
 @dag(
@@ -29,7 +29,7 @@ from assets import BRONZE_COMMITTED
     tags=["phase2", "process"],
 )
 def process_dag():
-    @task
+    @task(outlets=[SILVER_COMMITTED])
     def normalize_articles() -> dict[str, int]:
         """bronze.raw_documents -> silver.articles + silver.parse_rejects, for the hour
         ingest_monitor's commit just closed."""

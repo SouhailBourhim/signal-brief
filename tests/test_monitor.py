@@ -197,6 +197,15 @@ def test_every_non_ok_status_fails_the_dag():
     one definition now; this asserts nothing can be added to one without the other."""
     from signal_core.ops.health import FAILING_STATUSES
 
+    # What `assess_source` itself can return.
     producible = {"never_succeeded", "stale", "dead_feed", "volume_drop", "thin", "gapped"}
+    # Produced by a reader rather than the assessor: `brief/read.py` reports a source with
+    # no verdict in `ops.source_health` at all. `ingest_monitor` cannot emit it — it builds
+    # its healths from `assess_source` — but the brief footer must still read degraded over
+    # a source monitoring has lost track of, which is the same bug as `thin`, one layer out.
+    reader_produced = {"unmonitored"}
 
-    assert producible == set(FAILING_STATUSES)
+    assert producible <= set(FAILING_STATUSES)
+    # Equality in both directions, still: a status added to the shared set that nothing
+    # produces fails here rather than sitting unnoticed.
+    assert set(FAILING_STATUSES) - producible == reader_produced

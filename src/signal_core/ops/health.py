@@ -28,7 +28,13 @@ VOLUME_BASELINE_MIN = 10.0
 # keeping its own literal set — is how `thin` came to be a status that nothing acted on:
 # `assess_source` could return it and the DAG's hardcoded set had never heard of it, so a
 # source producing zero documents ran green (docs/runbooks/phase-1.md, the 1.E entry).
-DEGRADED_STATUSES = frozenset({"stale", "never_succeeded", "gapped", "dead_feed", "volume_drop"})
+# `unmonitored` is the one status `assess_source` never returns: it is produced by
+# `brief/read.py` for a source with no verdict in `ops.source_health` at all. It belongs in
+# this set rather than beside it, because a source monitoring has lost track of must not
+# render as a clean footer — the same mistake 1.E found in `thin`.
+DEGRADED_STATUSES = frozenset(
+    {"stale", "never_succeeded", "gapped", "dead_feed", "volume_drop", "unmonitored"}
+)
 
 # What fails the DAG. Everything degraded, plus `thin` — which is milder (a static floor,
 # not evidence of a fault) but still means the window came back emptier than the source is
@@ -181,6 +187,12 @@ class RunHealth:
             "exact_duplicates_removed": self.exact_duplicates_removed,
             "cache_hit_rate": round(self.cache_hit_rate, 3),
             "runtime_seconds": round(self.runtime_seconds, 2),
+            # Both, not just the dollar figure: at this lake's size the cost of every query
+            # floors at Athena's 10 MB minimum and rounds to the same number, so bytes
+            # scanned is the metric that actually moves (docs/athena.md says the same about
+            # the README's figures). Reporting only the dollars would look like nothing
+            # ever changes.
+            "bytes_scanned": self.bytes_scanned,
             "estimated_cost_usd": round(self.estimated_cost_usd, 4),
             "sources": [
                 {

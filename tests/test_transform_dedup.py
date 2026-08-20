@@ -4,12 +4,15 @@ import json
 from datetime import UTC, datetime, timedelta
 
 from signal_core.dedup import (
-    SAME_STORY_JACCARD,
+    BODY_JACCARD,
+    TITLE_JACCARD,
     content_tokens,
     dedup_ratio,
     exact_dedup,
     group_stories,
+    is_same_story,
     jaccard,
+    strip_boilerplate,
 )
 from signal_core.parse import get_parser
 from signal_core.transform import canonical_url, publisher_domain, to_article
@@ -146,7 +149,7 @@ def test_group_stories_collapses_syndication(polled):
     documents, _ = polled
     articles = [a for a in _polled_articles(documents) if not a["parse_error"]]
     deduped, exact_removed = exact_dedup(articles)
-    clusters = group_stories(deduped)
+    clusters = group_stories(deduped).clusters
 
     assert exact_removed >= 1, "fixture must contain a byte-identical reprint"
     assert len(clusters) < len(articles), "syndication must collapse"
@@ -161,7 +164,7 @@ def test_no_article_is_lost_to_clustering(polled):
     documents, _ = polled
     articles = _polled_articles(documents)
     deduped, _ = exact_dedup([a for a in articles if not a["parse_error"]])
-    clusters = group_stories(deduped)
+    clusters = group_stories(deduped).clusters
     assert sum(c["article_count"] for c in clusters) == len(deduped)
 
 
@@ -170,22 +173,103 @@ def test_dedup_ratio_is_safe_at_zero():
     assert dedup_ratio(10, 5) == 2.0
 
 
-def test_jaccard_separates_same_story_from_unrelated():
-    """The measurement behind SAME_STORY_JACCARD, kept as a test so retuning is deliberate."""
-    a = content_tokens(
+def test_the_decision_separates_same_story_from_unrelated():
+    """The capability behind the thresholds, kept as a test so retuning stays deliberate.
+
+    Asserts `is_same_story` rather than a raw Jaccard: the thresholds were fitted in 3.B
+    (`evals/fit_thresholds.py`) and a test on one of them in isolation would go green while
+    the decision they combine into regressed.
+    """
+    acquisition = (
+        "Northwind acquires Lumen Robotics",
         "Northwind said Tuesday it would acquire Lumen Robotics in a cash "
-        "deal valued at 2.4 billion dollars"
+        "deal valued at 2.4 billion dollars",
     )
-    reworded = content_tokens(
+    reworded = (
+        "Lumen Robotics to be bought by Northwind",
         "Lumen Robotics will be acquired by Northwind for 2.4 billion "
-        "dollars in cash, the companies confirmed Tuesday"
+        "dollars in cash, the companies confirmed Tuesday",
     )
-    unrelated = content_tokens(
-        "Consumer prices rose 0.2 percent in July, below the 0.3 percent economists expected"
+    unrelated = (
+        "Central bank holds rates steady",
+        "Consumer prices rose 0.2 percent in July, below the 0.3 percent economists expected",
     )
 
-    assert jaccard(a, reworded) >= SAME_STORY_JACCARD
-    assert jaccard(a, unrelated) < SAME_STORY_JACCARD
+    assert is_same_story(*acquisition, *reworded)
+    assert not is_same_story(*acquisition, *unrelated)
+
+
+def test_boilerplate_stripping_removes_markup_not_prose():
+    """SPEC §7.1 stage 1. Phase 0 never implemented this, and 82% of random EDGAR pairs
+    cleared the same-story threshold on the residue (docs/runbooks/phase-3.md 3.0)."""
+    stripped = strip_boilerplate(
+        '<figure><img alt="a caption nobody wrote" data-portal-copyright="x"/></figure>'
+        "<p>Egypt&#x27;s Theban necropolis holds over 400 tombs.</p> https://example.com/x"
+    )
+    assert "Theban necropolis holds over 400 tombs" in stripped
+    assert "img" not in stripped and "data-portal-copyright" not in stripped
+    assert "example.com" not in stripped
+    assert "Egypt's" in stripped, "entities must be unescaped, not dropped"
+
+
+def test_edgar_filings_do_not_merge_on_their_own_field_names():
+    """The precision failure 3.B fixes, as a regression test. Two unrelated filings share
+    `Filed`/`AccNo`/`Size` and a filing date, and nothing else."""
+    a = (
+        "6-K - Haleon plc (0001900304) (Filer)",
+        "<b>Filed:</b> 2026-08-19 <b>AccNo:</b> 0001654954-26-007739 <b>Size:</b> 271 KB",
+    )
+    b = (
+        "6-K - Marti Technologies, Inc. (0001852767) (Filer)",
+        "<b>Filed:</b> 2026-08-19 <b>AccNo:</b> 0001213900-26-091421 <b>Size:</b> 185 KB",
+    )
+    assert not is_same_story(*a, *b)
+
+
+def test_a_headline_against_a_long_body_still_matches():
+    """The recall failure 3.B fixes. One source carries a headline and no body, another 120
+    tokens of prose; pooling them scored 0.041 against a title overlap of 0.833."""
+    ap = ("NASA calls off Swift rescue mission", "")
+    ars = (
+        "NASA calls off mission to rescue Swift gamma-ray observatory",
+        "<p>" + "The agency said the observatory could not be reached in time. " * 20 + "</p>",
+    )
+    assert is_same_story(*ap, *ars)
+
+
+def test_two_filings_by_one_company_are_two_stories():
+    """A fund trust lodging 47 supplements in a day is 47 filings, not one story. Their
+    titles are byte-identical — title overlap 1.000 — so only the accession number tells
+    them apart, which is why `prepare` keeps identifiers instead of discarding them."""
+    a = (
+        "497 - ALLSPRING FUNDS TRUST (0001081400) (Filer)",
+        "<b>Filed:</b> 2026-08-20 <b>AccNo:</b> 0001081400-26-000347 <b>Size:</b> 46 KB",
+    )
+    b = (
+        "497 - ALLSPRING FUNDS TRUST (0001081400) (Filer)",
+        "<b>Filed:</b> 2026-08-20 <b>AccNo:</b> 0001081400-26-000352 <b>Size:</b> 46 KB",
+    )
+    assert not is_same_story(*a, *b)
+    # The same filing, fetched twice, still merges: identical identifiers are agreement.
+    assert is_same_story(*a, *a)
+
+
+def test_the_identity_veto_leaves_prose_alone():
+    """It fires only when both sides carry identifiers, so ordinary coverage — which carries
+    none — is untouched, and one-sided evidence is not read as disagreement."""
+    ap = ("NASA calls off Swift rescue mission", "")
+    ars = (
+        "NASA calls off mission to rescue Swift gamma-ray observatory",
+        "<p>Filing 0001081400 was unrelated. " + "The observatory could not be reached. " * 20,
+    )
+    assert is_same_story(*ap, *ars)
+
+
+def test_thresholds_stay_ordered():
+    """A body is long enough that incidental overlap accumulates, so it must never be the
+    looser of the two. Cheap guard against a retune inverting them by accident."""
+    assert 0.0 < TITLE_JACCARD <= 1.0
+    assert 0.0 < BODY_JACCARD <= 1.0
 
 
 def test_jaccard_is_safe_on_empty_input():
@@ -197,7 +281,7 @@ def test_unrelated_stories_are_not_merged(polled):
     documents, _ = polled
     articles = _polled_articles(documents)
     deduped, _ = exact_dedup([a for a in articles if not a["parse_error"]])
-    clusters = group_stories(deduped)
+    clusters = group_stories(deduped).clusters
 
     # story_key is the fixture's ground truth: no cluster may mix two of them.
     for cluster in clusters:

@@ -4,16 +4,43 @@
 # regression. Lowering a floor is a decision that belongs in an ADR, not in a commit that
 # is trying to go green.
 
-# SPEC §12: the ~600 labels these floors are waiting on are scheduled work, not a step at
-# the end of a phase. Label incrementally against real `silver.articles` data — which
-# already exists — and label BEFORE writing the matching algorithm, so the answers aren't
-# quietly bent to agree with the implementation they're meant to judge.
-
-[dedup]           # SPEC §7.1 — currently the Phase 0 fixture; Phase 3 adds ~200 real pairs
-min_precision = 1.00   # a false merge silently deletes a story from the brief
+[dedup_fixture]   # SPEC §7.1 — the 55 synthetic Phase 0 pairs, unchanged
+# The floors this file has always carried, now pointed at the set they were actually
+# measured on. The fixture's `story_key` IS its ground truth, so 1.00/1.00 is expected and
+# this section is a canary: it proves the scorer still runs. It is not evidence that the
+# clustering is good, and it is scored separately so it cannot be mistaken for evidence of
+# that. It earned its keep in 3.B: it caught a mid-work regression — a rewrite the real
+# corpus is too thin to test — that the real set scored right through.
+min_precision = 1.00
 min_recall    = 0.90
 
-[entities]        # SPEC §7.2 — Phase 3, ~300 labeled mentions
+[dedup]           # SPEC §7.1 — 252 real pairs from silver.articles, labeled 2026-08-20
+# Fitted in 3.B by `evals/fit_thresholds.py`: grid search on a train split, the precision
+# constraint chosen by cross-validation inside that split, reported on a held-out half the
+# fitting never saw.
+#
+#                        precision   recall
+#     train (fitted on)     0.933     0.636
+#     HELD OUT              1.000     0.500     <- the honest estimate
+#     full set              0.962     0.568     <- what `make eval` gates on, below
+#
+# Phase 0 scored 0.000 / 0.455 on the same pairs. The floors gate the full set because that
+# is what the scorer sees, and they sit just under it: they exist to catch a regression, not
+# to certify the number. Quote the held-out row.
+#
+# The single remaining false positive is two different Show HN projects sharing the phrase
+# "Claude Code sessions" — a genuine miss, not a labeling artifact.
+#
+# These labels were made by an LLM assistant and then reviewed by the reader, who overrode
+# three of them; `labeler` is stamped on every record and `reviewed_from` on every overridden
+# one. That caveat is carried into the README rather than left here: see
+# docs/runbooks/phase-3.md 3.A.
+min_precision = 0.95
+min_recall    = 0.55
+
+[entities]        # SPEC §7.2 — 300 labeled mentions, awaiting 3.C's resolver
+# Labels exist; the decision function to score them against does not yet. Pinned open until
+# `entities/resolve.py` lands, then fitted the same way `[dedup]` was.
 min_precision = 0.0
 min_recall    = 0.0
 
