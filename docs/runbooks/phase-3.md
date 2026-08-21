@@ -590,6 +590,64 @@ re-run MERGEs cleanly — so `test_repair_collapses_duplicate_article_ids` write
 the incident did: a bare append that bypasses the MERGE, which is what a second concurrent
 writer's `WHEN NOT MATCHED` degenerates into.
 
+## 3.B.4 — Recency measures the story, not its first report *(done 2026-08-21)*
+
+Found by reading the brief, which is what the brief ladder is for.
+
+Every one of the ten stories scored `recency 0.00`. Most of that is 1.D's outage — nothing
+in the lake is fresher than 23 hours — but not all of it, and the remainder is a real defect
+that would show on live data too.
+
+**A cluster was timestamped by its canonical head, and the head is by construction the
+earliest article** (most authoritative, then earliest seen). So a cluster's age was the age
+of its *first* report. A story that keeps attracting coverage therefore looked **older the
+longer it ran**, which is backwards for a brief: "this story picked up eight articles
+overnight" is a strong freshness signal the design could not express at all.
+
+Measured on the live window:
+
+| story | first_seen | last_seen | age, head-based | age, last coverage |
+|---|---|---|---|---|
+| Disney sues FCC | 08-18 13:00 | 08-20 12:00 | **65.8h** | **24.0h** |
+| GLM-5.3 benchmarks | 08-18 22:06 | 08-19 10:36 | 61.9h | 49.4h |
+| Coinvane | 08-19 07:47 | 08-19 11:04 | 52.2h | 49.0h |
+
+Disney drew coverage until 37 minutes before ingestion stopped and was being ranked as
+nearly three days old — a 41.8-hour error on the single biggest story in the brief.
+
+The fix carries **both** ends on the cluster, because they answer different questions:
+`first_seen` is when the story broke, `last_seen` is when it was last covered, and the
+ranker uses the second. Both are written to `silver.story_clusters` so 3.D can rank without
+re-deriving them.
+
+SPEC §6.2's "believe `published_at` unless it disagrees with `fetched_at`" rule moved with
+it, into `dedup.trusted_timestamp`. It used to live inside `score_cluster`, where it only
+ever ran against the head; it now runs **per member**, so a cluster whose head has a flagged
+timestamp no longer poisons the whole cluster's age. `test_flagged_timestamp_falls_back_to_
+fetched_at` was retargeted at the layer that now owns the decision rather than relaxed.
+
+### Verified
+
+The order changed on real data, which is the point: **NASA/Swift moved 7th → 3rd** and
+**Meta AI's Mac app 9th → 4th**, both now carrying `recency 0.01` where the whole brief had
+been flat `0.00`. Under the old rule the eight two-publisher stories tied at score 0.30 and
+were ordered by `cluster_id` hash — arbitrarily. They are now separated by when they were
+last covered.
+
+The effect is small today only because the outage caps every story at 23 hours old. On live
+data the spread is the full 0–24h range the component was designed for.
+
+## The daily read *(SPEC §12's brief ladder; 3.F's acceptance)*
+
+| date | read | what it showed |
+|---|---|---|
+| 2026-08-20 | yes | First real brief. Lead story was a 1,720-article phantom cluster — 3.0's finding, and the reason 3.B exists. |
+| 2026-08-21 | yes | Ten genuine multi-publisher stories, no phantoms. Footer correctly reports the outage and names 22h of unrecoverable window-horizon loss for `rss_tech` and `rss_verge`. Surfaced 3.B.4. |
+
+Both findings above came from reading the output, not from a test. That is the argument for
+the ladder: §1's success criterion is behavioural, and a brief nobody reads is a brief whose
+defects nobody finds.
+
 ### Still open
 
 - The recall gap remains the headline number to beat: 0.500 held out. That is ADR-0009's

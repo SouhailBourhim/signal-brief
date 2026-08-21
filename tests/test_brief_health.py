@@ -18,6 +18,8 @@ def _cluster(**overrides):
         "publisher_domain": "a.com",
         "published_at": now - timedelta(hours=1),
         "fetched_at": now,
+        "first_seen": now - timedelta(hours=1),
+        "last_seen": now - timedelta(hours=1),
         "article_count": 1,
         "distinct_publisher_count": 1,
         "publishers": ["a.com"],
@@ -41,13 +43,44 @@ def test_score_components_are_retained_for_explainability():
 
 
 def test_flagged_timestamp_falls_back_to_fetched_at():
-    """A source's claimed time is not trusted for ranking once flagged (SPEC §6.2)."""
+    """A source's claimed time is not trusted once flagged (SPEC §6.2).
+
+    The rule moved in 3.B.4: it used to run inside `score_cluster`, where it only ever saw
+    the cluster head. It now runs per member in `dedup.trusted_timestamp`, so this asserts it
+    where it lives rather than through the ranker, which no longer makes the decision.
+    """
+    from signal_core.dedup import trusted_timestamp
+
     now = datetime.now(UTC)
-    lying = _cluster(published_at=now - timedelta(days=30), timestamp_flagged=True, fetched_at=now)
-    honest = _cluster(
-        published_at=now - timedelta(days=30), timestamp_flagged=False, fetched_at=now
+    lying = {"published_at": now - timedelta(days=30), "timestamp_flagged": True, "fetched_at": now}
+    honest = {
+        "published_at": now - timedelta(days=30),
+        "timestamp_flagged": False,
+        "fetched_at": now,
+    }
+    assert trusted_timestamp(lying) == now
+    assert trusted_timestamp(honest) == now - timedelta(days=30)
+
+
+def test_recency_tracks_the_latest_coverage_not_when_the_story_broke():
+    """3.B.4. A cluster's head is by construction its earliest article, so ranking on the
+    head made a story look older the longer it kept drawing coverage — exactly backwards.
+    Measured on a real window: a cluster whose newest article was 23h old ranked as 65.6h."""
+    now = datetime.now(UTC)
+    developing = _cluster(
+        cluster_id="developing",
+        first_seen=now - timedelta(hours=60),
+        last_seen=now - timedelta(hours=1),
     )
-    assert score_cluster(lying, now)["score"] > score_cluster(honest, now)["score"]
+    stale = _cluster(
+        cluster_id="stale",
+        first_seen=now - timedelta(hours=60),
+        last_seen=now - timedelta(hours=60),
+    )
+
+    assert score_cluster(developing, now)["score"] > score_cluster(stale, now)["score"]
+    assert score_cluster(developing, now)["score_components"]["recency"] > 0.9
+    assert score_cluster(stale, now)["score_components"]["recency"] == 0.0
 
 
 def test_rank_marks_inclusion_and_omits_the_tail():

@@ -30,13 +30,13 @@ def score_cluster(cluster: dict[str, Any], now: datetime | None = None) -> dict[
     # less than the second did.
     breadth = min(cluster["distinct_publisher_count"] / 4.0, 1.0)
 
-    # A flagged timestamp is not trusted for ranking, so fall back to fetched_at, which
-    # we observed ourselves (SPEC §6.2).
-    reference = (
-        cluster["published_at"]
-        if cluster.get("published_at") and not cluster.get("timestamp_flagged")
-        else cluster["fetched_at"]
-    )
+    # `last_seen` — when the story was last *covered*, not when it broke. The distinction is
+    # the whole point of ranking a cluster rather than an article: a story still drawing
+    # coverage is fresh, however long ago the first report landed. `dedup.trusted_timestamp`
+    # applies SPEC §6.2's "believe published_at unless it disagrees with fetched_at" rule per
+    # member, so a flagged timestamp still falls back to what we observed ourselves — it just
+    # does so for every article now, instead of only for the head.
+    reference = cluster.get("last_seen") or cluster["fetched_at"]
     age_hours = max((now - ensure_utc(reference)).total_seconds() / 3600.0, 0.0)
     recency = max(0.0, 1.0 - age_hours / 24.0)
 
