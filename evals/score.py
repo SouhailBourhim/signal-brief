@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from signal_core.dedup import is_same_story
+from signal_core.entities.resolve import resolve
 
 EVALS = Path(__file__).parent
 
@@ -31,9 +32,15 @@ class Score:
     fp: int = 0
     fn: int = 0
     tn: int = 0
+    # Set when the confusion counts and the number of labeled examples are not the same
+    # thing. `score_entities` counts a link to the wrong entity as both a false positive and
+    # a false negative — two errors, one mention — so its cells sum to more than it scored.
+    examples: int | None = None
 
     @property
     def support(self) -> int:
+        if self.examples is not None:
+            return self.examples
         return self.tp + self.fp + self.fn + self.tn
 
     @property
@@ -156,12 +163,36 @@ LABEL_FILES = {
 def score_entities() -> Score:
     """Mention-to-entity resolution. SPEC §7.2.
 
-    300 mentions are labeled (Phase 3.A). Scoring them needs `entities/resolve.py`, which
-    lands in 3.C — and the scorer must call it rather than reimplement it, the same contract
-    `score_dedup` keeps with `is_same_story`. Abstention is a first-class answer here: a
-    correct `unlinked` is a true negative, not a miss, or the resolver learns to guess.
+    Calls `entities.resolve.resolve` rather than reimplementing it, the same contract
+    `score_dedup` keeps with `is_same_story`.
+
+    **Abstention is a first-class answer.** 246 of the 300 labeled mentions are correctly
+    unlinked, so a correct `unlinked` counts as a true negative. Without that, a resolver
+    that links nothing looks perfect and so does one that links everything, depending which
+    half you forgot to count.
+
+    **A link to the wrong entity is counted twice — once as a false positive and once as a
+    false negative.** It is two errors: a link that should not exist, and a link that should
+    have. Counting it once, either way, would make a resolver that confidently mislabels
+    every mention score better than one that abstains on the same mentions, which inverts
+    exactly the preference SPEC §7.2's confidence floor exists to express.
+
+    Mentions with no `entity_id` key are unanswered — not labeled `null` — and are skipped.
     """
-    return Score("entities")
+    score = Score("entities", examples=0)
+    for mention in _load(EVALS / "entities" / "mentions.jsonl"):
+        if "entity_id" not in mention:
+            continue
+        score.examples = (score.examples or 0) + 1
+        predicted = resolve(mention["surface_form"], mention.get("context", "")).entity_id
+        actual = mention["entity_id"]
+        if predicted == actual:
+            score.tp += 1 if actual is not None else 0
+            score.tn += 1 if actual is None else 0
+        else:
+            score.fp += 1 if predicted is not None else 0
+            score.fn += 1 if actual is not None else 0
+    return score
 
 
 def score_enrichment() -> Score:

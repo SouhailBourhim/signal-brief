@@ -637,6 +637,170 @@ last covered.
 The effect is small today only because the outage caps every story at 23 hours old. On live
 data the spread is the full 0–24h range the component was designed for.
 
+## 3.C — Entity resolution, part one: the decision and the SEC tier *(done 2026-08-21)*
+
+Split in two the way 3.B was: the decision layer first, where `make eval` can measure it
+without a JVM and without the dictionary being finished, then the second source and the
+Spark tables. This is part one.
+
+| | precision | recall |
+|---|---|---|
+| train (fitted on) | 0.769 | 0.370 |
+| **HELD OUT** | **0.812** | **0.481** |
+| full set | 0.793 | 0.426 |
+
+`entities` was reporting *"300 labeled, awaiting a decision function to score against"* since
+3.A. It now reports a number, and `evals/thresholds.toml`'s floors moved off `0.0`.
+
+### The dictionary is a committed snapshot, not a lookup
+
+`warehouse/entities/dictionary.json`, built by `signal_core.entities.build` from SEC's
+`company_tickers.json` and a frequency-ranked English word list. Committed rather than
+fetched, for three reasons that all turned out to matter: `make eval` runs in CI and no test
+here touches the network; a published precision figure is only reproducible if the dictionary
+it was measured against is pinned; and SPEC §9's `dim_entities` is SCD2, so a snapshot with a
+`built_at` is the raw material for validity intervals while a live lookup would silently
+rewrite history.
+
+Two decisions inside it are worth naming:
+
+**Aliases are name prefixes.** `Getty Images Holdings, Inc.` contributes `getty`, `getty
+images` and `getty images holdings`. Prose says the second and SEC says the third; a
+dictionary keyed on legal names alone matches neither. A **complete** name match outranks any
+number of prefix matches, which is what keeps `apple` on `Apple Inc.` rather than making it
+ambiguous with `Apple Hospitality REIT`.
+
+**One company, many tickers.** 2,393 of SEC's 10,387 rows are a duplicate title — `BANK OF
+MONTREAL /CAN/` appears 32 times, once per structured note it issues. SEC's file is ordered
+by prominence (index 0 is NVDA), so the lowest index per CIK is the common share class. That
+rule was checked against four independently hand-labeled mentions before being relied on:
+`AEG` not `AEGOF`, `BMO` not `FNGD`, `CMCSA` not `CCZ`, `XRX` not `XRXDW`. 10,387 rows
+collapse to 7,994 companies.
+
+### What real data forced, and what each thing cost
+
+Every rule below was developed against the **train half only**; the held-out half was scored
+once, at the end. Four findings, in the order the measurements produced them:
+
+**1. The first match must not win.** The sampler's spans are proper-noun runs, so they carry
+headline tails: `Binance Helped Russia Target`. That span contains `target` — Target Corp, an
+exact and complete company name — and the first cut linked a story about a crypto exchange to
+a retailer at confidence 0.90. Scanning longest-n-gram-first does not fix it, because the
+junk match is frequently the *only* match. Channels now compete and the strongest evidence
+wins.
+
+**2. A CIK is negative evidence too, and this was the single biggest precision win.** EDGAR
+Form 4 and 144 filers are officers and directors filing under their own names, surname first
+— and surnames start company names constantly. Measured on the train half, before the fix:
+
+| span | resolved to | actually |
+|---|---|---|
+| `Matthews Mark E.` | MATW — Matthews International | a person |
+| `Greene Michelle D.` | GCBC — Greene County Bancorp | a person |
+| `GEE DAVID NICHOLAS` | JOB — GEE Group | a person |
+
+The filing states the filer's CIK, and none of those CIKs belong to a company. So a CIK that
+no ticker claims, on a span declaring no legal form, **vetoes** the link. A legal form
+overrides the veto, because a private fund also holds a CIK no ticker claims — `PIER 88
+INVESTMENT PARTNERS LLC` is a company EDGAR knows and the ticker file does not. Three false
+positives out of nine, removed by reading an identifier the source had already supplied.
+
+**3. Position is evidence.** English names are head-initial, so an alias that does not start
+the span is weaker. A penalty rather than a veto, because the sampler's regex sometimes
+sweeps in a leading word (`Why Apple`), and a veto would turn those into silent misses.
+
+**4. A one-word claim is weaker than a two-word one.** `Getty Images` genuinely names Getty
+Images Holdings; `carver`, `relay` and `trump` each start a real company's name and name none
+of them in context. This is most of the remaining precision.
+
+### At the fitted floor, three of the six channels are inert
+
+Worth stating plainly, because the code reads richer than the system behaves. `CONFIDENCE_FLOOR`
+fits to 0.72, and that silences everything below it:
+
+| channel | confidence | links at 0.72? |
+|---|---|---|
+| CIK stated next to the span | 1.00 | yes |
+| complete name, multi-token | 0.90 | yes |
+| complete name, single token | 0.80 | yes |
+| minted from a legal form | 0.75 | yes |
+| **name prefix, multi-token** | 0.70 | **no** |
+| **name prefix, single token** | 0.60 | **no** |
+| **common word, corroborated** | 0.85 | never fires at all |
+
+So the resolver that produced the numbers above is: *read the CIK, match a complete name,
+or mint from a legal form.* The prefix index — the thing that makes `Getty Images` findable
+at all — locates the entity and then declines to link it. That was measured, not assumed:
+admitting prefix matches (floor 0.65) is neutral on the train half and, on the held-out half,
+trades precision 0.812 → 0.737 for recall 0.481 → 0.519. The stated tie-break prefers the
+stricter floor on equal train evidence, so 0.72 it is.
+
+Both are kept rather than deleted, for the same reason: they are the machinery a *lower*
+floor would use, and a lower floor is exactly what SPEC §7.2's embedding stage buys. Pinned
+in `tests/test_entities.py` so changing either number has to be deliberate.
+
+### The corroboration channel fires zero times, and that is recorded rather than hidden
+
+`Meta` links if the context names `Meta Platforms` in full nearby — the lexical stand-in for
+SPEC §7.2's embedding similarity. Across all 300 labeled mentions it **never fires**. It is
+kept, because it is the only path by which the common-word class can ever link without
+embeddings, but no published number rests on it and `CONFIDENCE_CORROBORATED` is stated
+intent rather than a measured value. The same is true of `COMMON_WORD_RANK`: at the fitted
+floor of 0.72 every value from 0 to 10,000 scores identically, because a common-word match
+lands at 0.20 or 0.85 and never between, so the floor decides before the rank does.
+
+### The fitting procedure had to change, and the reason is structural
+
+3.B chose dedup's precision constraint by cross-validation inside train. **That procedure
+degenerates here.** Entity precision is monotone in a single knob — raise `CONFIDENCE_FLOOR`
+and you link strictly less — so "the strictest constraint whose precision survives CV" always
+selects the strictest grid point. Measured: every candidate from 1.00 down to 0.80 returns
+the same CV precision (0.80–0.81) and the same recall (0.183), and the rule picks 1.00, which
+is a resolver that reads CIKs out of EDGAR titles and ignores prose entirely.
+
+Dedup escapes this because its five thresholds trade against each other and because the Phase
+0 fixture is a hard floor under the degenerate corner. Neither applies to a single floor. So
+`ENTITY_MIN_PRECISION` is **stated in the open at 0.75** — three correct links per wrong one —
+and the held-out half still reports what that choice bought.
+
+### Verified
+
+- `make eval` scores all three sets and gates green; `entities` floors set at 0.75 / 0.40.
+- `make lint` clean, 252 tests pass, and `mypy src` clean.
+- The resolver is deterministic: same inputs, same `(entity_id, confidence, method)`, which
+  is what a replay of the Spark job in part two will depend on.
+
+### Known false positives, named rather than averaged away
+
+Three survive on the full set, and each is a different kind of hard:
+
+- `BofA Finance LLC` → `bofa-finance`, labeled `BAC`. A financing subsidiary rolling up to its
+  parent. Nothing lexical gets there; Wikidata's `P749 parent organization` is the fix, and it
+  is part two's job.
+- `USA Today Sparking` → `TDAY`, labeled `GCI`. A masthead whose owner is Gannett — the same
+  rollup problem wearing a brand.
+- `FlyWire` → `FLYW`, labeled unlinked. A fruit-fly connectome and a payments company share a
+  name. No dictionary separates those; only context does.
+
+`Lyntris Inc.` is worth recording separately because it is **not** clearly an error: the
+resolver says `LYNX` via CIK, the label says `lyntris`. The company has a ticker reserved in
+`company_tickers.json` and is not yet trading, so the label's namespace rule — UPPERCASE means
+tradable — and the ticker file disagree about what "tradable" means. Left as a scored miss
+rather than fixed on either side.
+
+### Still open, carried into 3.C part two
+
+- **The Wikidata tier is not built.** The dictionary is SEC-only, so `OpenAI`, `Anthropic`,
+  `Substack`, `Unitree`, `Sennheiser`, `Binance`, `GitHub`, `Venmo` and `Google Drive` are all
+  misses — a large, named share of the 31 false negatives. WDQS will not answer
+  `?item wdt:P31/wdt:P279* wd:Q4830453` at any notability floor (**504 after 60 s**, measured
+  2026-08-21), so the builder materializes the subclass closure in two steps: fetch the 5,809
+  business subclasses, then fetch instances in chunks of them. The first run of that died on a
+  **502** the retry set did not cover, which is now fixed alongside a smaller chunk size.
+- `silver.entity_mentions` and `dim_entities` (SCD2) do not exist yet. Part two.
+- Mention *detection* is still `evals/sample_mentions.py`'s lexical heuristic, which lives in
+  the eval harness rather than the pipeline. Part two has to move it.
+
 ## The daily read *(SPEC §12's brief ladder; 3.F's acceptance)*
 
 | date | read | what it showed |
@@ -657,6 +821,6 @@ defects nobody finds.
 
 ## Then
 
-3.C — entity resolution, which `evals/entities`'s 300 labeled mentions are already waiting
-for. Then 3.D wires the brief onto these tables, and 3.E ratchets the floors and writes
+3.C part two — the Wikidata tier, then `silver.entity_mentions` and `dim_entities` SCD2 on
+Spark. Then 3.D wires the brief onto these tables, and 3.E ratchets the floors and writes
 ADR-0009.

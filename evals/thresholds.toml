@@ -38,11 +38,33 @@ min_recall    = 0.90
 min_precision = 0.95
 min_recall    = 0.55
 
-[entities]        # SPEC §7.2 — 300 labeled mentions, awaiting 3.C's resolver
-# Labels exist; the decision function to score them against does not yet. Pinned open until
-# `entities/resolve.py` lands, then fitted the same way `[dedup]` was.
-min_precision = 0.0
-min_recall    = 0.0
+[entities]        # SPEC §7.2 — 300 real mentions from silver.articles, labeled 2026-08-20
+# Fitted in 3.C by `evals/fit_thresholds.py --set entities`, against the SEC tier of the
+# dictionary only (`warehouse/entities/dictionary.json`).
+#
+#                        precision   recall
+#     train (fitted on)     0.769     0.370
+#     HELD OUT              0.812     0.481     <- the honest estimate
+#     full set              0.793     0.426     <- what `make eval` gates on, below
+#
+# Quote the held-out row. The floors gate the full set because that is what the scorer sees,
+# and they sit just under it: they catch a regression, they do not certify the number.
+#
+# **The precision constraint here is stated, not cross-validated, and that is a deviation
+# from how `[dedup]` was fitted.** Entity precision is monotone in a single knob, so "the
+# strictest constraint that survives CV" always selects the strictest grid point — a resolver
+# that reads CIKs out of EDGAR titles and ignores prose, at recall 0.185. See
+# `ENTITY_MIN_PRECISION` in the fitter for the measurement and the reasoning.
+#
+# The recall gap is the number to beat, and its cause is named rather than mysterious: the
+# dictionary has no entry for OpenAI, GitHub, Venmo or Substack, and `Meta` and `Apple` are
+# ordinary English words that the resolver will not link on the word alone. Both are what
+# 3.C part two and SPEC §7.2's embedding stage are for.
+#
+# Same caveat as `[dedup]`: these labels were made by an LLM assistant and reviewed by the
+# reader. See docs/runbooks/phase-3.md 3.A.
+min_precision = 0.75
+min_recall    = 0.40
 
 [enrichment]      # SPEC §7.3 — Phase 4B, 100 labeled examples
 min_precision = 0.0

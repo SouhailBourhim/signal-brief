@@ -116,7 +116,12 @@ _LONG_DIGITS = re.compile(r"^\d{5,}$")
 # English carrying no topical signal, while this one is about a specific defect in specific
 # sources — and a reader deleting an entry from the wrong list would be making a different
 # decision than they thought.
-_FEED_BOILERPLATE = frozenset(
+#
+# Public because `entities/resolve.py` needs the same list for a different reason: `Filer`,
+# `Filed` and `AccNo` are also the shapes a proper-noun heuristic mistakes for company names,
+# and a second copy of this list would eventually disagree with this one about what the feeds
+# say about themselves.
+FEED_BOILERPLATE = frozenset(
     [
         "filed",
         "accno",
@@ -223,7 +228,7 @@ def content_tokens(text: str) -> frozenset[str]:
         for t in _TOKEN.findall(strip_boilerplate(text).lower())
         if len(t) > 1
         and t not in _STOPWORDS
-        and t not in _FEED_BOILERPLATE
+        and t not in FEED_BOILERPLATE
         and not _LONG_DIGITS.match(t)
     )
 
