@@ -11,8 +11,14 @@
 # clustering is good, and it is scored separately so it cannot be mistaken for evidence of
 # that. It earned its keep in 3.B: it caught a mid-work regression — a rewrite the real
 # corpus is too thin to test — that the real set scored right through.
+#
+# **Ratcheted to 1.000 in 3.E**, from 0.90. The real sets' floors sit below their measured
+# values to absorb sampling noise; this one has none to absorb. The fixture is synthetic and
+# its `story_key` *is* the label, so there is no draw that could have gone differently, and
+# anything under perfect is a regression by definition. `fit_thresholds.py`'s hard filter was
+# raised to match, so the fitter cannot choose a configuration this gate would then reject.
 min_precision = 1.00
-min_recall    = 0.90
+min_recall    = 1.00
 
 [dedup]           # SPEC §7.1 — 252 real pairs from silver.articles, labeled 2026-08-20
 # Fitted in 3.B by `evals/fit_thresholds.py`: grid search on a train split, the precision
@@ -35,6 +41,24 @@ min_recall    = 0.90
 # three of them; `labeler` is stamped on every record and `reviewed_from` on every overridden
 # one. That caveat is carried into the README rather than left here: see
 # docs/runbooks/phase-3.md 3.A.
+#
+# **Re-run in 3.E**, after 3.D changed `NEAR_DUPLICATE_DISTANCE` without re-fitting. The rows
+# above are unchanged; the CV now selects constraint **0.85** rather than 3.B's 0.90, so that
+# figure had gone stale without anything noticing.
+#
+# 3.E also measured how much of this fit is actually the data. Of the four constants the grid
+# searches, the labeled set determines one: `TITLE_JACCARD` is 0.35 at every feasible point,
+# `MIN_TITLE_TOKENS` is what moves the held-out row (4 gives 1.000/0.500; 2 or 3 give
+# 0.857/0.545), and `BODY_JACCARD` and `MIN_BODY_TOKENS` score identically at every value on
+# both splits — and the body branch fires zero times in 200,000 random real pairs, so the
+# corpus cannot separate them either. The fit now reports that in its own output and breaks
+# ties by keeping what `dedup.py` ships. Tuple order had been breaking them, and had been
+# recommending the simhash distance 3.D removed for chaining a 45-article false cluster.
+#
+# **The floors are not ratcheted, deliberately.** They sit 0.012 and 0.018 under the full set.
+# One labeled pair is worth ~0.023 of recall here, so a floor any closer fails the build on a
+# single re-labeled example — a tripwire on labeling rather than on accuracy. A floor
+# ratchets when the measurement improves, not when the slack looks untidy.
 min_precision = 0.95
 min_recall    = 0.55
 
@@ -73,6 +97,9 @@ min_recall    = 0.55
 #
 # Same caveat as `[dedup]`: these labels were made by an LLM assistant and reviewed by the
 # reader. See docs/runbooks/phase-3.md 3.A.
+#
+# Not ratcheted in 3.E, for the reason under `[dedup]`: 54 positive mentions put one example
+# at ~0.019 of recall, and these floors already sit 0.048 and 0.031 below the full set.
 min_precision = 0.82
 min_recall    = 0.58
 

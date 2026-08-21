@@ -44,21 +44,43 @@ EVALS = Path(__file__).parent
 FIXTURE_ORIGIN = "phase0-fixture"
 
 # Named so the grid reads as the thing being decided rather than as five loops.
-# `MIN_SIMHASH_TOKENS` is deliberately NOT in this grid, and the reason is the most
-# important thing 3.B learned. A labeled set of 252 pairs cannot certify a rule that a
-# clustering run applies to 3.6M. Setting it to 0 costs nothing measurable here — every
-# candidate scores identically — while over a real window it merged 1.9% of random EDGAR
-# pairs, which transitive closure chained into a single 1,575-article cluster holding 59%
-# of the corpus. The pairwise objective is blind to that by construction: the damage is a
-# property of the closure, not of any pair. So it is set in `dedup.py` from the corpus-level
-# measurement, and `group_stories` carries a structural guard for the same reason.
+#
+# **Two constants are deliberately NOT in this grid**, for one reason stated twice. A labeled
+# set of 252 pairs cannot certify a rule that a clustering run applies to millions, and the
+# pairwise objective is blind to what transitive closure does with a single edge: the damage
+# is a property of the closure, not of any pair. Both are set in `dedup.py` from a
+# corpus-level measurement instead — `evals/experiments/corpus_merge_rate.py` — and
+# `group_stories` carries a structural guard for the same reason.
+#
+# `MIN_SIMHASH_TOKENS` is 3.B's. Every candidate scored identically here, while over a real
+# window a value of 0 merged 1.9% of random EDGAR pairs, which closure chained into a single
+# 1,575-article cluster holding 59% of the corpus.
+#
+# `NEAR_DUPLICATE_DISTANCE` is 3.D's, and it was still in this grid until 3.E — which is a
+# defect, because the grid was actively recommending 12 while `dedup.py` shipped 0. Every
+# value from 0 to 12 scores identically on both labeled sets, so the tiebreak alone decided
+# it, and the tiebreak preferred the largest. 3.D had already measured what 12 does: two
+# unrelated Show HN posts at hamming 10 and 12, chained by closure into a 45-article cluster
+# holding Disney/FCC, a Grok exploit, a Pixel deal and a corgi tracker. Over random real pairs
+# the simhash branch fires **0 times at distance 0-10 and once at 12** in 200,000 draws, which
+# is the whole of the evidence, and it points the opposite way from the tiebreak.
 GRID = {
-    "NEAR_DUPLICATE_DISTANCE": [0, 2, 4, 6, 8, 10, 12],
     "TITLE_JACCARD": [0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50],
     "BODY_JACCARD": [0.30, 0.40, 0.50, 0.60],
     "MIN_TITLE_TOKENS": [2, 3, 4],
     "MIN_BODY_TOKENS": [10, 15, 20, 30],
 }
+
+# Held fixed, reported alongside the fitted values so a reader can see the whole configuration
+# rather than the searched part of it.
+NOT_FITTED = ("NEAR_DUPLICATE_DISTANCE", "MIN_SIMHASH_TOKENS")
+
+# What `dedup.py` ships, captured **at import** — before any sweep has touched the module.
+# `_fit`'s tiebreak needs this and cannot read it live: fitting works by setting the constants
+# on `dedup` and scoring, so `getattr(dedup, ...)` mid-run returns wherever the search
+# currently is. `_select_constraint` makes that worse by leaving each fold's winner in place.
+# Read once, here, and the question "what does the module ship" has one answer all run.
+SHIPPED = {name: getattr(dedup, name) for name in GRID}
 
 
 @dataclass(frozen=True)
@@ -116,32 +138,92 @@ def _stratified_halves(pairs: list[dict], seed: int) -> tuple[list[dict], list[d
     return train, test
 
 
-def _fit(train: Split, fixture: Split, min_precision: float) -> dict[str, float] | None:
-    """Grid search: maximise recall subject to the precision constraint, with the fixture's
-    own gate as a hard filter."""
-    best = None
+def _feasible(train: Split, fixture: Split, min_precision: float) -> list[tuple[float, tuple]]:
+    """Every grid point clearing the precision constraint and the fixture's own gate.
+
+    Returned rather than reduced to a winner, because 3.E's finding is about the *shape* of
+    this set and not only its maximum: at the shipped constraint 336 of 385 feasible points
+    tie at the top recall, so "the fit chose X" is mostly a statement about the tiebreak.
+    """
+    # Restored on the way out. The sweep sets these on the module, and every caller that
+    # afterwards asks `dedup` what it ships — `_fit`'s tiebreak, and `_select_constraint`'s
+    # inner folds, which call `_fit` in a loop — would otherwise be answered with the tail of
+    # the last sweep instead of the shipped configuration.
+    entry = {name: getattr(dedup, name) for name in GRID}
+    out = []
+    try:
+        out = _sweep(train, fixture, min_precision)
+    finally:
+        for name, value in entry.items():
+            setattr(dedup, name, value)
+    return out
+
+
+def _sweep(train: Split, fixture: Split, min_precision: float) -> list[tuple[float, tuple]]:
+    out = []
     for values in product(*GRID.values()):
         for name, value in zip(GRID, values, strict=True):
             setattr(dedup, name, value)
-
         precision, recall, *_ = train.score()
         if precision < min_precision:
             continue
         fixture_precision, fixture_recall, *_ = fixture.score()
-        if fixture_precision < 1.0 or fixture_recall < 0.9:
+        # The fixture gate, ratcheted to 1.000/1.000 in 3.E. It is synthetic ground truth —
+        # the fixture's `story_key` *is* the label — so unlike the real set it carries no
+        # sampling noise for a floor to absorb, and anything under perfect is a regression.
+        if fixture_precision < 1.0 or fixture_recall < 1.0:
             continue
-        # The labeled set does not distinguish simhash distances at all: 0 and 12 score
-        # identically on both precision and recall, because once boilerplate is stripped the
-        # title path already catches everything stage 2 would. So the tie is broken on
-        # documented intent rather than on noise — prefer the distance that keeps SPEC §7.1's
-        # stage 2 doing its stated job of catching reprints and light edits, since it costs
-        # nothing measurable and covers a case this corpus happens to be too thin to contain
-        # (identical prose republished under a different headline). Higher title threshold
-        # wins the remaining tie: explicit token agreement over a hash collision.
-        key = (recall, *values)
-        if best is None or key > best[0]:
-            best = (key, dict(zip(GRID, values, strict=True)))
-    return best[1] if best else None
+        out.append((recall, values))
+    return out
+
+
+def _fit(train: Split, fixture: Split, min_precision: float) -> dict[str, float] | None:
+    """Maximise recall subject to the precision constraint; break ties by *not moving*.
+
+    **The tiebreak used to be tuple order, and tuple order was deciding published numbers.**
+    Measured in 3.E at the shipped constraint: only `TITLE_JACCARD` is pinned by the data
+    (0.35 at every feasible point) and only `MIN_TITLE_TOKENS` changes the held-out result
+    (4 gives 1.000/0.500, and 2 or 3 give 0.857/0.545). `BODY_JACCARD` and `MIN_BODY_TOKENS`
+    score identically at every value the grid offers, on both splits — and over 200,000
+    random real pairs the body branch fires zero times at every one of them, so the corpus
+    cannot separate them either.
+
+    So the rule is: **among tied optima, keep what `dedup.py` already ships.** It is the only
+    tiebreak that does not invent evidence — a constant the data cannot speak to should not be
+    moved by a procedure that claims to be measuring it — and it makes this script idempotent,
+    so rerunning it never churns a constant and never silently disagrees with the module it is
+    fitting. Where the shipped value is not among the tied optima the data *has* spoken, and
+    the fit moves it.
+    """
+    shipped = tuple(SHIPPED[name] for name in GRID)
+    feasible = _feasible(train, fixture, min_precision)
+    if not feasible:
+        return None
+    top = max(recall for recall, _ in feasible)
+    tied = [values for recall, values in feasible if recall == top]
+    if shipped in tied:
+        return dict(zip(GRID, shipped, strict=True))
+    # Nothing shipped to keep: fall back to the stated direction — on equal measured recall,
+    # prefer the configuration that claims less. Thresholds and minimum-signal guards up.
+    return dict(zip(GRID, max(tied), strict=True))
+
+
+def _undetermined(train: Split, fixture: Split, min_precision: float) -> dict[str, list]:
+    """Which constants the labeled set leaves free, for the fit to report about itself.
+
+    A fit that prints five numbers implies the data chose five numbers. Here it chose two.
+    Printing that is the difference between a tuned constant and one that merely survived.
+    """
+    feasible = _feasible(train, fixture, min_precision)
+    if not feasible:
+        return {}
+    top = max(recall for recall, _ in feasible)
+    winners = [values for recall, values in feasible if recall == top]
+    return {
+        name: sorted({w[i] for w in winners})
+        for i, name in enumerate(GRID)
+        if len({w[i] for w in winners}) > 1
+    }
 
 
 def _select_constraint(
@@ -228,12 +310,26 @@ def fit_dedup(args: argparse.Namespace) -> int:
             print(f"\nno grid point reaches precision {constraint} — loosen it")
             return 1
 
+        undetermined = _undetermined(train, fixture, constraint)
         for name, value in chosen.items():
             setattr(dedup, name, value)
         print("\nchosen:")
         for name, value in chosen.items():
-            print(f"  {name:<24} {value}")
-        print(f"  {'MIN_SIMHASH_TOKENS':<24} {dedup.MIN_SIMHASH_TOKENS}  (held fixed, not fitted)")
+            free = undetermined.get(name)
+            note = (
+                f"  (undetermined — scores identically at {free}, shipped value kept)"
+                if free
+                else ""
+            )
+            print(f"  {name:<24} {value}{note}")
+        for name in NOT_FITTED:
+            print(f"  {name:<24} {getattr(dedup, name)}  (held fixed — see GRID's comment)")
+        if undetermined:
+            print(
+                f"\n  the labeled set determines {len(GRID) - len(undetermined)} of {len(GRID)} "
+                f"searched constants; the rest are held at their shipped values rather than "
+                f"moved by a tiebreak"
+            )
         print()
         for label, split in (
             ("train (fitted on)", train),

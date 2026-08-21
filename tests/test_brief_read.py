@@ -26,6 +26,7 @@ from signal_core.brief.read import (
     read_clusters,
     read_health,
 )
+from signal_core.brief.render import SNIPPET_CHARS, render_brief, snippet
 from signal_core.config import Settings
 from signal_core.dedup import exact_dedup
 from signal_core.hashing import hamming, simhash64
@@ -580,3 +581,65 @@ def test_a_fresh_window_does_not_warn(tmp_path, capsys):
     run(Settings(out_root=tmp_path), limit=5, date="2026-08-20", now=NOW, client=client)
 
     assert "WARNING: newest clustered window" not in capsys.readouterr().out
+
+
+def test_snippet_shows_prose_not_the_markup_the_feed_sent():
+    """The template autoescapes untrusted feed content, so raw markup renders as visible
+    tags. Found by reading the brief: a Tesla headline sat above `<figure><img alt=...
+    data-portal-copyright=...>` where the story should have been."""
+    raw = (
+        '<figure><img alt="Tesla Solar Roof" '
+        'data-portal-copyright="Image: Dieter Bohn / &lt;em&gt;The Verge&lt;/em&gt;" '
+        'src="https://platform.theverge.com/x.png?quality=90" /></figure>'
+        '<p class="wp-block-paragraph">Tesla has discontinued Solar Roof.</p>'
+    )
+    assert snippet(raw) == "Tesla has discontinued Solar Roof."
+
+
+def test_snippet_keeps_edgar_field_names_readable():
+    """An EDGAR body is `<b>`-wrapped field labels. Stripping the markup must leave the
+    fields, because for a filing they are the whole of the content."""
+    body = "<b>Filed:</b> 2026-08-21 <b>AccNo:</b> 0001193125-26-360544 <b>Size:</b> 197 KB"
+    assert snippet(body) == "Filed: 2026-08-21 AccNo: 0001193125-26-360544 Size: 197 KB"
+
+
+def test_snippet_only_claims_there_is_more_when_there_is():
+    short = "Two sentences. That is all of it."
+    assert snippet(short) == short
+    assert not snippet(short).endswith("…")
+
+    long = "word " * 400
+    cut = snippet(long)
+    assert cut.endswith("…")
+    assert len(cut) <= SNIPPET_CHARS + 2
+    # Cut at a word boundary, never mid-word.
+    assert not cut.removesuffix(" …").endswith("wor")
+
+
+def test_snippet_is_safe_on_an_empty_body():
+    assert snippet("") == ""
+
+
+def test_every_render_path_gets_a_cleaned_snippet():
+    """`render_brief` cleans, not the reader that built the clusters.
+
+    The first cut of this did it in `read_clusters`, which is the Athena path only — and
+    `skeleton.py` builds its clusters in process through `group_stories`, so `make skeleton`
+    rendered a brief with no body text under any headline. Cleaning at the render boundary is
+    what makes the two paths agree.
+    """
+    clusters = [
+        {
+            "title": "T",
+            "publisher_domain": "x.com",
+            "score": 0.5,
+            "score_components": {},
+            "distinct_publisher_count": 1,
+            "publishers": ["x.com"],
+            "body_text": "<p>Northwind acquires Lumen.</p>",
+            "entities": [],
+        }
+    ]
+    html_out = render_brief(clusters, RunHealth(articles_in=1, clusters_out=1), date="2026-08-21")
+    assert "Northwind acquires Lumen." in html_out
+    assert "<p>Northwind" not in html_out.replace('<p class="body">', "")

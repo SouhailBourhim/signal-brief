@@ -1111,6 +1111,247 @@ notability floor 3.C raised on train-half evidence had already removed it.
   the product; a fresh clone that has run `cluster` but not `resolve` still gets its morning
   read. Only "no such table" is swallowed — permissions and workgroup errors still raise.
 
+## 3.E — The floors, and ADR-0009's two verdicts *(done 2026-08-21)*
+
+The last item in the phase: ratchet what can be ratcheted, and answer the question 3.B and
+3.C both closed by deferring. [ADR-0009](../decisions/ADR-0009-embeddings-for-same-story-and-entities.md)
+is the record; this is what it cost to get there and what else fell out on the way.
+
+Three harnesses under `evals/experiments/`, run in a throwaway virtualenv. Installing
+`sentence-transformers` into `pyproject.toml` in order to decide whether to install
+`sentence-transformers` would have answered the question by assumption, so the experiment
+lives outside the dependency graph and the ADR decides whether it ever comes inside.
+
+### The comparison had to be rigged against the challenger, or it proves nothing
+
+Every knob that could flatter embeddings is imported from `evals/fit_thresholds.py` rather
+than chosen here: the same seeded label-stratified halves, the same maximise-recall-subject-
+to-precision objective, the same 4-fold constraint selection *inside* train, the same hard
+fixture gate. Two guards come from `dedup.decide` itself — the minimum-signal thresholds and
+the identifier veto — because those are structural, not the thing under test.
+
+That last one turned out to be the entire result. **Withhold the identifier veto and the
+embedding rule merges 0.347% of random real pairs against the lexical rule's 0.025%** — 14x
+worse, and every one of them an EDGAR filing:
+
+    424B2 - Morgan Stanley Finance LLC   vs  424B2 - Nomura America Finance, LLC   cos 0.79
+    424B2 - Citigroup Global Markets     vs  424B2 - JPMorgan Chase Financial      cos 0.72
+
+Which is not the encoder being wrong. Two prospectuses genuinely *are* the same kind of text;
+`dedup.py`'s docstring said as much in 3.B — "neither would an embedding: the text describes
+no event" — and the accession number is what tells them apart. Grant the veto and the gap
+closes completely. A comparison that had skipped this would have published a 14x figure that
+was measuring a missing guard.
+
+### Same-story: embeddings win, and the corpus agrees
+
+|  | precision | recall |
+|---|---|---|
+| lexical, shipped | **1.000** | 0.500 |
+| embedding, MiniLM | 0.870 | **0.909** |
+| embedding, mpnet (control) | 0.875 | **0.955** |
+
+Held out. Two models agree, so this is embeddings and not one 90 MB model. All three
+held-out false merges are `focus`-stratum topic twins — two Show HN private-AI-agent
+products, two self-hosted search engines, two essays on recursive self-improvement — and on
+the base-rate strata the embedding rule makes zero, same as lexical.
+
+Then the measurement that actually decides it, because 3.B and 3.D both proved the pairwise
+number cannot: **200,000 random pairs from a real window, three seeds.** Lexical merges 0-1;
+embedding merges 2-3; projected over a 10.7M-pair window that is ~54 edges against ~161. Both
+near zero, and about half the embedding's extra edges are *correct* — two LG OLED stories,
+the two Moderna/Merck vaccine stories, caught by a random draw. Nothing chains. The objection
+that killed this idea twice does not survive contact with the corpus.
+
+### Entities: embeddings lose, and the encoder is not why
+
+The hybrid scores **identically to lexical at every threshold** clearing the precision
+constraint. The embedding stage contributes nothing, and standalone recall held out is 0.000.
+
+The cause is upstream. `warehouse/entities/dictionary.json.gz` has canonical names, tickers,
+CIKs, ranks and aliases and **no descriptions** — so the harness has to synthesise one
+(`Apple Inc., traded as AAPL, a public company`), which says nothing about what the company
+does, which is the only thing that separates `Apple` from the fruit. And the ceiling is below
+the shipped number anyway: the alias index proposes the correct entity for **34 of 54** linked
+mentions, capping *any* context-scoring rule at **0.630** recall against 0.611 shipped.
+
+So the recall gap 3.C recorded as blocked on an ML dependency was never blocked on one. It is
+blocked on a data asset, and the fix is one more variable in a `SELECT` — checked live rather
+than assumed:
+
+    Q312  Apple Inc.      "American multinational technology company based in Cupertino, California"
+    Q380  Meta Platforms  "American technology company"
+
+Reclassifying that is the more useful half of ADR-0009. It was going to be carried into 4B as
+"add embeddings"; it is carried as "add descriptions, then widen the candidate set, then
+measure" — and the first two are free.
+
+### What re-fitting found, which was not about embeddings at all
+
+3.D changed `NEAR_DUPLICATE_DISTANCE` 12 -> 0 on a corpus measurement and nothing re-ran the
+fitter. Re-running it in 3.E produced a configuration that **disagreed with the shipped code
+in three places**, and recommended `NEAR_DUPLICATE_DISTANCE = 12` — the exact value 3.D had
+removed for chaining a 45-article false cluster out of two unrelated Show HN posts.
+
+Nothing had failed, because a fitter's output is prose until someone reads it.
+
+**The labeled set determines one of the four constants in the grid.** Measured directly: at
+the selected constraint, 336 of 385 feasible grid points tie at the top train recall.
+`TITLE_JACCARD` is 0.35 at every feasible point. `MIN_TITLE_TOKENS` is the one that moves the
+published number — 4 gives held out 1.000/0.500, and 2 or 3 give 0.857/0.545. `BODY_JACCARD`
+and `MIN_BODY_TOKENS` score identically at every value on both splits, and the body branch
+fires **zero times in 200,000 random real pairs**, so the corpus cannot separate them either.
+
+Which means the tiebreak was choosing three of four constants, and the tiebreak was tuple
+order. Three fixes:
+
+1. **`NEAR_DUPLICATE_DISTANCE` leaves the grid**, joining `MIN_SIMHASH_TOKENS`. Both are set
+   from a corpus-level measurement the pairwise objective is blind to. Leaving it in implied
+   the labeled set had a view; it does not.
+2. **Ties are broken by keeping what `dedup.py` ships.** The only rule that invents no
+   evidence, and it makes the fitter idempotent — rerunning it never churns a constant and
+   never silently disagrees with the module it is fitting.
+3. **The fit reports its own resolution.** It now prints which constants the labels leave
+   free, so "the fit chose four numbers" cannot be read off output where the data chose one.
+
+`tests/test_fit_thresholds.py` pins all of it, including the property that would have caught
+the original drift: rerun the fitter and it must return what the module ships.
+
+Two bugs surfaced while doing this, both the same shape — **the sweep mutates `dedup`'s
+constants and callers read them back mid-run.** `_fit`'s new tiebreak read the tail of its own
+sweep; `_select_constraint` leaves each CV fold's winner in place, so reading "what ships"
+after it is meaningless. Fixed by capturing `SHIPPED` at import, before anything moves, and by
+restoring the module around every sweep.
+
+### And a bug in the measurement itself
+
+The first corpus run reported the simhash and body branches firing **zero times at every
+threshold**, which read as "two of the three branches are inert on real data". They were not
+inert; they were unreachable, because the dump script read `a.get("body")` and the column in
+`silver.articles` is `body_text`. All 4,298 rows came through with empty bodies.
+
+Caught by printing eligibility counts rather than merge counts — zero merges and zero
+*eligible pairs* look identical in a results table and mean completely different things. The
+corrected dump reports how many rows genuinely have no body text (1,757 of 4,633, which is
+EDGAR), and the numbers above are from it.
+
+### Reading it again found three more, and only one was mine to fix
+
+3.E's brief, read:
+
+**The snippet under every headline was raw markup.** Under a Tesla story the page showed
+`<figure><img alt="Tesla Solar Roof Event photos" data-portal-copyright="Image: Dieter Bohn
+/ <em>The Verge</em>" src="...?quality=90&strip=all">` and then a `<figcaption>`, and about
+half of each snippet was image attributes. The template autoescapes — correctly, this is
+untrusted feed content — so markup renders as visible tags instead of formatting.
+`brief/render.py::snippet` now cleans it through `dedup.strip_boilerplate`, the same function
+SPEC §7.1 stage 1 already uses, reused rather than copied for the reason `FEED_BOILERPLATE`
+is shared with the resolver: a second copy eventually disagrees with the first, and then the
+brief shows something the clusterer never saw. Truncated at a word boundary, and the ellipsis
+appears only when something was actually cut.
+
+It went into `read.py` first, and `make skeleton` immediately rendered a brief with **no body
+text under any headline** — because the two render paths do not share a builder. `build.py`
+reads Athena; `skeleton.py` runs `group_stories` in process. Cleaning belongs at the render
+boundary, where every path passes through, and `test_every_render_path_gets_a_cleaned_snippet`
+now pins that. Two defects in one afternoon from the same shape of mistake: a fix applied
+where the data was read rather than where it was used.
+
+**A story about Amazon's drone delivery carried an entity link to Getty Images.** The span is
+real — `Image: Joseph Ciembroniewicz/Omaha World-Herald via Getty Images`, in the photo
+credit — and `Getty Images` is an exact complete-name match, so the resolver links it at high
+confidence and is *right to*.
+
+The obvious fix is to suppress spans inside markup. Measured, it costs a true positive and
+buys nothing:
+
+|  | precision | recall |
+|---|---|---|
+| shipped | 0.868 | 0.611 |
+| suppressing spans inside markup | 0.865 | **0.593** |
+
+Because **the labeled set agrees with the resolver.** Two of the 300 mentions sit inside
+markup and the labeler marked both as companies — `Getty Images` -> `GETY` and `The Verge` ->
+`the-verge` — which is correct for the task SPEC §7.2 actually defines. The span does name
+that company.
+
+So the eval cannot see this defect at all, and that is the finding. The brief is treating
+"a resolved mention" as "the story is about this company", and those are different claims.
+Separating them is **salience**, which is SPEC §7.4's relevance component — 4A. Changing the
+resolver to chase a display problem would have made the published number worse in exchange
+for nothing measurable, which is the trade this project spent 3.C learning not to make. Left
+alone, written down.
+
+**Two `4 - ...` filings share one accession number and cluster separately.**
+`4 - Adams Jonathan Anson (0002147278) (Reporting)` and `4 - Granite Ridge Resources, Inc.
+(0001928446) (Issuer)` are the same Form 4, indexed once under the reporting person and once
+under the issuer, both `AccNo 0001628280-26-058379`. The identifier veto splits them because
+it compares identifier *sets*, and `{CIK_person, AccNo}` != `{CIK_issuer, AccNo}`. A veto
+that fires on any difference is the conservative direction and 3.B chose it deliberately, so
+this is the cost of that choice showing up rather than a new bug. Carried to 4A with the rest
+of the EDGAR shaping.
+
+Also noted and not acted on: `fx :Tiny, open, native coding agent.` scores breadth 0.67 from
+"3 publishers (fx.sh, github.com, twitter.com)" — one Show HN submission whose outbound links
+became publisher diversity. Same family as the SEC ranking problem, same fix, same phase.
+
+### Verified
+
+    $ uv run python evals/fit_thresholds.py
+    chosen:
+      TITLE_JACCARD            0.35
+      BODY_JACCARD             0.3  (undetermined — scores identically at [0.3, 0.4, 0.5, 0.6], shipped value kept)
+      MIN_TITLE_TOKENS         4    (undetermined — scores identically at [2, 3, 4], shipped value kept)
+      MIN_BODY_TOKENS          10   (undetermined — scores identically at [10, 15, 20, 30], shipped value kept)
+      NEAR_DUPLICATE_DISTANCE  0    (held fixed — see GRID's comment)
+      MIN_SIMHASH_TOKENS       25   (held fixed — see GRID's comment)
+
+      the labeled set determines 1 of 4 searched constants; the rest are held at their
+      shipped values rather than moved by a tiebreak
+
+      train (fitted on)  precision=0.933 recall=0.636
+      HELD OUT           precision=1.000 recall=0.500
+      fixture            precision=1.000 recall=1.000
+
+    $ make eval
+    dedup        n=252   precision=0.962 recall=0.568 f1=0.714
+    dedup_fixture n=55   precision=1.000 recall=1.000 f1=1.000
+    entities     n=300   precision=0.868 recall=0.611 f1=0.717
+    all gates passed
+
+291 tests, `ruff` and `mypy` clean.
+
+### The floors, and why only one moved
+
+`dedup_fixture.min_recall` **0.90 -> 1.00**. The real sets' floors sit under their measured
+values to absorb sampling noise; the fixture has none to absorb — it is synthetic, its
+`story_key` *is* the label, and there is no draw that could have gone differently. The
+fitter's hard filter was raised to match, so it cannot choose a configuration the gate would
+then reject.
+
+`[dedup]` and `[entities]` stay where 3.B and 3.C put them, and that is a decision rather than
+an omission. They sit 0.012-0.048 under their full-set values, and **one labeled example is
+worth ~0.023 of dedup recall and ~0.019 of entity recall**. A floor closer than one example
+fails the build the first time a label is revised — a tripwire on labeling, not on accuracy.
+Floors ratchet when the measurement improves; the measurement did not improve here, it got
+better understood.
+
+One stale number fixed: `thresholds.toml` documented the CV-selected precision constraint as
+0.90 and it has been 0.85 since 3.D's change. Nothing depended on it, which is exactly why it
+drifted.
+
+### Still open, carried into 4A/4B
+
+- **Dedup recall stays 0.500 held out through 4A.** ADR-0009 adopts the embedding stage for
+  4B via Ollama rather than sentence-transformers — 1.1 GB installed, 722 MB of it torch,
+  against an httpx call to a service ADR-0002 already puts on the host and 4B already depends
+  on. The seam is `dedup.decide` and it is one branch plus a cache.
+- **The entity gap is reclassified, not closed.** `?itemDescription` in the WDQS projection,
+  then a wider candidate set — 20 of 54 linked mentions name an entity the alias index never
+  proposes — then measure against the 0.630 ceiling.
+- The identifier veto is now load-bearing for a stage that does not exist yet. 4B must not
+  implement the embedding branch ahead of it.
+
 ## The daily read *(SPEC §12's brief ladder; 3.F's acceptance)*
 
 | date | read | what it showed |
@@ -1118,31 +1359,61 @@ notability floor 3.C raised on train-half evidence had already removed it.
 | 2026-08-20 | yes | First real brief. Lead story was a 1,720-article phantom cluster — 3.0's finding, and the reason 3.B exists. |
 | 2026-08-21 | yes | Ten genuine multi-publisher stories, no phantoms. Footer correctly reports the outage and names 22h of unrecoverable window-horizon loss for `rss_tech` and `rss_verge`. Surfaced 3.B.4. |
 | 2026-08-21 (pm) | yes | First brief read off the cluster and entity tables. Surfaced four defects nothing else caught: a deployed table two columns behind its DDL, an always-on staleness warning, a 45-article simhash false merge, and a `breadth` floor that put nine SEC filings on the page. See 3.D. |
+| 2026-08-21 (eve) | yes | 3.E's read. Snippets were raw `<figure>`/`<img>` markup — fixed. An Amazon story linked to Getty Images off a photo credit, which the labeled set says is a *correct* resolution: a salience problem, not a resolution one, carried to 4A. One Form 4 appears twice, once per CIK, under one accession number. See 3.E. |
 
 Every finding in that table came from reading the output, not from a test. That is the whole
 argument for the ladder: §1's success criterion is behavioural, and a brief nobody reads is a
 brief whose defects nobody finds. 3.D is the clearest case — the code was green, both eval
 gates were green, and the page was wrong in four separate ways.
 
-### Still open
+### Still open, and where each goes
 
-- The recall gap remains the headline number to beat: 0.500 held out. That is ADR-0009's
-  question, and 3.E's.
+- **Dedup recall 0.500 held out.** ADR-0009 now answers this rather than leaving it open:
+  embeddings win the measurement, and the stage lands in 4B via Ollama. The number does not
+  move before then, and `evals/thresholds.toml` says why.
+- **Entity recall 0.556 held out.** Reclassified by ADR-0009 from "needs embeddings" to
+  "needs descriptions and a wider candidate set", both cheap, both 4B.
 - `dedup_ratio` is 1.01, which is honest rather than disappointing: this corpus really is
-  mostly unique documents. It is also the reason positions 3-10 of the brief are SEC filings
-  — there are only two or three corroborated stories in a 72-hour window for `breadth` to
-  promote, so the fix is §7.4's relevance and market-corroboration components in 4A, not more
-  clustering.
+  mostly unique documents. It is also why positions 5-10 of the brief are SEC filings —
+  there are only two or three corroborated stories in a 72-hour window for `breadth` to
+  promote. The fix is §7.4's relevance and market-corroboration components in 4A, not more
+  clustering. The `fx.sh / github.com / twitter.com` breadth inflation and the Getty Images
+  salience defect are the same phase's work.
+
+## Phase 3, closed
+
+SPEC §12's acceptance, item by item:
+
+| Asked for | Where it is |
+|---|---|
+| Spark dedup and clustering | `spark/jobs/cluster.py`, `silver.story_clusters` + `silver.article_clusters` (3.B) |
+| Entity resolution | `spark/jobs/resolve.py`, `silver.entity_mentions` + `dim_entities` SCD2 (3.C) |
+| Both labeled eval sets committed | `evals/dedup/pairs.jsonl` (252 real + 55 fixture), `evals/entities/mentions.jsonl` (300) |
+| Reported precision/recall on both, reproducible via `make eval` | dedup **1.000 / 0.500** held out, entities **0.833 / 0.556** held out; gates enforced in CI |
+| A real brief read every morning since 3.0 | Four reads across the two days since 3.0 shipped (2026-08-20, 2026-08-21), in the table above — every one found something |
+
+Two days is what "every morning since 3.0" amounts to so far, and the honest version is
+that the *streak* is short while the *rate of findings* is not — SPEC §1's month is a
+Phase 4A/5 measurement and the count is in the README rather than claimed here.
+
+The last row is the one that mattered. Of the defects this phase fixed, the ones with the
+longest reach — a 1,720-article phantom cluster, a deployed table two columns behind its DDL,
+a `breadth` floor that put nine SEC form numbers on the front page, a fitter recommending the
+constant that caused the phantom, snippets made of image attributes — **none had a failing
+test, and the eval gates were green through all of them.** SPEC §12 asks for the reading
+because the reading is the only thing that finds them.
 
 ## Then
 
-3.E ratchets the floors and writes ADR-0009 — which now has two verdicts to record rather
-than one: whether embeddings beat the lexical same-story rule (3.B's 0.500 held-out recall,
-and the `dedup_ratio` of 1.01 that says this corpus barely has duplicates to find), and
-whether they beat the lexical resolver on the `Meta`/`Apple` class 3.C cannot touch.
+Phase 4A: the ranker over real clusters (§7.4's remaining components — novelty, velocity,
+relevance, market corroboration), the health footer, email at 07:00, the maintenance DAG, and
+the four items ADR-0008 carried forward. Phase 3 adds three of its own to that list:
 
-*(superseded)* 3.D wires the brief onto `silver.story_clusters` and `silver.entity_mentions`, so the thing
-being read every morning is the thing being measured. Then 3.E ratchets the floors and writes
-ADR-0009 — which now has two verdicts to record rather than one: whether embeddings beat the
-lexical same-story rule (3.B's 0.500 held-out recall), and whether they beat the lexical
-resolver on the `Meta`/`Apple` class that 3.C cannot touch at all.
+| Item | Recorded in | Gates |
+|---|---|---|
+| **Salience vs. resolution** — the brief shows every resolved mention as a subject | 3.E | §7.4's relevance component; the Getty Images link |
+| **Publisher-diversity inflation** — one HN post's outbound links score as three publishers | 3.E | `breadth`, and the brief's top ten |
+| **EDGAR shaping** — one Form 4 clusters twice, once per CIK | 3.E | The same top ten |
+
+Phase 4B carries ADR-0009's two: the Ollama embedding stage behind `dedup.decide`, and
+`?itemDescription` plus a wider candidate set for the resolver.
