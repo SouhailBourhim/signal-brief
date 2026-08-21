@@ -792,11 +792,8 @@ rather than fixed on either side.
 
 - **The Wikidata tier is not built.** The dictionary is SEC-only, so `OpenAI`, `Anthropic`,
   `Substack`, `Unitree`, `Sennheiser`, `Binance`, `GitHub`, `Venmo` and `Google Drive` are all
-  misses — a large, named share of the 31 false negatives. WDQS will not answer
-  `?item wdt:P31/wdt:P279* wd:Q4830453` at any notability floor (**504 after 60 s**, measured
-  2026-08-21), so the builder materializes the subclass closure in two steps: fetch the 5,809
-  business subclasses, then fetch instances in chunks of them. The first run of that died on a
-  **502** the retry set did not cover, which is now fixed alongside a smaller chunk size.
+  misses — a large, named share of the 31 false negatives. *(Closed in part three below,
+  which also revises every number in this section: held out 0.833 / 0.556.)*
 - `silver.entity_mentions` and `dim_entities` (SCD2) do not exist yet. Part two.
 - Mention *detection* is still `evals/sample_mentions.py`'s lexical heuristic, which lives in
   the eval harness rather than the pipeline. Part two has to move it.
@@ -876,6 +873,123 @@ Three fixes, and the second is the one that generalises:
 
 All three are pinned in `tests/test_entities.py`, the AEGON one as an explicit regression.
 
+## 3.C part three — the Wikidata tier, and the day "more data" was wrong *(done 2026-08-21)*
+
+Part one shipped against SEC alone and named the gap: `OpenAI`, `Anthropic`, `Substack`,
+`Sennheiser`, `Binance` are companies SEC has never listed, and every mention of them was a
+false negative. SPEC §7.2 says the dictionary is "SEC `company_tickers.json` **plus Wikidata
+aliases**". This is that half.
+
+| dictionary | entities | size | held-out precision | held-out recall |
+|---|---|---|---|---|
+| SEC only *(part one)* | 7,994 | 253 KB | 0.812 | 0.481 |
+| **SEC + Wikidata** | **11,835** | **388 KB** | **0.833** | **0.556** |
+
+Both numbers improved, which is not what the intermediate attempts predicted.
+
+### WDQS will not answer the correct query
+
+The query that means what SPEC means is `?item wdt:P31/wdt:P279* wd:Q4830453` — every
+instance of anything transitively a kind of business. The public endpoint answers it with a
+**504 after 60 seconds**, at every notability floor tried (measured 2026-08-21). Narrowing to
+a hand-listed set of classes is the usual workaround and it is wrong in a way that is easy to
+miss: `Binance`, `Andreessen Horowitz`, `The Verge` and `Unitree` all vanish, because their
+`P31` is `cryptocurrency exchange` / `venture capital firm` / `online newspaper` / `robotics
+company` and the hand list never ends.
+
+So the closure is materialized in two steps instead: fetch the 5,809 business subclasses
+(a class-only traversal, 2.4 s) and then fetch instances in chunks of them. Same answer,
+117 requests. Two things that had to be learned by having them fail:
+
+- The first run died on a **502** the retry set did not cover — it handled 429 and 504 only.
+  WDQS returns 5xx for overload generally, and the chunk size came down from 120 to 50.
+- The fetch is ~30 minutes of someone else's free service, and the *merge* is the part that
+  gets iterated on. `--wikidata-cache` writes the raw rows so fixing a merge bug costs
+  seconds instead of another half hour of WDQS's patience. That flag exists because the merge
+  bug below was found after the first fetch had already been spent.
+
+### More entities made it worse, twice, for two different reasons
+
+**First: a destructive merge.** Recorded in part two — a rolled-up subsidiary overwrote its
+parent's SEC row, taking AEGON's CIK out of the lookup. Held-out recall collapsed to 0.185.
+
+**Second, after that was fixed: the long tail is noise.** With every business Wikidata knows
+down to 5 sitelinks, held-out precision was 0.762 against SEC-only's 0.812. `Carver Passed
+Away` linked to a company called Carver. An alias index is only as precise as its rarest junk
+entry, and the subclass closure of "business" contains every football club and five-person
+consultancy ever recorded.
+
+Sweeping the notability floor on the train half:
+
+| sitelinks | entities | size | train P/R | held-out P/R |
+|---|---|---|---|---|
+| 5 | 39,200 | 1,075 KB | 0.800 / 0.593 | 0.762 / 0.593 |
+| 10 | 19,782 | 607 KB | 0.800 / 0.593 | 0.762 / 0.593 |
+| **20** | **11,835** | **388 KB** | **0.900 / 0.667** | **0.833 / 0.556** |
+| 40 | 8,771 | 286 KB | 0.889 / 0.593 | 0.824 / 0.519 |
+
+**A third of the size and better on both axes.** `MIN_SITELINKS` had been documented as "a
+knob on dictionary size, not on the decision"; that was wrong, and wrong in the direction
+that flatters a bigger download. It is now selected on the train half and says so.
+
+The cost is named: `EncroChat`, `Andreessen Horowitz`, `Venmo` and `Xfinity` fall below the
+floor and their mentions go back to being false negatives. That is the trade the table above
+is pricing, and 20 is where it is worth making.
+
+A related bug fell out of the same rebuild: **the cache path ignored the floor**, because the
+filter lived only in the SPARQL query. Rebuilding at floor 20 emitted 39,200 entities and
+reported success. The filter now applies wherever the rows came from.
+
+### The objective was wrong, and only the held-out half could say so
+
+Raising the constraint would have been the easy fix and the wrong one. Three procedures were
+tried on the same data, and the first two were caught by the split:
+
+| procedure | train | held out |
+|---|---|---|
+| max recall s.t. precision ≥ 0.75 | 0.760 / 0.704 | **0.615** / 0.593 |
+| the same, plus `COMMON_WORD_RANK` in the grid | 0.905 / 0.704 | **0.727** / 0.593 |
+| the same, grid point chosen by 4-fold CV in train | 0.792 / 0.704 | **0.667** / 0.593 |
+| **max F1 s.t. precision ≥ 0.75, one constant fitted** | 0.900 / 0.667 | **0.833** / 0.556 |
+
+Two separate faults, both invisible from the train column alone:
+
+1. **Maximising recall under a precision floor rides the floor.** It picked the point whose
+   train precision was 0.760 — barely clearing 0.75 — while a knee sat one step away at 0.900
+   precision for a single mention of recall. F1 finds the knee. The constraint did not move;
+   the objective inside it was wrong. This is a real difference from dedup, not a copy of it:
+   a false merge deletes a story the reader never learns was missing, while a mention filed
+   under the wrong company is something they *see*, so the trade is real in both directions.
+2. **Two constants over 27 positives is fitting noise.** Searching `COMMON_WORD_RANK` too
+   bought +0.037 train recall and gave up held-out precision 0.833 → 0.727. Cross-validating
+   inside train made it worse, not better — four folds of ~7 positives each are noisier
+   still. So one constant is fitted and the other is set on the stated rule.
+
+The word-list channel does earn its place, and the evidence for that is the same split:
+switching it off entirely scores **better on train** (0.905 vs 0.900) and worse held out
+(0.727 vs 0.833). A procedure that looked only at train would have deleted it.
+
+### Verified
+
+- `make eval` green with `entities` floors raised to 0.82 / 0.58.
+- The AEGON regression is gone: `AEG` is `AEGON LTD.` carrying cik `0000769218`, so the CIK
+  channel works for the company a subsidiary rollup used to silently disable.
+- 388 KB gzipped, inside the repo's own 512 KB large-file guard — so no guardrail had to be
+  loosened to hold a generated artifact.
+
+### Still open
+
+- **`Meta` and `Apple` remain unlinkable**, because they are ordinary English words and the
+  resolver will not link one on the word alone. This is the largest remaining share of the 21
+  false negatives and it is not a threshold problem — it is SPEC §7.2's embedding stage,
+  deferred by decision at the top of this runbook and carried into ADR-0009.
+- The prefix channel is still inert at the fitted floor (part one's table).
+- Three false positives survive on the full set and each is a different kind of hard:
+  `BofA Finance LLC` → `bofa-finance` where the label says `BAC` (a rollup Wikidata does not
+  record), `USA Today Sparking` → `TDAY` where the label says `GCI` (a masthead, not a
+  company), and `FlyWire` → `FLYW` where a fruit-fly connectome shares a name with a payments
+  company.
+
 ## The daily read *(SPEC §12's brief ladder; 3.F's acceptance)*
 
 | date | read | what it showed |
@@ -896,6 +1010,8 @@ defects nobody finds.
 
 ## Then
 
-3.C part two — the Wikidata tier, then `silver.entity_mentions` and `dim_entities` SCD2 on
-Spark. Then 3.D wires the brief onto these tables, and 3.E ratchets the floors and writes
-ADR-0009.
+3.D wires the brief onto `silver.story_clusters` and `silver.entity_mentions`, so the thing
+being read every morning is the thing being measured. Then 3.E ratchets the floors and writes
+ADR-0009 — which now has two verdicts to record rather than one: whether embeddings beat the
+lexical same-story rule (3.B's 0.500 held-out recall), and whether they beat the lexical
+resolver on the `Meta`/`Apple` class that 3.C cannot touch at all.

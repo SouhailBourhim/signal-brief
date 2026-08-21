@@ -68,13 +68,30 @@ WORDS_URL = (
 # materializes.
 BUSINESS_CLASS = "Q4830453"
 
-# A company with fewer Wikipedia editions than this is not one a daily brief will mention,
-# and every one of them is another string that can be mistaken for an ordinary word. Chosen
-# on coverage rather than fitted: at 5, the floor admits `Substack` (24), `Hugging Face`
-# (29) and `EncroChat` (17) — private companies the labeled set actually contains — while
-# holding the download to ~28k rows. It is a knob on *dictionary size*, not on the decision,
-# so it does not belong in `evals/fit_thresholds.py` with the constants that are.
-MIN_SITELINKS = 5
+# How notable a Wikidata company has to be to enter the dictionary, in Wikipedia editions.
+#
+# **This is a size knob that turned out to be an accuracy knob, and the measurement is the
+# opposite of what "more data is better" predicts.** Swept against the labeled set's train
+# half, holding the resolver's own constants fixed:
+#
+#     floor   entities    KB     train P/R      held-out P/R
+#         5     39,200  1,075   0.800 / 0.593   0.762 / 0.593
+#        10     19,782    607   0.800 / 0.593   0.762 / 0.593
+#        20     11,835    388   0.900 / 0.667   0.833 / 0.556
+#        40      8,771    286   0.889 / 0.593   0.824 / 0.519
+#
+# A third of the size and better on both precision and recall. The reason is that an alias
+# index is only as precise as its rarest junk entry: the subclass closure of "business"
+# includes every football club and five-person consultancy Wikidata has ever recorded, and
+# each one is another everyday word that can be mistaken for a company. `Carver Passed Away`
+# linked to a company called Carver at floor 5 and does not at 20.
+#
+# So this is **selected on the train half**, which contradicts what this comment said when
+# the value was 5 and the claim was that it is "a knob on dictionary size, not on the
+# decision". That claim was wrong, and it was wrong in the direction that flatters a bigger
+# download. It is kept out of `evals/fit_thresholds.py` all the same, because refitting it
+# means a 30-minute network fetch and the fitter has to run offline in CI.
+MIN_SITELINKS = 20
 
 # WDQS is a shared free service with a published etiquette: one query at a time, a real
 # User-Agent, and back off when told to. Being rate-limited mid-build is recoverable; being
@@ -217,7 +234,17 @@ def fetch_wikidata(
 
 
 def _wikidata_entities(seen: dict[str, Any]) -> tuple[list[Entity], dict[str, str]]:
-    """Raw SPARQL bindings -> entities and a `child id -> parent name` map."""
+    """Raw SPARQL bindings -> entities and a `child id -> parent name` map.
+
+    `MIN_SITELINKS` is applied here as well as in the query, and it has to be: a cache is
+    written at whatever floor it was fetched with, so a rebuild at a stricter floor would
+    silently ignore the constant and produce a dictionary nobody asked for. Measured the
+    hard way — the first rebuild after raising the floor emitted 39,200 entities instead of
+    11,835 and reported success.
+    """
+    seen = {
+        qid: row for qid, row in seen.items() if int(row["sitelinks"]["value"]) >= MIN_SITELINKS
+    }
     entities = []
     qid_to_id: dict[str, str] = {}
     qid_to_name: dict[str, str] = {}

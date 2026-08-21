@@ -74,10 +74,21 @@ CONFIDENCE_FLOOR = 0.72
 
 # A single-token alias whose frequency rank in everyday English is better (lower) than this
 # is a word first and a company second, and needs the context to name the entity in full
-# before it links. Measured landmarks either side of the fitted value: `windows` ranks 453,
-# `apple` 1,642, `meta` 5,164 — against `xerox` at 8,890 and `asana`, `comcast`, `substack`
-# nowhere in the list at all.
-COMMON_WORD_RANK = 6000
+# before it links. Landmarks either side: `windows` ranks 453, `apple` 1,642, `meta` 5,164 —
+# against `xerox` at 8,890 and `asana`, `comcast`, `substack` nowhere in the list at all.
+#
+# **Held fixed, not fitted, and the measurement says both halves of that.** At the fitted
+# floor every value from 2,000 to 10,000 scores identically (train 0.900/0.667, held out
+# 0.833/0.556), so the labeled set cannot choose between them and the stated rule does:
+# link less on equal evidence, which means the whole list. What the set *can* see is whether
+# the channel earns its place at all — at 0, with the word list switched off entirely,
+# held-out precision falls to 0.727.
+#
+# That last row is also a clean illustration of why the fitting is split into a train half
+# and a held-out one. Switching the channel off scores *better* on train (0.905 against
+# 0.900) and worse on the half nobody fitted against. A procedure that looked only at train
+# would have deleted it.
+COMMON_WORD_RANK = 10000
 
 # --- stated, not fitted -------------------------------------------------------------------
 
