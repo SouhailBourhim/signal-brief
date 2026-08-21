@@ -801,6 +801,81 @@ rather than fixed on either side.
 - Mention *detection* is still `evals/sample_mentions.py`'s lexical heuristic, which lives in
   the eval harness rather than the pipeline. Part two has to move it.
 
+## 3.C part two — `entity_mentions`, `dim_entities`, and the resolve DAG *(done 2026-08-21)*
+
+The transform half. `spark/jobs/resolve.py` reads a window, detects mentions, resolves each
+through the seam part one built, and writes two tables. `airflow/dags/resolve_dag.py` runs it
+at 04:30, half an hour ahead of `cluster`, so 3.D's brief finds both tables rebuilt from the
+same day's silver rather than one of them from yesterday.
+
+### Two tables, two different relationships with time
+
+`silver.entity_mentions` is a **function of (article, dictionary, algorithm)** — not a fact
+about the world the way a bronze document is. Re-resolving after a dictionary rebuild has to
+*replace* an article's mentions or the table accumulates contradictory answers, so it is
+written with `overwritePartitions`, the same argument `story_clusters` makes.
+
+It is deliberately **not** keyed by the resolve window, and that is the difference from
+clustering worth stating: a cluster genuinely belongs to the window that produced it, because
+the same article clusters differently in overlapping windows. A mention does not. `Apple` at
+character 41 of one article resolves the same way whichever window asks, so window-keying
+would store one answer three times and invite three different ones.
+
+`silver.dim_entities` is **SCD2** — the only table in this repo where a row is superseded
+rather than replaced. SPEC §7.2's reason is literal rather than decorative: an article
+published the day before Facebook, Inc. became Meta Platforms, Inc. did not retroactively
+become an article about Meta, and `evals/entities/README.md` says so too ("a company that has
+renamed is labeled with the entity valid **at the article's publication date**"). A dimension
+that overwrote `canonical_name` could not answer that, and those labels would be unscoreable
+against it.
+
+This is also the concrete answer to "why is the dictionary a committed snapshot rather than a
+live SEC call": a live lookup has no `valid_from` to give. `built_at` is the boundary.
+
+`rank` and `aliases` are deliberately **not** SCD2-tracked. SEC reorders its file constantly
+and Wikidata gains aliases weekly; treating either as a rename would fill the dimension with
+history that records nothing about the world.
+
+### Detection moved into the pipeline, and the move is the point
+
+The proper-noun heuristic lived in `evals/sample_mentions.py`. The 300 hand labels were drawn
+against *those* spans at *those* offsets — so a second implementation inside the Spark job
+would mean the published precision/recall describes spans nothing in the pipeline ever
+produces. It now lives in `signal_core/entities/mentions.py` and the sampler imports it.
+
+Verified rather than asserted: **298 of the 300 labeled mentions are re-detected** by running
+the shared detector over each mention's own stored context. The two misses (`Since`, `Any
+Device Anywhere`) are spans that sat at a context boundary, where the ±200-character excerpt
+cuts a proper-noun run the full article text continues — an artifact of the check, not drift
+in the detector. Both are labeled `null`.
+
+### What broke on first real use
+
+**A rollup silently disabled the CIK channel for the company it rolled up to.** Found while
+measuring the Wikidata tier, not by a test.
+
+A Wikidata subsidiary with a tradable parent was emitted as an `Entity` carrying the
+*parent's* id. Entities are keyed by `entity_id`, so the subsidiary overwrote its parent's SEC
+row: `Transamerica Corporation` displaced `AEGON LTD.`, taking `cik 0000769218` out of
+`by_cik` with it. A filing that **stated its own CIK** then failed the most reliable channel
+in the resolver and fell through to minting a slug — `AEGON LTD.` resolved to `aegon` instead
+of `AEG`. Nothing raised; the accuracy just dropped.
+
+Three fixes, and the second is the one that generalises:
+
+1. A rollup now attaches the subsidiary's names as **aliases of the parent** rather than
+   becoming an entity with the parent's id. Which is also the more honest model: `Venmo` is
+   another name a reader uses for the company `PYPL` denotes.
+2. `dictionary.build` is **first-writer-wins** on `entity_id`, and `build.py` puts SEC first.
+   A Wikidata row can no longer displace a ticker's canonical name, CIK or rank whatever else
+   changes.
+3. Parents are matched **through the SEC name index**, not by slug equality. Wikidata says
+   `PayPal` where SEC says `PayPal Holdings, Inc.`; `paypal` never equals `paypal-holdings`,
+   so equality dropped every rollup whose parent had a legal name — including the `Venmo` →
+   `PYPL` case the hand labels specifically call out.
+
+All three are pinned in `tests/test_entities.py`, the AEGON one as an explicit regression.
+
 ## The daily read *(SPEC §12's brief ladder; 3.F's acceptance)*
 
 | date | read | what it showed |
