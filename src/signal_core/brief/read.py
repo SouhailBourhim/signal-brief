@@ -20,6 +20,7 @@ coercion below is the whole interesting part of this module.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -52,6 +53,30 @@ _ARTICLE_COLUMNS = (
     "content_hash",
     "timestamp_flagged",
     "story_key",
+)
+
+# What the ranker and the template read off a cluster. `body_text` is deliberately absent:
+# `silver.story_clusters` stores the *decision*, `silver.articles` stores the *content*, and
+# duplicating a few hundred KB of prose into the cluster table to save one join would make
+# the two disagree the first time an article was re-normalized.
+_CLUSTER_COLUMNS = (
+    "cluster_id",
+    "canonical_article_id",
+    "title",
+    "url_canonical",
+    "publisher_domain",
+    "published_at",
+    "fetched_at",
+    "first_seen",
+    "last_seen",
+    "article_count",
+    "distinct_publisher_count",
+    "publishers",
+    "timestamp_flagged",
+    "algo_version",
+    "ordering_key",
+    "window_start",
+    "window_end",
 )
 
 _HEALTH_COLUMNS = (
@@ -199,6 +224,194 @@ def read_articles(
         client=client,
     )
     return [_coerce_article(row) for row in result.rows], result
+
+
+# Trino renders `array<string>` into a result set as `[a, b, c]` — brackets, comma-space
+# separated, no quoting. There is no escaping in that rendering, so a publisher domain
+# containing a comma would split wrongly; domains cannot, which is why this is safe here and
+# would not be for arbitrary text.
+_ARRAY = re.compile(r"^\[(.*)\]$", re.DOTALL)
+
+
+def _parse_array(value: str | None) -> list[str]:
+    if not value:
+        return []
+    match = _ARRAY.match(value.strip())
+    inner = match.group(1) if match else value
+    return [item.strip() for item in inner.split(",") if item.strip()]
+
+
+def _coerce_cluster(row: dict[str, str | None]) -> dict[str, Any]:
+    """One `silver.story_clusters` row into the dict shape `ranker` already speaks.
+
+    Identical keys to what `dedup.group_edges` produces in-process, so `score_cluster` cannot
+    tell the two paths apart — which is the property that makes 3.0's in-process brief and
+    3.D's table-backed one comparable at all.
+    """
+    return {
+        "cluster_id": row["cluster_id"] or "",
+        "canonical_article_id": row["canonical_article_id"] or "",
+        "title": row["title"] or "",
+        "url_canonical": row["url_canonical"] or "",
+        "publisher_domain": row["publisher_domain"] or "",
+        "published_at": _parse_timestamp(row["published_at"]),
+        "fetched_at": _parse_timestamp(row["fetched_at"]),
+        "first_seen": _parse_timestamp(row["first_seen"]),
+        "last_seen": _parse_timestamp(row["last_seen"]),
+        "article_count": _parse_int(row["article_count"]) or 1,
+        "distinct_publisher_count": _parse_int(row["distinct_publisher_count"]) or 1,
+        "publishers": _parse_array(row["publishers"]),
+        "timestamp_flagged": bool(_parse_bool(row["timestamp_flagged"])),
+        # Filled by `read_clusters` from the join, not stored on the cluster.
+        "body_text": "",
+        # Carried so the footer can say which algorithm produced what is on the page. A
+        # brief rendered from clusters built by a version nobody remembers is not
+        # reproducible, whatever the ordering key says.
+        "algo_version": row["algo_version"],
+        "ordering_key": row["ordering_key"],
+        "entities": [],
+    }
+
+
+@dataclass(frozen=True)
+class ClusterRead:
+    """The newest clustered window, and enough about it to tell stale from empty.
+
+    Both of those render as "no stories" and they are completely different faults: an empty
+    window means ingestion stopped, a stale one means the cluster job did. SPEC §11's whole
+    argument is that silence is the failure mode, so the brief has to be able to say which.
+    """
+
+    clusters: list[dict[str, Any]] = field(default_factory=list)
+    window_start: datetime | None = None
+    window_end: datetime | None = None
+    algo_version: str | None = None
+
+    @property
+    def articles_in(self) -> int:
+        """Articles that reached a cluster. Post-exact-dedup by construction, which is the
+        same denominator `cluster_window` used for `dedup_ratio`."""
+        return sum(c["article_count"] for c in self.clusters)
+
+
+def read_clusters(
+    since: datetime,
+    until: datetime,
+    *,
+    database: str | None = None,
+    workgroup: str | None = None,
+    client: Any | None = None,
+) -> tuple[ClusterRead, QueryResult]:
+    """The most recent window in `silver.story_clusters`, with each head's body text.
+
+    **The newest window, not a time range.** Consecutive daily runs share 48 of their 72
+    hours, so one article appears in three windows under three possible `cluster_id`s
+    (`spark/jobs/cluster.py`). Reading a range would show the same story three times; the
+    brief wants the newest run's answer and nothing else.
+
+    The join to `silver.articles` is what supplies the snippet under each headline. It is
+    bounded by the same `event_date` predicate as the cluster window so the scan is
+    partition-pruned — without it this reads the whole articles table to fetch a few hundred
+    rows, which is SPEC §10.1's line item arriving by the back door.
+    """
+    columns = ", ".join(f"c.{name}" for name in _CLUSTER_COLUMNS)
+    sql = f"""
+        SELECT {columns}, a.body_text
+        FROM silver.story_clusters c
+        LEFT JOIN silver.articles a
+          ON a.article_id = c.canonical_article_id
+         AND a.event_date >= timestamp '{_sql_timestamp(since)}'
+         AND a.event_date < timestamp '{_sql_timestamp(until)}'
+        WHERE c.window_start = (SELECT max(window_start) FROM silver.story_clusters)
+    """
+    result = run_query(
+        sql,
+        database=database or settings.athena_database,
+        workgroup=workgroup or settings.athena_workgroup,
+        client=client,
+    )
+
+    clusters = []
+    for row in result.rows:
+        cluster = _coerce_cluster(row)
+        cluster["body_text"] = row.get("body_text") or ""
+        clusters.append(cluster)
+
+    first = result.rows[0] if result.rows else {}
+    return (
+        ClusterRead(
+            clusters=clusters,
+            window_start=_parse_timestamp(first.get("window_start")),
+            window_end=_parse_timestamp(first.get("window_end")),
+            algo_version=first.get("algo_version"),
+        ),
+        result,
+    )
+
+
+def read_cluster_entities(
+    since: datetime,
+    until: datetime,
+    *,
+    min_mentions: int = 1,
+    database: str | None = None,
+    workgroup: str | None = None,
+    client: Any | None = None,
+) -> tuple[dict[str, list[dict[str, Any]]], QueryResult]:
+    """`cluster_id -> the companies its articles mention`, most-mentioned first.
+
+    Three tables, each doing the one job it exists for: `article_clusters` says which
+    articles are in a cluster, `entity_mentions` says which companies those articles name,
+    and `dim_entities` says what those ids mean **as of now** (`is_current`).
+
+    Unlinked mentions are excluded here rather than filtered later. They are the majority of
+    the table and the correct answer for most spans (SPEC §7.2), but a brief has nothing to
+    show for "this article mentioned something that is not a company".
+    """
+    sql = f"""
+        SELECT ac.cluster_id AS cluster_id,
+               m.entity_id AS entity_id,
+               arbitrary(e.canonical_name) AS canonical_name,
+               arbitrary(e.ticker) AS ticker,
+               count(*) AS mentions
+        FROM silver.article_clusters ac
+        JOIN silver.entity_mentions m
+          ON m.article_id = ac.article_id
+         AND m.event_date >= timestamp '{_sql_timestamp(since)}'
+         AND m.event_date < timestamp '{_sql_timestamp(until)}'
+        LEFT JOIN silver.dim_entities e
+          ON e.entity_id = m.entity_id
+         AND e.is_current
+        WHERE ac.window_start = (SELECT max(window_start) FROM silver.article_clusters)
+          AND m.entity_id IS NOT NULL
+        GROUP BY ac.cluster_id, m.entity_id
+        HAVING count(*) >= {min_mentions}
+    """
+    result = run_query(
+        sql,
+        database=database or settings.athena_database,
+        workgroup=workgroup or settings.athena_workgroup,
+        client=client,
+    )
+
+    by_cluster: dict[str, list[dict[str, Any]]] = {}
+    for row in result.rows:
+        cluster_id = row["cluster_id"] or ""
+        entity_id = row["entity_id"] or ""
+        by_cluster.setdefault(cluster_id, []).append(
+            {
+                "entity_id": entity_id,
+                # An id with no dimension row is a resolver/loader skew, not a reason to drop
+                # the mention — falling back to the id keeps it visible in the brief, where
+                # it is a lot more likely to be noticed than in a table.
+                "canonical_name": row.get("canonical_name") or entity_id,
+                "ticker": row.get("ticker"),
+                "mentions": _parse_int(row.get("mentions")) or 1,
+            }
+        )
+    for entities in by_cluster.values():
+        entities.sort(key=lambda e: (-e["mentions"], e["entity_id"]))
+    return by_cluster, result
 
 
 def _coerce_health(row: dict[str, str | None]) -> SourceHealth:

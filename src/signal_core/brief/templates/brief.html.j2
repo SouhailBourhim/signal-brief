@@ -24,6 +24,13 @@
           font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .meta .flag { color: var(--accent); }
   p.body { margin: .5rem 0 0; color: var(--fg); }
+  /* Companies resolved out of the story's articles (SPEC 7.2). Chips rather than a comma
+     list because the ticker has to read as attached to its company and not to the next one. */
+  p.entities { margin: .45rem 0 0; display: flex; flex-wrap: wrap; gap: .3rem; }
+  .entity { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .72rem;
+            color: var(--muted); border: 1px solid var(--rule); border-radius: 3px;
+            padding: .05rem .35rem; white-space: nowrap; }
+  .entity .ticker { color: var(--accent); }
   footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--rule);
            font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .74rem;
            color: var(--muted); }
@@ -54,6 +61,13 @@
       {% for k, v in c.score_components.items() %}· {{ k }} {{ '%.2f'|format(v) }}{% endfor %}
       {% if c.timestamp_flagged %}<span class="flag">· timestamp unverified</span>{% endif %}
     </div>
+    {% if c.entities %}
+    <p class="entities">
+      {% for e in c.entities %}
+      <span class="entity">{{ e.canonical_name }}{% if e.ticker %} <span class="ticker">{{ e.ticker }}</span>{% endif %}</span>
+      {% endfor %}
+    </p>
+    {% endif %}
     <p class="body">{{ c.body_text }}</p>
   </article>
   {% else %}
@@ -66,7 +80,9 @@
     · {{ health.articles_in }} articles in
     · {{ health.clusters_out }} clusters out
     · dedup {{ health.dedup_ratio }}x
+    {% if health.exact_duplicates_removed is not none %}
     · {{ health.exact_duplicates_removed }} exact dupes removed
+    {% endif %}
     · cache {{ '%.0f'|format(health.cache_hit_rate * 100) }}%
     · {{ health.runtime_seconds }}s
     · {{ '{:,}'.format(health.bytes_scanned) }} bytes scanned

@@ -28,7 +28,21 @@ def score_cluster(cluster: dict[str, Any], now: datetime | None = None) -> dict[
 
     # Independent publishers, saturating: the tenth outlet reprinting a story says much
     # less than the second did.
-    breadth = min(cluster["distinct_publisher_count"] / 4.0, 1.0)
+    #
+    # **One publisher is zero breadth, not a quarter of it.** SPEC §7.4 defines this
+    # component as the count of *independent* publishers, and a single publisher has no
+    # independent corroboration by construction — so the scale starts at the second one.
+    #
+    # It was `count / 4`, which gave every singleton 0.25 and, at a 0.6 weight, a floor of
+    # 0.15 that nothing could fall below. 3.D found what that does to a real brief: EDGAR
+    # emits filings continuously, so there is always a batch minutes old scoring
+    # `0.15 + 0.4 x 1.00 = 0.55`, and **nine of the ten stories on the page were SEC form
+    # numbers** — beating a two-publisher story that was four hours old. A brief is useful
+    # because of what it omits (§7.4), and it was omitting the news.
+    #
+    # This is a correction to what `breadth` means, not the arrival of §7.4's remaining
+    # components. Novelty, velocity, relevance and market corroboration are still 4A.
+    breadth = min(max(cluster["distinct_publisher_count"] - 1, 0) / 3.0, 1.0)
 
     # `last_seen` — when the story was last *covered*, not when it broke. The distinction is
     # the whole point of ranking a cluster rather than an article: a story still drawing

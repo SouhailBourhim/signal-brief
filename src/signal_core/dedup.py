@@ -55,20 +55,42 @@ from signal_core.timeutil import ensure_utc
 # than tuned.
 
 # Simhash distance below which two texts are the same text, over CLEANED text — markup
-# stripped, feed field names and identifiers dropped. Phase 0 used 14 against raw text and
-# that is where 9 of its false merges came from: two EDGAR filings are mostly identical
-# boilerplate, so their raw simhashes sat well inside 14 bits of each other.
+# stripped, feed field names and identifiers dropped. **Zero: exact equality of the cleaned
+# simhash, and nothing looser.** The trail matters more than the value.
 #
-# **The labeled set does not distinguish this constant at all.** Every distance in the grid,
-# 0 through 12, scores identically on precision and recall — because once boilerplate is
-# stripped, the title path already catches everything stage 2 would have. That is a finding
-# about this corpus, not a reason to delete the stage: it means the value is chosen on
-# documented intent rather than measured, and 12 is the value at which SPEC §7.1's stage 2
-# does its stated job of catching reprints and light edits (measured at 8-9 bits) without
-# reaching semantic rewrites (~21 bits, which is stage 3's work). It costs nothing measurable
-# and covers a case this corpus is too thin to contain: identical prose under a new headline,
-# where the title path would miss and `exact_dedup`'s raw-text hash would too.
-NEAR_DUPLICATE_DISTANCE = 12
+# Phase 0 used 14 against raw text, and 9 of its false merges came from it — two EDGAR
+# filings are mostly identical boilerplate, so their raw simhashes sat well inside 14 bits.
+# 3.B stripped the boilerplate and set 12 on documented intent, recording honestly that
+# **the labeled set cannot distinguish this constant at all**: every value from 0 to 12
+# scores identically on both the real pairs and the Phase 0 fixture, because once
+# boilerplate is gone the title path already catches everything this stage would.
+#
+# 3.B also wrote down why that was a risk rather than a curiosity — a per-pair error rate
+# far too small for a 252-pair eval to detect is still thousands of edges over a window's
+# millions of pairs, and transitive closure chains them. **3.D watched it happen twice.**
+# Reading the real brief, the lead cluster held 45 articles: Disney/FCC, a Grok exploit,
+# four Show HN posts, a Pixel deal and a corgi tracker. Two of the edges holding it together:
+#
+#     Show HN: Markdown Buddy         vs  Meet the startup helping Wall Street...
+#       title 0.00  body 0.02  hamming 12
+#     Show HN: Keystroke Biometrics   vs  Show HN: Check if any of the $656M...
+#       title 0.00  body 0.05  hamming 10   (224 and 111 body tokens — not a short-text case)
+#
+# Lowering 12 -> 10 removed the first and not the second, which is the point at which the
+# right answer stops being "tune it down another bit". A 64-bit simhash over the ~150 cleaned
+# tokens of a news body does not have the separation this stage assumes: measured over real
+# articles clearing `MIN_SIMHASH_TOKENS`, unrelated pairs collide at 0.065% by distance 11
+# and 0.9% by 14, and the tail reaches 10.
+#
+# At 0 the stage cannot collide by accident, and it still does the job SPEC §7.1 gives it —
+# identical prose republished under a different headline, which `exact_dedup`'s raw-text hash
+# misses because the headline changed the bytes. What it gives up is light edits at 8-9 bits,
+# and those are precisely what the title path already catches.
+#
+# **This is not a claim that banded LSH is useless.** It is a claim about this corpus: six
+# feeds with almost no true syndication (`dedup_ratio` 1.01). A corpus with real newswire
+# reprints would justify revisiting it — with a measurement, on that corpus.
+NEAR_DUPLICATE_DISTANCE = 0
 
 # Title overlap above which two articles report the same event. Titles carry the signal that
 # survives length asymmetry: measured across the 252 labeled pairs, the median title overlap

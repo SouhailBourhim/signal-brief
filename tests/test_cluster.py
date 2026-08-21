@@ -176,3 +176,47 @@ def test_blocking_finds_every_pair_all_pairs_would(spark, window):
     assert sorted(c["cluster_id"] for c in reference.clusters) == sorted(
         r["cluster_id"] for r in _rows(spark, CLUSTERS_TABLE)
     )
+
+
+def test_a_ddl_that_grew_a_column_reconciles_an_existing_table(spark):
+    """3.B.4 added `first_seen`/`last_seen` and `CREATE TABLE IF NOT EXISTS` never noticed.
+
+    The deployed table kept its original 17 columns for days, silently, and the failure
+    surfaced from the brief as `COLUMN_NOT_FOUND` — a long way from the change that caused
+    it. This pins the reconciliation rather than the incident.
+    """
+    from signal_core.spark.jobs.cluster import CLUSTERS_DDL, ensure_tables
+    from signal_core.spark.tables import ensure_columns
+
+    ensure_tables(spark)
+    spark.sql(f"ALTER TABLE {CLUSTERS_TABLE} DROP COLUMN last_seen")
+    assert "last_seen" not in {f.name for f in spark.table(CLUSTERS_TABLE).schema.fields}
+
+    added = ensure_columns(spark, CLUSTERS_TABLE, CLUSTERS_DDL)
+
+    assert added == ["last_seen"]
+    assert "last_seen" in {f.name for f in spark.table(CLUSTERS_TABLE).schema.fields}
+
+
+def test_reconciliation_adds_nothing_when_the_table_already_matches(spark):
+    """Idempotence: every run calls this, and a schema change reported on every run is a
+    schema change nobody reads."""
+    from signal_core.spark.jobs.cluster import CLUSTERS_DDL, ensure_tables
+    from signal_core.spark.tables import ensure_columns
+
+    ensure_tables(spark)
+    assert ensure_columns(spark, CLUSTERS_TABLE, CLUSTERS_DDL) == []
+
+
+def test_an_added_column_is_nullable_whatever_the_ddl_says(spark):
+    """Iceberg will not add a required column to a table that already has rows, and a
+    `NOT NULL` in a DDL is a statement about writers rather than about history."""
+    from signal_core.spark.jobs.cluster import CLUSTERS_DDL, ensure_tables
+    from signal_core.spark.tables import ensure_columns
+
+    ensure_tables(spark)
+    spark.sql(f"ALTER TABLE {CLUSTERS_TABLE} DROP COLUMN first_seen")
+    ensure_columns(spark, CLUSTERS_TABLE, CLUSTERS_DDL)
+
+    field = next(f for f in spark.table(CLUSTERS_TABLE).schema.fields if f.name == "first_seen")
+    assert field.nullable

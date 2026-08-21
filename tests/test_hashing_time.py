@@ -11,10 +11,13 @@ def test_content_hash_ignores_formatting_but_not_words():
     assert content_hash("hello world") != content_hash("hello worlds")
 
 
-def test_simhash_catches_light_edits():
-    """SPEC §7.1 stage 2: reprints and light rewrites, which is all simhash claims."""
-    from signal_core.dedup import NEAR_DUPLICATE_DISTANCE
+def test_simhash_separates_a_light_edit_from_unrelated_text():
+    """A property of the hash, independent of what the pipeline does with it.
 
+    A one-word edit lands around 8 bits and an unrelated article far above it, which is what
+    makes simhash a meaningful signal at all. Whether the *pipeline* acts on 8 bits is a
+    separate decision, pinned below.
+    """
     a = simhash64(
         "Northwind said Tuesday it would acquire Lumen Robotics in a cash deal "
         "valued at 2.4 billion dollars, its largest purchase to date"
@@ -28,24 +31,40 @@ def test_simhash_catches_light_edits():
         "economists expected, while core inflation held steady"
     )
 
-    assert hamming(a, edited) <= NEAR_DUPLICATE_DISTANCE
-    assert hamming(a, unrelated) > NEAR_DUPLICATE_DISTANCE
+    assert hamming(a, edited) < hamming(a, unrelated)
+    assert hamming(a, edited) <= 12, "a one-word edit is a small distance"
+    assert hamming(a, unrelated) > 12, "unrelated text is not"
 
 
-def test_simhash_does_not_claim_to_see_semantic_rewrites():
-    """Guards the layering: if this ever passes, stage 3 has been folded into stage 2 by
-    accident and the dedup metrics stop meaning what §7.1 says they mean."""
+def test_the_pipeline_acts_on_exact_equality_only():
+    """The threshold is 0, and this pins the reason rather than the number.
+
+    3.D measured unrelated real articles colliding inside 10 and 12 bits — 224-token bodies
+    with title overlap 0.00 — and transitive closure chained them into a 45-article cluster
+    holding Disney/FCC, a Grok exploit and a corgi tracker. Both labeled sets score
+    identically at every distance from 0 to 12, so the tolerance bought nothing measurable
+    and cost that. See `dedup.NEAR_DUPLICATE_DISTANCE` for the full trail.
+
+    A light edit is therefore NOT caught here; it is caught by the title path, which is what
+    3.B measured it to be caught by all along.
+    """
     from signal_core.dedup import NEAR_DUPLICATE_DISTANCE
 
-    a = simhash64(
-        "Northwind said Tuesday it would acquire Lumen Robotics in a cash deal "
-        "valued at 2.4 billion dollars"
+    assert NEAR_DUPLICATE_DISTANCE == 0
+
+    a = simhash64("Northwind said Tuesday it would acquire Lumen Robotics for 2.4 billion")
+    edited = simhash64("Northwind said Tuesday it would acquire Lumen Robotics for 2.5 billion")
+    assert hamming(a, edited) > NEAR_DUPLICATE_DISTANCE
+
+    # ...and the same edit is still one story, because `decide` reads the titles.
+    from signal_core.dedup import is_same_story
+
+    assert is_same_story(
+        "Northwind acquires Lumen Robotics in cash deal",
+        "",
+        "Northwind acquires Lumen Robotics in a cash deal",
+        "",
     )
-    reworded = simhash64(
-        "Lumen Robotics will be acquired by Northwind for 2.4 billion "
-        "dollars in cash, the companies confirmed Tuesday"
-    )
-    assert hamming(a, reworded) > NEAR_DUPLICATE_DISTANCE
 
 
 def test_simhash_identical_text_is_distance_zero():

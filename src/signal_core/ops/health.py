@@ -154,7 +154,12 @@ class RunHealth:
     sources: list[SourceHealth] = field(default_factory=list)
     articles_in: int = 0
     clusters_out: int = 0
-    exact_duplicates_removed: int = 0
+    # `None` means "not measured on this path", which is a different statement from zero and
+    # renders as "—". Since 3.D the brief reads clusters from a table rather than building
+    # them, so it genuinely does not know how many exact duplicates were collapsed —
+    # `cluster_window` does, and reports it as a task result. A 0 here would be a number
+    # nobody measured, which SPEC §17 rules out.
+    exact_duplicates_removed: int | None = 0
     cache_hit_rate: float = 0.0
     runtime_seconds: float = 0.0
     bytes_scanned: int = 0
