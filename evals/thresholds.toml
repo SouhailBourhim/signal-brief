@@ -38,11 +38,43 @@ min_recall    = 0.90
 min_precision = 0.95
 min_recall    = 0.55
 
-[entities]        # SPEC §7.2 — 300 labeled mentions, awaiting 3.C's resolver
-# Labels exist; the decision function to score them against does not yet. Pinned open until
-# `entities/resolve.py` lands, then fitted the same way `[dedup]` was.
-min_precision = 0.0
-min_recall    = 0.0
+[entities]        # SPEC §7.2 — 300 real mentions from silver.articles, labeled 2026-08-20
+# Fitted in 3.C by `evals/fit_thresholds.py --set entities`, against the committed
+# dictionary snapshot (`warehouse/entities/dictionary.json.gz`, SEC + Wikidata).
+#
+#                        precision   recall
+#     train (fitted on)     0.900     0.667
+#     HELD OUT              0.833     0.556     <- the honest estimate
+#     full set              0.868     0.611     <- what `make eval` gates on, below
+#
+# Quote the held-out row. The floors gate the full set because that is what the scorer sees,
+# and they sit just under it: they catch a regression, they do not certify the number.
+#
+# Two deviations from how `[dedup]` was fitted, both forced by measurement rather than taste
+# and both written up in docs/runbooks/phase-3.md 3.C:
+#
+# 1. **The precision constraint is stated, not cross-validated.** Entity precision is
+#    monotone in a single knob, so "the strictest constraint that survives CV" always picks
+#    the strictest grid point — a resolver that reads CIKs out of EDGAR titles and ignores
+#    prose, at recall 0.185. See `ENTITY_MIN_PRECISION` in the fitter.
+# 2. **The objective is F1 under that constraint, not recall.** Dedup maximises recall
+#    because a false merge deletes a story invisibly. A mention filed under the wrong company
+#    is something the reader sees, so the trade is real both ways. Maximising recall here
+#    rode the constraint boundary — train precision 0.760, held out 0.615 — and walked past
+#    a knee one step away.
+#
+# Only `CONFIDENCE_FLOOR` is fitted. 27 positive mentions in the train half cannot certify a
+# second interacting constant: searching two of them picked a value that bought +0.037 train
+# recall and cost held-out precision 0.833 -> 0.727.
+#
+# The remaining recall gap is named rather than mysterious. `Meta` and `Apple` are ordinary
+# English words the resolver will not link on the word alone, and that is SPEC §7.2's
+# embedding stage, not a threshold.
+#
+# Same caveat as `[dedup]`: these labels were made by an LLM assistant and reviewed by the
+# reader. See docs/runbooks/phase-3.md 3.A.
+min_precision = 0.82
+min_recall    = 0.58
 
 [enrichment]      # SPEC §7.3 — Phase 4B, 100 labeled examples
 min_precision = 0.0

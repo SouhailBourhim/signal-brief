@@ -42,9 +42,11 @@ import math
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from signal_core.hashing import hamming, simhash64
+from signal_core.timeutil import ensure_utc
 
 # Every constant below was fitted by `evals/fit_thresholds.py` against the labeled pairs —
 # grid search on a train split, the precision constraint chosen by cross-validation inside
@@ -114,7 +116,12 @@ _LONG_DIGITS = re.compile(r"^\d{5,}$")
 # English carrying no topical signal, while this one is about a specific defect in specific
 # sources — and a reader deleting an entry from the wrong list would be making a different
 # decision than they thought.
-_FEED_BOILERPLATE = frozenset(
+#
+# Public because `entities/resolve.py` needs the same list for a different reason: `Filer`,
+# `Filed` and `AccNo` are also the shapes a proper-noun heuristic mistakes for company names,
+# and a second copy of this list would eventually disagree with this one about what the feeds
+# say about themselves.
+FEED_BOILERPLATE = frozenset(
     [
         "filed",
         "accno",
@@ -221,7 +228,7 @@ def content_tokens(text: str) -> frozenset[str]:
         for t in _TOKEN.findall(strip_boilerplate(text).lower())
         if len(t) > 1
         and t not in _STOPWORDS
-        and t not in _FEED_BOILERPLATE
+        and t not in FEED_BOILERPLATE
         and not _LONG_DIGITS.match(t)
     )
 
@@ -412,6 +419,19 @@ class ClusterResult:
     dissolved_articles: int = 0
 
 
+def trusted_timestamp(article: dict[str, Any]) -> datetime:
+    """When this article says it happened, if we believe it — else when we saw it.
+
+    SPEC §6.2's rule, applied per article. It used to live only in `ranker.score_cluster`
+    and therefore only ever ran against the cluster head, which is why a cluster's age was
+    the head's age (see `first_seen` / `last_seen` below).
+    """
+    published = article.get("published_at")
+    if published and not article.get("timestamp_flagged"):
+        return ensure_utc(published)
+    return ensure_utc(article["fetched_at"])
+
+
 def group_edges(articles: list[dict[str, Any]], edges: Iterable[tuple[str, str]]) -> ClusterResult:
     """Connected components over a supplied edge list, then stages 3-4. SPEC §7.1.
 
@@ -468,6 +488,14 @@ def group_edges(articles: list[dict[str, Any]], edges: Iterable[tuple[str, str]]
             key=lambda a: (-authority(a["publisher_domain"]), a["fetched_at"], a["article_id"]),
         )
         publishers = {m["publisher_domain"] for m in members}
+        # Both ends, because they answer different questions and a brief needs the second.
+        # The canonical head is by construction the *earliest* article (most authoritative,
+        # then earliest seen), so timestamping a cluster by its head measured when the story
+        # broke and never when it was last covered — a developing story looked older the
+        # longer it ran, which is backwards. Measured on a real window: the Disney/FCC
+        # cluster drew coverage across 38 hours and ranked as 65.6h old while its newest
+        # article was 23h old (docs/runbooks/phase-3.md 3.B.4).
+        references = [trusted_timestamp(m) for m in members]
         clusters.append(
             {
                 "cluster_id": head["article_id"],
@@ -478,6 +506,9 @@ def group_edges(articles: list[dict[str, Any]], edges: Iterable[tuple[str, str]]
                 "publisher_domain": head["publisher_domain"],
                 "published_at": head["published_at"],
                 "fetched_at": min(m["fetched_at"] for m in members),
+                # When the story broke, and when it was last covered.
+                "first_seen": min(references),
+                "last_seen": max(references),
                 "article_count": len(members),
                 "distinct_publisher_count": len(publishers),
                 "publishers": sorted(publishers),

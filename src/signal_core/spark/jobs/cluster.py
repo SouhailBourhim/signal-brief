@@ -38,7 +38,7 @@ ARTICLE_CLUSTERS_TABLE = "silver.article_clusters"
 
 # Bump on any change to the decision, the thresholds, or the blocking. A mixed table is
 # then diagnosable rather than a mystery, and ADR-0009's measurement trail stays checkable.
-ALGO_VERSION = "3.B.2"
+ALGO_VERSION = "3.B.4"
 
 # A blocking key held by more than this many articles is dropped rather than exploded: one
 # token shared by 800 filings would emit 320k candidate pairs on its own. Dropping it costs
@@ -70,6 +70,8 @@ CLUSTERS_DDL = """
     publisher_domain string,
     published_at timestamp,
     fetched_at timestamp NOT NULL,
+    first_seen timestamp NOT NULL,
+    last_seen timestamp NOT NULL,
     event_date timestamp NOT NULL,
     article_count int NOT NULL,
     distinct_publisher_count int NOT NULL,
@@ -258,6 +260,8 @@ def cluster_window(
                 "publisher_domain": cluster["publisher_domain"],
                 "published_at": cluster["published_at"],
                 "fetched_at": cluster["fetched_at"],
+                "first_seen": cluster["first_seen"],
+                "last_seen": cluster["last_seen"],
                 "event_date": cluster["fetched_at"],
                 "article_count": cluster["article_count"],
                 "distinct_publisher_count": cluster["distinct_publisher_count"],
