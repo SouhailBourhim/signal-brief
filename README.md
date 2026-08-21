@@ -23,7 +23,9 @@ missed during downtime, and is bounded by each source's backfill horizon: Hacker
 recovered completely, EDGAR for about a day, and an RSS feed only as far back as its current
 window. What catch-up cannot recover is recorded as a `gap_reason` per source per interval
 in `ops.source_health` and printed in the brief's footer, rather than left to look like a
-quiet day (SPEC §6.3).
+quiet day (SPEC §6.3). Both halves have now been tested against the deployed pipeline with a
+deliberate 24.2-hour ingestion outage — the numbers are below and the walkthrough is in
+[`docs/runbooks/phase-1.md`](docs/runbooks/phase-1.md) 1.D.
 
 **New to data engineering?** [`docs/how-signal-works.md`](docs/how-signal-works.md) explains
 what each phase is for, in plain English, with no prior knowledge assumed.
@@ -65,6 +67,9 @@ SPEC §15: never publish a metric the pipeline cannot recompute. Current numbers
 | Ingestion, one production window | 521 bronze rows → 207 articles (19 quarantined, all `hackernews`/dead-item) | `docs/runbooks/phase-2.md` 2.E, real AWS |
 | Athena, `SELECT *` vs. projected vs. partition-pruned, same question | 184,259 / 73,373 / 64,713 bytes scanned | `docs/athena.md`, real AWS |
 | S3 egress, one commit | 3,468,248 bytes | `ops.pipeline_costs`, real AWS |
+| Replay after a 24.2 h outage | 23,306 rows re-read, **0 committed**, table unchanged | `docs/runbooks/phase-1.md` 1.D, real AWS |
+| Replay during active catch-up | 4 consecutive hourly MERGEs, each re-reading the full table and inserting only the new rows | `docs/runbooks/phase-1.md` 1.D, real AWS |
+| Catch-up after the same outage | RSS lost 0.0 / 3.6 / 5.3 h of 24.2 h; HN lost nothing | `docs/runbooks/phase-1.md` 1.D, real AWS |
 | Entity resolution | — | Phase 3 |
 | LLM eval accuracy, cache-hit rate | — | Phase 4B |
 | Cost per day (full pipeline) | — | Phase 4A — pieces above are real, a full day's total isn't assembled yet |
@@ -130,6 +135,41 @@ test rather than a Lambda at 3am.
 - **Catch-up** — re-fetch what was missed during downtime. Bounded by each source's
   backfill horizon. For RSS this is partial by construction: items that rotated out of the
   feed are gone, and `source_health.gap_reason` records that rather than implying recovery.
+
+### Measured, on the deployed pipeline
+
+All six pollers were disabled for **24 h 11 m** (2026-08-20T12:37:25Z → 2026-08-21T12:49:15Z)
+and the pipeline was watched through the outage and the recovery. Full walkthrough and
+numbers: [`docs/runbooks/phase-1.md`](docs/runbooks/phase-1.md) 1.D.
+
+**Replay held completely.** Re-running the commit over the stored interval read all 23,306
+staged rows and inserted **0** — `committed_rows: 0`, `duplicate_rows: 23306`, `table_rows`
+unchanged, `egress_bytes: 0`. The MERGE on `ingest_id` makes this true by construction, and
+twelve idle hourly runs during the outage reproduced it twelve more times.
+
+**Catch-up held partially, and the split is per-source:**
+
+| Source | Backfill horizon | What a 24.2 h outage actually cost |
+|---|---|---|
+| `hackernews` | `COMPLETE` | **Nothing.** 13,581-item backlog, drained at a measured 2,390 items/hour gross against HN's own 867/hour, i.e. ~1,520/hour net — fully caught up in ~8.7 hours |
+| `edgar`, `edgar_formd` | `DAY` | **Nothing**, by 11 minutes. The horizon reaches back 24 h and the outage ran 24.2 h |
+| `rss_ars` | `WINDOW` | **0.0 h lost** — 20-item feed, ~0.46 items/hour, so its 20 slots span ~45 h |
+| `rss_tech` | `WINDOW` | **3.6 h lost** (~8 articles) — 20-item feed, all 20 pre-outage items had rotated out |
+| `rss_verge` | `WINDOW` | **5.3 h lost** (~3 articles) — 10-item feed, all 10 rotated out |
+
+The thing worth knowing is **why** the RSS numbers vary: these feeds hold a fixed *count* of
+items, not a fixed *duration*, so the reach in hours is inversely proportional to how fast
+the source publishes — and it collapses exactly when the source is busiest, which is when
+the missed items matter most. `rss_tech` published 20 items in the 8.3 hours it was active;
+at that rate a 24-hour outage across a full news day would have cost it ~16 hours, not 3.6.
+**RSS loss is rate-dependent and unbounded above.** The measured range here is 0–5.3 h; it is
+not a ceiling.
+
+The pipeline's own `gap_reason` reported `22.6h unrecovered` for all three RSS sources, against
+measured losses of 0.0/3.6/5.3 h. `HORIZON_REACH[WINDOW]` is a deliberately conservative flat
+1 hour, so the reported gap is an **upper bound on loss, never an under-report** — the right
+direction for an operational alert, and stated here next to the measurement rather than in
+place of it.
 
 ## License
 

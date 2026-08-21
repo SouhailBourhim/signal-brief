@@ -426,12 +426,66 @@ uv run signal athena-query --database ops --sql \
    ORDER BY source_id"
 ```
 
+### RESULT — Step 3, the degradation
+
+It went exactly as the SLA table predicts, which is the point of writing the prediction
+down first. `status` per source, by assessment window:
+
+| window (UTC) | assessed ~ | hackernews | edgar | edgar_formd | rss_tech | rss_verge | rss_ars |
+|---|---|---|---|---|---|---|---|
+| 08-20 12:00 | 13:05 | **stale** (1,892 s) | ok (2,177 s) | ok (2,290 s) | ok (2,211 s) | ok (2,325 s) | ok (2,333 s) |
+| 08-20 13:00 | 14:05 | stale (5,483 s) | **stale** (5,768 s) | **stale** (5,881 s) | **stale** (5,802 s) | **stale** (5,916 s) | **stale** (5,924 s) |
+| … through 08-21 11:00 | 12:05 | stale (84,685 s) | stale (84,970 s) | stale (85,083 s) | stale (85,004 s) | stale (85,119 s) | stale (85,126 s) |
+
+`hackernews` goes red one window before everything else — its `freshness_sla_seconds` is
+900 against the others' 2,700 — and nothing ever escalates past `stale`. That last part is
+the ordering working: `stale` outranks `dead_feed`, and during a poller outage the poller
+is what is broken, not the publisher.
+
+`content_staleness_seconds` tracked `staleness_seconds` to within a second all the way
+through, because at T0 every source's `last_content_change_at` equalled its
+`last_success_at`. That is the 1.E gate from Step 1 paying off: the field was seeded on all
+six, including `rss_ars` via the 304 fix, so the dead-feed half of the monitoring had a
+real baseline rather than a null.
+
+> **A hole in the record, stated rather than smoothed over.** `source_health` has eleven
+> windows for a 24-hour outage: `08-20 12:00`–`20:00`, then nothing until `08-21 10:00`.
+> The WSL2 host slept overnight, so `ingest_monitor` did not run between roughly 21:05 and
+> 11:28; the two runs that did fire on waking assessed the *current* hour, not the ones
+> they missed. The outage itself was unaffected — the schedules live in EventBridge and
+> stayed `DISABLED` throughout, and DynamoDB confirms zero polls — but the local monitoring
+> layer has a 13-hour blind spot, and the `catchup=False` on this DAG is why it did not
+> backfill them. Worth naming because it is the same failure the test exists to catch,
+> arriving from the side nobody was watching.
+
 ### Step 4 — Restart, after a full day
 
 ```bash
 terraform -chdir=infra/terraform/main apply    # ENABLED is the default — no -var needed
 date -u +%Y-%m-%dT%H:%M:%SZ                    # T1 — record it
 ```
+
+### RESULT — Step 4, the restart
+
+`plan` first, to confirm nothing unrelated had drifted in during the day:
+
+```
+Plan: 0 to add, 6 to change, 0 to destroy.
+```
+
+Six `state = "DISABLED" -> "ENABLED"` and nothing else. Worth checking rather than
+assuming: an apply that *also* redeploys Lambda code is an apply doing two things at once
+in the middle of an acceptance test, and the schedule change would no longer be the only
+variable.
+
+| | |
+|---|---|
+| T0 — ingestion stopped | **2026-08-20T12:37:25Z** |
+| T1 — ingestion restarted | **2026-08-21T12:49:15Z** |
+| Outage | **24 h 11 m 50 s (24.20 h)** |
+| First poll after restart | `hackernews` at 12:50:47Z, 92 s later |
+
+All six schedules read back `ENABLED`.
 
 ### Step 5 — Replay: the guarantee that always holds
 
@@ -447,6 +501,74 @@ Read `commit_staged`'s return value from the Airflow UI (XCom) or the task log. 
 condition: `committed_rows == 0` and `table_rows` unchanged from Step 1**, with
 `duplicate_rows` equal to whatever was re-read. That is the whole replay claim: reprocessing
 a stored interval inserts nothing and loses nothing.
+
+### RESULT — Step 5, replay
+
+**First, the baseline the check is actually against.** Step 1 warned that the T0 bronze
+table is the wrong comparison, because 912 staged objects were still uncommitted when the
+outage began. The `commit_staged` XCom trail shows exactly that queue draining, and then
+nothing:
+
+| `ingest_monitor` run | objects downloaded | egress | `committed_rows` | `duplicate_rows` | `table_rows` |
+|---|---|---|---|---|---|
+| 2026-08-20 13:05 — first after T0 | 14 | 145,510 B | **310** | 22,996 | 23,306 |
+| 14:05 → 2026-08-21 12:05 — twelve runs | 0 | 0 B | **0** | 23,306 | 23,306 |
+
+`duplicate_rows` on the drain run is **22,996**, which is the T0 bronze total exactly
+(168 + 110 + 22,593 + 6 + 65 + 54). The queue landed its 310 rows on the first run of the
+outage and the table has not moved since.
+
+Per source, T0 vs. post-drain — the latter is the real replay baseline, read at 12:47Z
+while ingestion was still off:
+
+| source_id | T0 rows | post-drain rows | Δ | newest committed |
+|---|---|---|---|---|
+| edgar | 168 | 170 | +2 | 2026-08-20 12:29:51 |
+| edgar_formd | 110 | 112 | +2 | 2026-08-20 12:27:58 |
+| hackernews | 22,593 | 22,895 | +302 | 2026-08-20 12:34:36 |
+| rss_ars | 6 | 6 | 0 | 2026-08-20 00:57:15 |
+| rss_tech | 65 | 67 | +2 | 2026-08-20 12:29:17 |
+| rss_verge | 54 | 56 | +2 | 2026-08-20 12:27:23 |
+| **total** | **22,996** | **23,306** | **+310** | |
+
+Nothing in bronze is newer than T0, and all six DynamoDB state items were still frozen at
+their T0 `watermark` / `last_success_at` / `last_content_change_at` values. A full day with
+zero writes is what makes the replay number below mean something rather than being
+incidentally true.
+
+**The replay run.** Triggered at 12:49:38Z — 23 seconds after the restart and deliberately
+ahead of the first poll, so the interval replayed is exactly the stored one:
+
+```json
+{"objects_seen": 912, "objects_downloaded": 0, "egress_bytes": 0,
+ "staged_rows": 23306, "committed_rows": 0, "duplicate_rows": 23306, "table_rows": 23306}
+```
+
+**Pass.** `committed_rows == 0`, `table_rows` unchanged at 23,306, `duplicate_rows` equal
+to every row re-read, and `egress_bytes == 0` because the local staging cache served the
+re-read without touching S3. Reprocessing a stored interval inserted nothing and lost
+nothing — and the twelve idle hourly runs above prove the same thing twelve more times
+without anyone having asked them to.
+
+The stronger version of the claim arrived over the next four hours without being asked for
+either. Idle re-runs only show that a MERGE over an unchanged table is a no-op. These show
+it discriminating correctly on a table that is actively growing, which is the case that
+actually happens during a recovery:
+
+| run | `duplicate_rows` | `committed_rows` | `table_rows` |
+|---|---|---|---|
+| 13:05 | 23,306 | 607 | 23,913 |
+| 14:05 | 23,913 | 2,413 | 26,326 |
+| 15:05 | 26,326 | 2,414 | 28,740 |
+| 16:05 | 28,740 | 2,415 | 31,155 |
+
+Read the invariant down the diagonal: **every run's `duplicate_rows` is exactly the previous
+run's `table_rows`.** Each hour the job re-read every row already committed, inserted none of
+them, and inserted precisely the new ones — while 2,414 rows an hour were pouring in from the
+`hackernews` backlog. That the committed counts land on 2,413 / 2,414 / 2,415 is the poller
+hitting its 200-per-5-minute ceiling twelve times an hour without a miss, and it is the
+clearest single number in this test: replay and catch-up running simultaneously, neither
+corrupting the other.
 
 ### Step 6 — Catch-up: the guarantee that does not
 
@@ -474,16 +596,168 @@ uv run signal athena-query --database bronze --sql \
   "SELECT source_id, count(*) AS rows FROM raw_documents GROUP BY source_id ORDER BY source_id"
 ```
 
+### RESULT — Step 6, catch-up
+
+Recovery began 92 seconds after the restart and every source was back to `ok` by the
+13:05 `ingest_monitor` run — the first run of the day to pass `raise_on_degraded`, sixteen
+minutes after T1. That run committed **607 rows** and took bronze from 23,306 to 23,913.
+
+#### `hackernews` (COMPLETE) — recovers everything, slowly, exactly as specified
+
+The watermark walks forward in perfect 200-item steps, one per 5-minute poll:
+
+| sample (UTC) | watermark | HN `maxitem` | items behind |
+|---|---|---|---|
+| 12:51:31 | 49,373,952 | 49,387,333 | 13,381 |
+| 12:56:32 | 49,374,152 | 49,387,401 | 13,249 |
+| 13:01:34 | 49,374,352 | 49,387,458 | 13,106 |
+| 13:06:35 | 49,374,552 | 49,387,516 | 12,964 |
+| 16:42:40 | 49,383,152 | 49,390,669 | 7,517 |
+| 16:47:02 | 49,383,352 | 49,390,733 | 7,381 |
+
+T0's watermark was **49,373,752**, so the backlog at restart was **13,581 items**.
+`MAX_ITEMS_PER_POLL` is 200 and the cadence is 5 minutes, giving 2,400 items/hour gross —
+and measured over the first 3.9 hours the watermark advanced 9,200, i.e. **2,390/hour**, so
+the poller hit its ceiling essentially every single poll with no misses. HN itself produced
+867 items/hour over the same window, leaving a **net closure rate of ~1,520 items/hour** and
+a projected full drain around **21:30 UTC**, roughly 8.7 hours after the restart.
+
+Nothing here needs supervising — a watermark still climbing at 20:00 is the design working,
+and the gap closing at a constant rate is the only evidence needed that it is not stuck.
+Confirm with:
+
+```bash
+aws dynamodb get-item --table-name signal-pipeline-state \
+  --key '{"source_id":{"S":"hackernews"}}' --query 'Item.watermark.N' --output text
+curl -s https://hacker-news.firebaseio.com/v0/maxitem.json
+```
+
+#### The RSS sources — and the result that did not match the prediction
+
+The table above predicted RSS "recovers **almost nothing** — only what is still in the feed
+(~1-3 h)". That is not what happened, and the difference is worth more than the prediction
+was.
+
+Measured by parsing each source's **last pre-outage** and **first post-restart** feed
+snapshot straight out of `staging/` (no silver involved — this is bronze bytes and the
+Phase 2 parsers):
+
+| source | items held | pre-outage items rotated out | oldest item in post-restart snapshot | published during outage, recovered | **genuinely lost** |
+|---|---|---|---|---|---|
+| `rss_ars` | 20 (fixed) | 10 / 20 | 2026-08-19 15:56:56 | **10** | **0.0 h** |
+| `rss_tech` | 20 (fixed) | 20 / 20 | 2026-08-20 16:07:26 | **20** | **3.6 h** (~8 items) |
+| `rss_verge` | 10 (fixed) | 10 / 10 | 2026-08-20 17:42:34 | **10** | **5.3 h** (~3 items) |
+
+The **hour figures are measured** — the interval between each source's last successful poll
+and the oldest item its feed still carried on the first fetch back. The **item counts are
+extrapolations** from each feed's observed publishing rate over its own snapshot span, and
+are the softest number here: a source publishing faster during the lost daytime hours than
+its 24-hour average would have lost more than the estimate says.
+
+Item counts are identical before and after, which is the whole explanation: **these are
+fixed-*count* feeds, not fixed-*duration* windows.** A feed that holds 20 items reaches back
+20 items' worth of time, so its horizon in hours is inversely proportional to how fast the
+source publishes. Ars Technica publishes ~0.46 items/hour, so 20 slots span ~45 hours and a
+24-hour outage costs it *nothing*. The Verge holds only 10 slots and lost 5.3 hours.
+
+**The recorded `gap_reason` was wrong in the safe direction, and by a lot.** The last
+pre-restart verdict claimed, verbatim and identically for all three:
+
+> `22.6h unrecovered (window horizon): the feed holds only its current window, so items published during the outage have rotated out and are unrecoverable`
+
+Against a measured loss of 0.0 h, 3.6 h and 5.3 h. `HORIZON_REACH[WINDOW]` is a flat
+`timedelta(hours=1)` and `recovery.py` is explicit that this is a deliberate conservative
+floor — "claiming three and recovering one is worse than claiming one" — so the gap is an
+*upper bound on loss*, never an under-report. That is the right direction for an
+operational signal. But it is a bound, not a measurement, and after a real 24-hour outage
+the measurement is now available and should be published next to it rather than instead of
+it.
+
+**The caveat that keeps this honest, and it is the important half.** Recovery was this good
+partly by luck of timing: the outage spanned a quiet overnight period. `rss_tech` published
+20 items in the 8.3 hours it *was* active, and at that rate a 20-slot feed reaches back only
+~8 hours — a 24-hour outage across a full news day would have lost ~16 of them. A
+fixed-count feed's horizon **collapses exactly when the source is busiest**, which is also
+when the missed items matter most. The honest claim is therefore not "RSS recovers fine" but
+**"RSS loss is rate-dependent, ranged 0–5.3 h here, and is unbounded above in the general
+case"**.
+
+#### `edgar` / `edgar_formd` (DAY) — never recorded a gap at all
+
+Neither ever carried a `gap_reason`. `HORIZON_REACH[DAY]` is 24 hours and the outage was
+24.20 hours, so the gap existed for only its final 11 minutes — and the outage crossed the
+24-hour line at 12:37:25Z, twelve minutes before the restart, with no assessment window in
+between to notice. The runbook's "a 24-hour outage sits right on that boundary" was correct;
+it landed on the recoverable side by about the width of one poll.
+
+#### A property of `gap_reason` worth knowing before you go looking for it
+
+`assess` derives the outage interval from `last_success_at`, so the moment a source polls
+successfully the interval collapses and the `gap_reason` stops being written. By the 13:05
+window all six sources read `status = ok`, `gap_reason = NULL`. **The record of what was
+lost survives only in the historical `source_health` rows** — query by `window_start` range,
+never by "latest window", or the outage will look like it cost nothing.
+
+#### `content_staleness_seconds` after recovery
+
+Populated on all six, and — the part that matters — no longer tracking `staleness_seconds`:
+
+| source | `stale_s` | `content_s` |
+|---|---|---|
+| hackernews | 43 | 43 |
+| edgar | 74 | 74 |
+| edgar_formd | 62 | 62 |
+| rss_tech | 98 | 98 |
+| rss_ars | 105 | **968** |
+| rss_verge | 96 | **968** |
+
+`rss_ars` and `rss_verge` polled successfully 105 s and 96 s ago but have not changed
+content for 968 s — they 304'd. The two clocks separating is the dead-feed signal doing the
+one thing a plain freshness check cannot, which is the deferred half of 1.E reaching
+production.
+
 ### Step 7 — Write it down
 
-- [ ] Record the real numbers here: bronze rows before/after per source, replay's
+- [x] Record the real numbers here: bronze rows before/after per source, replay's
       `committed_rows`/`table_rows`, and the recovered-vs-lost split with each
-      `gap_reason` quoted verbatim
-- [ ] Put the recovered/lost split in the README (SPEC §16 item 6). The honest version —
+      `gap_reason` quoted verbatim — the four `RESULT` sections above, and the
+      before/after bronze table below
+- [x] Put the recovered/lost split in the README (SPEC §16 item 6). The honest version —
       "RSS loses most of an outage and here is the number" — is the claim worth making;
-      the interviewer's question is whether you know what you *cannot* recover
-- [ ] Confirm `content_staleness_seconds` is populated after recovery, which is the
-      deferred half of 1.E reaching production
+      the interviewer's question is whether you know what you *cannot* recover.
+      README → "Replay and catch-up are different" → "Measured, on the deployed pipeline",
+      plus two rows in "Measured, not claimed". The claim that ended up being worth making
+      was not the one predicted: RSS loss is **rate-dependent**, measured 0–5.3 h here and
+      unbounded above, and the pipeline's own `gap_reason` over-reported it. Both the bound
+      and the measurement are published, because publishing only the flattering one would be
+      the exact failure this test exists to prevent
+- [x] Confirm `content_staleness_seconds` is populated after recovery, which is the
+      deferred half of 1.E reaching production — populated on all six, and diverging from
+      `staleness_seconds` on `rss_ars`/`rss_verge` (968 s vs ~100 s), which is the signal
+      doing something a freshness check cannot
+
+### Bronze, end to end
+
+| source_id | T0 (12:37Z, 08-20) | post-drain (12:47Z, 08-21) | after catch-up (16:47Z, 08-21 — 4.0 h in, still draining) |
+|---|---|---|---|
+| edgar | 168 | 170 | 184 |
+| edgar_formd | 110 | 112 | 125 |
+| hackernews | 22,593 | 22,895 | **30,695** |
+| rss_ars | 6 | 6 | 8 |
+| rss_tech | 65 | 67 | 78 |
+| rss_verge | 54 | 56 | 65 |
+| **total** | **22,996** | **23,306** | **31,155** |
+
+`hackernews` accounts for 7,800 of the 7,849 rows added since the restart, which is what a
+COMPLETE horizon draining a backlog looks like. The RSS sources added 2, 11 and 9 rows —
+remember a feed row is one *changed-body fetch*, not one article (a 304 returns no document
+at all), so these count how often each feed moved, not what it carried.
+
+**This is a mid-drain snapshot, not a final one.** At 16:47Z `hackernews` was at watermark
+49,383,352 against a live `maxitem` of 49,390,733 — still **7,381 items behind**, closing at
+~1,520/hour net, projected complete around **21:30 UTC**. The row above will keep climbing
+for several hours after this was written, and that is the design working. Re-check with the
+two commands in the `hackernews` section above.
 
 ## 1.D — The acceptance test, for real *(after apply)*
 The test in `tests/test_replay_catchup.py` proves the mechanism against a temp warehouse.
