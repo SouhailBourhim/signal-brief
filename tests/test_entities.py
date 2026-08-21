@@ -273,3 +273,95 @@ def test_one_company_with_many_tickers_keeps_its_primary_listing():
     loaded = dict_module.load()
     montreal = [e for e in loaded.entities.values() if e.cik == "0000927971"]
     assert [e.entity_id for e in montreal] == ["BMO"]
+
+
+# --- merging SEC with Wikidata --------------------------------------------------------
+#
+# These are regression tests before they are anything else. The first version of `_merge`
+# emitted a rolled-up subsidiary as an `Entity` carrying its parent's id, and because
+# entities are keyed by id, that overwrote the parent's SEC row — `Transamerica Corporation`
+# displaced AEGON and took its CIK out of `by_cik`, so a filing that *stated* its CIK
+# resolved by minting a slug instead. Nothing failed; the accuracy just quietly dropped.
+
+
+def _sec():
+    from signal_core.entities.dictionary import Entity as E
+
+    return [
+        E("AEG", "AEGON LTD.", "public", "sec", ticker="AEG", cik="0000769218", rank=820),
+        E("PYPL", "PayPal Holdings, Inc.", "public", "sec", ticker="PYPL", rank=150),
+        E("XRX", "Xerox Holdings Corp", "public", "sec", ticker="XRX", rank=3609),
+    ]
+
+
+def test_a_rollup_never_displaces_its_parents_sec_row():
+    """The AEGON regression, stated as the property it broke."""
+    from signal_core.entities.build import _merge
+    from signal_core.entities.dictionary import Entity as E
+
+    subsidiary = E("transamerica", "Transamerica Corporation", "private", "wikidata")
+    merged = _merge(_sec(), [subsidiary], {"transamerica": "AEGON LTD."})
+
+    aegon = {e.entity_id: e for e in merged}["AEG"]
+    assert aegon.canonical_name == "AEGON LTD."
+    assert aegon.cik == "0000769218", "the CIK channel depends on this surviving the merge"
+    assert "Transamerica Corporation" in aegon.aliases
+
+
+def test_a_parent_is_matched_by_name_not_by_slug_equality():
+    """Wikidata says `PayPal`; SEC says `PayPal Holdings, Inc.`. Neither slug equals the
+    other, and an equality test silently drops every rollup whose parent has a legal name."""
+    from signal_core.entities.build import _merge
+    from signal_core.entities.dictionary import Entity as E
+
+    merged = _merge(_sec(), [E("venmo", "Venmo", "private", "wikidata")], {"venmo": "PayPal"})
+
+    by_id = {e.entity_id: e for e in merged}
+    assert "venmo" not in by_id, "a subsidiary of a tradable parent is not its own entity"
+    assert "Venmo" in by_id["PYPL"].aliases
+
+
+def test_a_company_in_both_sources_keeps_the_sec_row_and_gains_the_aliases():
+    """Two rows for one company is the failure `dim_entities` exists to prevent."""
+    from signal_core.entities.build import _merge
+    from signal_core.entities.dictionary import Entity as E
+
+    merged = _merge(
+        _sec(),
+        [E("xerox", "Xerox", "private", "wikidata", aliases=("Xerox Corporation",))],
+        {},
+    )
+
+    by_id = {e.entity_id: e for e in merged}
+    assert "xerox" not in by_id
+    assert by_id["XRX"].ticker == "XRX"
+    assert "Xerox Corporation" in by_id["XRX"].aliases
+
+
+def test_a_subsidiary_of_an_untradable_parent_stays_its_own_entity():
+    """`The Verge`'s parent is Vox Media, which has no ticker — so it keeps its own slug,
+    exactly as the hand labels say."""
+    from signal_core.entities.build import _merge
+    from signal_core.entities.dictionary import Entity as E
+
+    merged = _merge(
+        _sec(), [E("the-verge", "The Verge", "private", "wikidata")], {"the-verge": "Vox Media"}
+    )
+
+    assert "the-verge" in {e.entity_id for e in merged}
+
+
+def test_build_is_first_writer_wins_on_a_duplicate_id():
+    """Two Wikidata labels can slug identically. Whichever arrives first wins, and SEC is
+    always first — so a ticker's canonical name, CIK and rank cannot be displaced."""
+    from signal_core.entities.dictionary import Entity as E
+
+    built = dict_module.build(
+        [
+            E("XRX", "Xerox Holdings Corp", "public", "sec", ticker="XRX", cik="0000108772"),
+            E("XRX", "Something Else Entirely", "private", "wikidata"),
+        ]
+    )
+
+    assert built.entities["XRX"].canonical_name == "Xerox Holdings Corp"
+    assert built.by_cik["0000108772"] == "XRX"
