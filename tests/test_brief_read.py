@@ -16,10 +16,14 @@ from typing import Any
 import pytest
 
 from signal_core.brief.build import run
+from signal_core.brief.ranker import score_cluster
 from signal_core.brief.read import (
     _coerce_article,
+    _parse_array,
     _parse_timestamp,
     read_articles,
+    read_cluster_entities,
+    read_clusters,
     read_health,
 )
 from signal_core.config import Settings
@@ -42,6 +46,30 @@ ARTICLE_COLUMNS = [
     "timestamp_flagged",
     "story_key",
 ]
+
+CLUSTER_COLUMNS = [
+    "cluster_id",
+    "canonical_article_id",
+    "title",
+    "url_canonical",
+    "publisher_domain",
+    "published_at",
+    "fetched_at",
+    "first_seen",
+    "last_seen",
+    "article_count",
+    "distinct_publisher_count",
+    "publishers",
+    "timestamp_flagged",
+    "algo_version",
+    "ordering_key",
+    "window_start",
+    "window_end",
+    # Joined from `silver.articles`, not stored on the cluster.
+    "body_text",
+]
+
+ENTITY_COLUMNS = ["cluster_id", "entity_id", "canonical_name", "ticker", "mentions"]
 
 HEALTH_COLUMNS = [
     "source_id",
@@ -76,6 +104,43 @@ def _article_row(**overrides: Any) -> list[str | None]:
     }
     row.update(overrides)
     return [row[c] for c in ARTICLE_COLUMNS]
+
+
+def _cluster_row(**overrides: Any) -> list[str | None]:
+    row: dict[str, str | None] = {
+        "cluster_id": "c1",
+        "canonical_article_id": "a1",
+        "title": "Northwind acquires Lumen Robotics",
+        "url_canonical": "https://techcrunch.com/x",
+        "publisher_domain": "techcrunch.com",
+        "published_at": "2026-08-20 10:00:00.000000 UTC",
+        "fetched_at": "2026-08-20 10:05:00.000000 UTC",
+        "first_seen": "2026-08-20 09:00:00.000000 UTC",
+        "last_seen": "2026-08-20 11:00:00.000000 UTC",
+        "article_count": "3",
+        "distinct_publisher_count": "2",
+        "publishers": "[techcrunch.com, theverge.com]",
+        "timestamp_flagged": "false",
+        "algo_version": "3.B.4",
+        "ordering_key": "fetched_at,article_id@abc123",
+        "window_start": "2026-08-20 05:00:00.000000 UTC",
+        "window_end": "2026-08-20 11:59:00.000000 UTC",
+        "body_text": "Northwind said on Tuesday it would acquire Lumen Robotics.",
+    }
+    row.update(overrides)
+    return [row[c] for c in CLUSTER_COLUMNS]
+
+
+def _entity_row(**overrides: Any) -> list[str | None]:
+    row: dict[str, str | None] = {
+        "cluster_id": "c1",
+        "entity_id": "NWND",
+        "canonical_name": "Northwind Corp",
+        "ticker": "NWND",
+        "mentions": "4",
+    }
+    row.update(overrides)
+    return [row[c] for c in ENTITY_COLUMNS]
 
 
 def _health_row(**overrides: Any) -> list[str | None]:
@@ -120,17 +185,24 @@ class _Paginator:
 
 
 class _RoutingAthenaClient:
-    """Answers `silver.articles` and `ops.source_health` with different column sets,
-    and records every SQL it was asked so the tests can assert on the query itself."""
+    """Answers each of the brief's four queries with its own column set, and records every
+    SQL it was asked so the tests can assert on the query itself.
+
+    Routing order matters: the cluster query names `silver.articles` too (it joins to it for
+    the snippet), so `silver.story_clusters` has to be checked first."""
 
     def __init__(
         self,
         *,
         articles: list[list[str | None]] | None = None,
+        clusters: list[list[str | None]] | None = None,
+        entities: list[list[str | None]] | None = None,
         healths: list[list[str | None]] | None = None,
         bytes_scanned: int = 4 * 1024 * 1024,
     ) -> None:
         self.articles = articles or []
+        self.clusters = clusters or []
+        self.entities = entities or []
         self.healths = healths or []
         self.bytes_scanned = bytes_scanned
         self.queries: list[str] = []
@@ -155,6 +227,10 @@ class _RoutingAthenaClient:
 
     def get_paginator(self, operation_name: str) -> _Paginator:
         assert operation_name == "get_query_results"
+        if "silver.story_clusters" in self._current:
+            return _Paginator(CLUSTER_COLUMNS, self.clusters)
+        if "silver.entity_mentions" in self._current:
+            return _Paginator(ENTITY_COLUMNS, self.entities)
         if "ops.source_health" in self._current:
             return _Paginator(HEALTH_COLUMNS, self.healths)
         return _Paginator(ARTICLE_COLUMNS, self.articles)
@@ -312,34 +388,195 @@ def test_gap_reason_survives_to_the_footer():
     assert healths[0].gap_reason == "rss_tech keeps only the current feed"
 
 
+# --- clusters: 3.D reads the tables 3.B and 3.C write ------------------------------------
+
+
+def test_cluster_query_reads_the_newest_window_not_a_time_range():
+    """Consecutive daily runs share 48 of their 72 hours, so one article sits in three
+    windows under three cluster ids. Reading a range would show each story three times."""
+    client = _RoutingAthenaClient(clusters=[_cluster_row()])
+    read_clusters(NOW - timedelta(hours=72), NOW, client=client)
+    sql = client.queries[0]
+
+    assert "max(window_start)" in sql
+    assert "FROM silver.story_clusters" in sql
+
+
+def test_the_snippet_join_is_partition_pruned():
+    """Without the event_date bounds on the joined side this reads the whole articles table
+    to fetch a few hundred body_text values — SPEC §10.1 arriving by the back door."""
+    client = _RoutingAthenaClient(clusters=[_cluster_row()])
+    read_clusters(NOW - timedelta(hours=72), NOW, client=client)
+    sql = client.queries[0]
+
+    assert "a.event_date >= timestamp '2026-08-17 12:00:00'" in sql
+    assert "a.event_date < timestamp '2026-08-20 12:00:00'" in sql
+
+
+def test_a_cluster_row_coerces_into_what_the_ranker_already_speaks():
+    """The keys must match `dedup.group_edges`' output exactly, or `score_cluster` can tell
+    the table-backed path from the in-process one — and only one of them is under test."""
+    client = _RoutingAthenaClient(clusters=[_cluster_row()])
+    read, _ = read_clusters(NOW - timedelta(hours=72), NOW, client=client)
+    cluster = read.clusters[0]
+
+    assert cluster["cluster_id"] == "c1"
+    assert cluster["distinct_publisher_count"] == 2
+    assert cluster["publishers"] == ["techcrunch.com", "theverge.com"]
+    assert cluster["last_seen"] == datetime(2026, 8, 20, 11, tzinfo=UTC)
+    assert cluster["body_text"].startswith("Northwind said")
+
+    scored = score_cluster(cluster, now=NOW)
+    assert set(scored["score_components"]) == {"breadth", "recency"}
+
+
+def test_articles_in_is_the_denominator_the_cluster_job_used():
+    """`dedup_ratio` in the footer has to mean the same thing it means in `cluster_window`,
+    which counted articles that reached a cluster — post exact-dedup."""
+    client = _RoutingAthenaClient(
+        clusters=[
+            _cluster_row(cluster_id="c1", article_count="3"),
+            _cluster_row(cluster_id="c2", article_count="1"),
+        ]
+    )
+    read, _ = read_clusters(NOW - timedelta(hours=72), NOW, client=client)
+    assert read.articles_in == 4
+
+
+def test_an_empty_cluster_table_is_distinguishable_from_a_stale_one():
+    """Both render as "no stories" and they are opposite faults — empty means ingestion
+    stopped, stale means the cluster job did."""
+    client = _RoutingAthenaClient(clusters=[])
+    read, _ = read_clusters(NOW - timedelta(hours=72), NOW, client=client)
+
+    assert read.clusters == []
+    assert read.window_start is None, "nothing to be stale about"
+
+
+@pytest.mark.parametrize(
+    ("rendered", "expected"),
+    [
+        ("[techcrunch.com, theverge.com]", ["techcrunch.com", "theverge.com"]),
+        ("[techcrunch.com]", ["techcrunch.com"]),
+        ("[]", []),
+        (None, []),
+    ],
+)
+def test_trino_renders_arrays_with_brackets_and_no_quoting(rendered, expected):
+    assert _parse_array(rendered) == expected
+
+
+# --- entities ----------------------------------------------------------------------------
+
+
+def test_entity_query_joins_the_three_tables_and_drops_unlinked_mentions():
+    """Unlinked is the correct answer for most spans (SPEC §7.2) and the majority of the
+    table, but a brief has nothing to show for "this mentioned something that is not a
+    company"."""
+    client = _RoutingAthenaClient(entities=[_entity_row()])
+    read_cluster_entities(NOW - timedelta(hours=72), NOW, client=client)
+    sql = client.queries[0]
+
+    assert "silver.article_clusters" in sql
+    assert "silver.entity_mentions" in sql
+    assert "silver.dim_entities" in sql
+    assert "m.entity_id IS NOT NULL" in sql
+    assert "e.is_current" in sql, "the dimension is SCD2; the brief wants today's names"
+
+
+def test_entities_come_back_grouped_by_cluster_most_mentioned_first():
+    client = _RoutingAthenaClient(
+        entities=[
+            _entity_row(
+                cluster_id="c1",
+                entity_id="AAPL",
+                canonical_name="Apple Inc.",
+                ticker="AAPL",
+                mentions="1",
+            ),
+            _entity_row(cluster_id="c1", entity_id="NWND", mentions="4"),
+            _entity_row(
+                cluster_id="c2",
+                entity_id="openai",
+                canonical_name="OpenAI",
+                ticker=None,
+                mentions="2",
+            ),
+        ]
+    )
+    by_cluster, _ = read_cluster_entities(NOW - timedelta(hours=72), NOW, client=client)
+
+    assert [e["entity_id"] for e in by_cluster["c1"]] == ["NWND", "AAPL"]
+    assert by_cluster["c2"][0]["ticker"] is None, "a private company has no ticker to show"
+
+
+def test_an_entity_with_no_dimension_row_keeps_its_id_rather_than_vanishing():
+    """Resolver/loader skew is worth seeing in the brief, where it will be noticed."""
+    client = _RoutingAthenaClient(
+        entities=[_entity_row(entity_id="mystery-co", canonical_name=None, ticker=None)]
+    )
+    by_cluster, _ = read_cluster_entities(NOW - timedelta(hours=72), NOW, client=client)
+    assert by_cluster["c1"][0]["canonical_name"] == "mystery-co"
+
+
 # --- end to end --------------------------------------------------------------------------
 
 
-def test_run_writes_a_brief_whose_footer_reports_what_the_queries_cost(tmp_path):
+def test_run_writes_a_brief_from_the_cluster_tables_with_costs_from_all_three_queries(tmp_path):
     client = _RoutingAthenaClient(
-        articles=[
-            _article_row(article_id="a1", content_hash="h1"),
-            _article_row(article_id="a2", content_hash="h2", publisher_domain="theverge.com"),
-            _article_row(article_id="a3", content_hash="h1"),  # exact duplicate of a1
-        ],
+        clusters=[_cluster_row(cluster_id="c1"), _cluster_row(cluster_id="c2", title="Second")],
+        entities=[_entity_row(cluster_id="c1")],
         healths=[_health_row()],
         bytes_scanned=3 * 1024 * 1024,
     )
-    path = run(
-        Settings(out_root=tmp_path),
-        limit=5,
-        date="2026-08-20",
-        now=NOW,
-        client=client,
-    )
+    path = run(Settings(out_root=tmp_path), limit=5, date="2026-08-20", now=NOW, client=client)
 
     assert path == tmp_path / "brief-2026-08-20.html"
     html = path.read_text(encoding="utf-8")
-    # Both queries are summed into the footer: 2 x 3 MiB scanned, and a cost that is two
-    # 10 MB-floored scans rather than one (SPEC §17 — never report a number the bill won't
-    # match).
-    assert "6,291,456 bytes scanned" in html
-    assert "$0.0001" in html
+    # Three queries now, not two: clusters, entities, health.
+    assert "9,437,184 bytes scanned" in html
     assert "Northwind" in html
-    # a3 is byte-identical to a1 and must not appear as a second story.
-    assert html.count("Northwind acquires Lumen Robotics") <= 2
+    # The resolved company shows on the story, with its ticker.
+    assert "Northwind Corp" in html
+    assert "2 articles in" not in html, "articles_in comes from article_count, not row count"
+    assert "6 articles in" in html
+
+
+def test_the_brief_does_not_report_an_exact_dupe_count_it_no_longer_measures(tmp_path):
+    """Collapsing exact duplicates happens in `cluster_window` now. Printing a 0 here would
+    be a number nobody measured, which SPEC §17 rules out."""
+    client = _RoutingAthenaClient(clusters=[_cluster_row()], healths=[_health_row()])
+    path = run(Settings(out_root=tmp_path), limit=5, date="2026-08-20", now=NOW, client=client)
+
+    assert "exact dupes removed" not in path.read_text(encoding="utf-8")
+
+
+def test_an_empty_cluster_table_still_renders_a_brief_with_an_honest_footer(tmp_path, capsys):
+    """A missing cluster run must not look like a quiet news day."""
+    client = _RoutingAthenaClient(clusters=[], healths=[_health_row()])
+    path = run(Settings(out_root=tmp_path), limit=5, date="2026-08-20", now=NOW, client=client)
+
+    assert path.exists()
+    assert "WARNING: no clusters" in capsys.readouterr().out
+
+
+def test_a_stale_clustered_window_says_so(tmp_path, capsys):
+    """Yesterday's stories under today's date, rendered without comment, is exactly the
+    silence SPEC §11 exists to prevent."""
+    client = _RoutingAthenaClient(
+        clusters=[_cluster_row(window_end="2026-08-18 05:00:00.000000 UTC")],
+        healths=[_health_row()],
+    )
+    run(Settings(out_root=tmp_path), limit=5, date="2026-08-20", now=NOW, client=client)
+
+    assert "WARNING: newest clustered window is" in capsys.readouterr().out
+
+
+def test_a_fresh_window_does_not_warn(tmp_path, capsys):
+    """`window_start` is 72 hours before the run by construction, so measuring staleness
+    from it fired on every healthy brief. A warning that is always on is one nobody reads —
+    found by running the real thing, not by a test."""
+    client = _RoutingAthenaClient(clusters=[_cluster_row()], healths=[_health_row()])
+    run(Settings(out_root=tmp_path), limit=5, date="2026-08-20", now=NOW, client=client)
+
+    assert "WARNING: newest clustered window" not in capsys.readouterr().out

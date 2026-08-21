@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING, Any
 from signal_core.entities import dictionary as dict_module
 from signal_core.entities import mentions as mention_module
 from signal_core.entities import resolve as resolve_module
+from signal_core.spark.tables import ensure_columns
 from signal_core.timeutil import ensure_utc, utc_now
 
 if TYPE_CHECKING:
@@ -144,7 +145,7 @@ def ensure_tables(
     *,
     mentions_table: str = MENTIONS_TABLE,
     entities_table: str = ENTITIES_TABLE,
-) -> None:
+) -> list[str]:
     namespace = mentions_table.rsplit(".", 1)[0]
     spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {namespace}")
     spark.sql(
@@ -156,6 +157,11 @@ def ensure_tables(
     spark.sql(
         f"CREATE TABLE IF NOT EXISTS {entities_table} ({ENTITIES_DDL}) "
         f"USING iceberg {_TBLPROPERTIES}"
+    )
+    # See `spark/tables.py`: a DDL that grows a column otherwise drifts from the deployed
+    # table in silence, and the first thing to notice is whatever tries to read it.
+    return ensure_columns(spark, mentions_table, MENTIONS_DDL) + ensure_columns(
+        spark, entities_table, ENTITIES_DDL
     )
 
 

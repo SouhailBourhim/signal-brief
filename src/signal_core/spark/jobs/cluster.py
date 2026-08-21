@@ -27,6 +27,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from signal_core import dedup
+from signal_core.spark.tables import ensure_columns
 from signal_core.timeutil import ensure_utc, utc_now
 
 if TYPE_CHECKING:
@@ -38,7 +39,7 @@ ARTICLE_CLUSTERS_TABLE = "silver.article_clusters"
 
 # Bump on any change to the decision, the thresholds, or the blocking. A mixed table is
 # then diagnosable rather than a mystery, and ADR-0009's measurement trail stays checkable.
-ALGO_VERSION = "3.B.4"
+ALGO_VERSION = "3.D"
 
 # A blocking key held by more than this many articles is dropped rather than exploded: one
 # token shared by 800 filings would emit 320k candidate pairs on its own. Dropping it costs
@@ -106,6 +107,9 @@ class ClusterWindowResult:
     dissolved_articles: int
     blocking_keys_dropped: int
     ordering_key: str
+    # Columns this run had to add to a table that predates them. Surfaced rather than logged:
+    # a schema changing under a running pipeline is something a person should see.
+    columns_added: tuple[str, ...] = ()
 
     @property
     def dedup_ratio(self) -> float:
@@ -117,14 +121,21 @@ def ensure_tables(
     *,
     clusters_table: str = CLUSTERS_TABLE,
     map_table: str = ARTICLE_CLUSTERS_TABLE,
-) -> None:
+) -> list[str]:
     namespace = clusters_table.rsplit(".", 1)[0]
     spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {namespace}")
+    added = []
     for table, ddl in ((clusters_table, CLUSTERS_DDL), (map_table, ARTICLE_CLUSTERS_DDL)):
         spark.sql(
             f"CREATE TABLE IF NOT EXISTS {table} ({ddl}) "
             f"USING iceberg PARTITIONED BY (days(window_start)) {_TBLPROPERTIES}"
         )
+        # `CREATE TABLE IF NOT EXISTS` never revisits a table that already exists, so a DDL
+        # that grows a column drifts away from the deployed table in silence. 3.B.4 added
+        # `first_seen`/`last_seen` here and the deployed table kept its original 17 columns
+        # until the brief failed reading them (see `spark/tables.py`).
+        added += ensure_columns(spark, table, ddl)
+    return added
 
 
 def read_window(
@@ -218,7 +229,7 @@ def cluster_window(
     map_table: str = ARTICLE_CLUSTERS_TABLE,
 ) -> ClusterWindowResult:
     """Cluster one window and replace that window's rows in both tables."""
-    ensure_tables(spark, clusters_table=clusters_table, map_table=map_table)
+    columns_added = ensure_tables(spark, clusters_table=clusters_table, map_table=map_table)
     since, until = ensure_utc(since), ensure_utc(until)
 
     windowed = read_window(spark, since, until, table=articles_table)
@@ -296,6 +307,7 @@ def cluster_window(
         dissolved_articles=grouped.dissolved_articles,
         blocking_keys_dropped=dropped,
         ordering_key=ordering_key,
+        columns_added=tuple(columns_added),
     )
 
 

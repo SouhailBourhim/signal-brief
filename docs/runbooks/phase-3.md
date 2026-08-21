@@ -990,27 +990,158 @@ switching it off entirely scores **better on train** (0.905 vs 0.900) and worse 
   company), and `FlyWire` → `FLYW` where a fruit-fly connectome shares a name with a payments
   company.
 
+## 3.D — The brief reads the tables *(done 2026-08-21)*
+
+`brief/build.py` now reads `silver.story_clusters` and `silver.entity_mentions` instead of
+re-clustering `silver.articles` in-process. SPEC §12's ladder, rung 3.x.
+
+The point is not speed. Rung 3.0 shipped Phase 0's in-process clustering so that reading
+could start before the Spark job existed, and the cost of that was a **fork**: `make eval`
+scored `dedup.decide` at the thresholds 3.B fitted, while the brief ran the same function
+down a different path with no blocking, no size guard, and no entity resolution at all. Two
+implementations of "what is a story" and only one under test. 3.D collapses them, so the
+thing read every morning is the thing measured.
+
+Four queries, all through Athena (`ops/athena.py`), so the footer's cost fields keep meaning
+what they say: clusters + head snippet, entities, health. 913 KB, 773 KB and a metadata scan
+respectively — about $0.00014 a morning.
+
+### Everything below was found by reading the output, not by a test
+
+That is the entire argument for the ladder, and 3.D is the strongest case for it so far: the
+code was green, the eval was green, and the page was wrong in four separate ways.
+
+**1. The deployed table had 17 columns and the DDL had 19.** The very first real run died
+with `COLUMN_NOT_FOUND: Column 'c.first_seen' cannot be resolved`. 3.B.4 added
+`first_seen`/`last_seen`; `CREATE TABLE IF NOT EXISTS` creates a table once and never looks
+at it again, so the deployed table kept its original shape while every test — running against
+tables created fresh from the new DDL — passed.
+
+`spark/tables.py::ensure_columns` now reconciles the additive direction on every run and
+reports what it added (`columns_added` in the result object, so it reaches the DAG's task
+output). Dropping, renaming and retyping stay manual, because each can lose data. Added
+columns are always nullable: Iceberg will not add a required column to a table with rows, and
+a `NOT NULL` in a DDL is a statement about writers, not about history. Production run:
+`columns_added: ('first_seen', 'last_seen')`.
+
+**2. The staleness warning fired on every healthy brief.** `window_start` is 72 hours before
+the run by construction, so an age measured from it is never under 72. Measured from
+`window_end` instead. A warning that is always on is worse than no warning.
+
+**3. The lead story was a 45-article false cluster**, holding Disney/FCC, a Grok exploit,
+four Show HN posts, a Pixel deal, an Audi review and a corgi tracker — with entity links to
+Amazon, Best Buy, Netflix, Reddit, OpenAI and Anthropic to match. 3.B.2 had reduced the
+largest cluster to 22 articles across 8 publishers; the corpus has since grown from ~2,600
+articles to 4,300, and the problem came back.
+
+The cause was **stage 2, the simhash near-duplicate check**, at exactly its threshold:
+
+    Show HN: Markdown Buddy        vs  Meet the startup helping Wall Street...
+      title 0.00  body 0.02  hamming 12
+    Show HN: Keystroke Biometrics  vs  Show HN: Check if any of the $656M...
+      title 0.00  body 0.05  hamming 10    (224 and 111 body tokens)
+
+3.B had already written down why this was a risk rather than a curiosity: a per-pair error
+rate far too small for a 252-pair eval to detect is still thousands of edges over a window's
+millions of pairs, and union-find chains them. Measured over real articles clearing
+`MIN_SIMHASH_TOKENS`, unrelated pairs collide at 0.065% by distance 11 and 0.9% by 14 — and
+the tail reaches 10.
+
+Lowering 12 → 10 removed the first edge and not the second, which is where "tune it down
+another bit" stops being the answer. **`NEAR_DUPLICATE_DISTANCE` is now 0** — exact equality
+of the cleaned simhash, where a 64-bit hash cannot collide by accident. It still does SPEC
+§7.1 stage 2's stated job (identical prose under a new headline, which `exact_dedup`'s
+raw-text hash misses); what it gives up is light edits at 8-9 bits, which 3.B measured the
+title path as already catching. **Both labeled sets score identically at 0, 2, 4, 6, 8, 10
+and 12** — checked, not assumed — so this costs nothing measurable and removes the entire
+collision class.
+
+| | before | 12 → 10 | → 0 |
+|---|---|---|---|
+| edges | 103 | 52 | **43** |
+| clusters | 4,207 | 4,244 | **4,253** |
+| largest cluster | **45 articles, 17 publishers** | 3 articles | **3 articles, 3 publishers** |
+
+This is not a verdict on banded LSH. It is a verdict on *this* corpus — six feeds with almost
+no true syndication (`dedup_ratio` 1.01). A corpus with real newswire reprints would justify
+revisiting it, with a measurement on that corpus.
+
+**4. Nine of the ten stories were SEC form numbers.** With the phantom cluster gone, what it
+had been masking showed: `breadth` was `distinct_publisher_count / 4`, so **a single
+publisher scored 0.25** — a floor of 0.15 at weight 0.6 that nothing could fall below. EDGAR
+emits filings continuously, so there is always a batch minutes old scoring
+`0.15 + 0.4 x 1.00 = 0.55`, beating a two-publisher story four hours old.
+
+SPEC §7.4 defines the component as the count of *independent* publishers, and one publisher
+has no independent corroboration by construction. So the scale starts at the second:
+`(count - 1) / 3`. A singleton now scores 0.00 breadth and cannot exceed 0.40 on recency
+alone. **This is a correction to what `breadth` means, not the arrival of §7.4's remaining
+components** — novelty, velocity, relevance and market corroboration stay 4A.
+
+### Verified — the brief, read
+
+    • Tesla sunsets its Solar Roof tiles
+        2 publishers (electrek.co, theverge.com) · score 0.52 · breadth 0.33 · recency 0.81
+        -> Tesla, Inc. TSLA
+    • mRNA cancer vaccine succeeded in Phase 3 melanoma trial, Moderna and Merck say
+        3 publishers (arstechnica.com, cnbc.com, time.com) · score 0.42 · breadth 0.67
+        -> Moderna, Inc. MRNA
+
+Real corroborated stories lead, with correctly resolved tickers on both. The resolve job ran
+against real AWS for the first time here: **11,835 entities into `dim_entities`, 20,760
+mentions detected over 4,303 articles, 2,509 linked (12.1%), 1,018 distinct companies** —
+unlinked as `not-a-company` 10,820, `no-such-entity` 4,711, `below-floor` 2,720.
+
+Entities also validated the 3.C dictionary decision from the outside: the pre-rebuild
+39,200-entity dictionary put a company called **`company`** on a Wells Fargo filing. The
+notability floor 3.C raised on train-half evidence had already removed it.
+
+### Still open
+
+- **Positions 3-10 are still EDGAR filings**, and now honestly so: the window holds only two
+  or three genuinely multi-publisher stories (`dedup_ratio` 1.01), so there is nothing else
+  with corroboration to promote. This is a **source-mix and relevance problem, not a
+  clustering one** — two of six sources are SEC firehoses emitting ~4 documents an hour each,
+  and the components that would rank a 424B2 prospectus below a two-source tech story are
+  §7.4's relevance (a watchlist) and market corroboration. Both are 4A. Carried there.
+- `exact_duplicates_removed` disappears from the footer rather than reading 0. The brief no
+  longer collapses duplicates, `cluster_window` does, and it reports the count as a task
+  result. A 0 would be a number nobody measured (SPEC §17).
+- Entities degrade to absent, loudly, if `silver.entity_mentions` does not exist. Stories are
+  the product; a fresh clone that has run `cluster` but not `resolve` still gets its morning
+  read. Only "no such table" is swallowed — permissions and workgroup errors still raise.
+
 ## The daily read *(SPEC §12's brief ladder; 3.F's acceptance)*
 
 | date | read | what it showed |
 |---|---|---|
 | 2026-08-20 | yes | First real brief. Lead story was a 1,720-article phantom cluster — 3.0's finding, and the reason 3.B exists. |
 | 2026-08-21 | yes | Ten genuine multi-publisher stories, no phantoms. Footer correctly reports the outage and names 22h of unrecoverable window-horizon loss for `rss_tech` and `rss_verge`. Surfaced 3.B.4. |
+| 2026-08-21 (pm) | yes | First brief read off the cluster and entity tables. Surfaced four defects nothing else caught: a deployed table two columns behind its DDL, an always-on staleness warning, a 45-article simhash false merge, and a `breadth` floor that put nine SEC filings on the page. See 3.D. |
 
-Both findings above came from reading the output, not from a test. That is the argument for
-the ladder: §1's success criterion is behavioural, and a brief nobody reads is a brief whose
-defects nobody finds.
+Every finding in that table came from reading the output, not from a test. That is the whole
+argument for the ladder: §1's success criterion is behavioural, and a brief nobody reads is a
+brief whose defects nobody finds. 3.D is the clearest case — the code was green, both eval
+gates were green, and the page was wrong in four separate ways.
 
 ### Still open
 
 - The recall gap remains the headline number to beat: 0.500 held out. That is ADR-0009's
   question, and 3.E's.
-- `dedup_ratio` is 1.02, which is honest rather than disappointing: this corpus really is
-  mostly unique documents, and 17 multi-publisher stories is what `breadth` has to rank on.
+- `dedup_ratio` is 1.01, which is honest rather than disappointing: this corpus really is
+  mostly unique documents. It is also the reason positions 3-10 of the brief are SEC filings
+  — there are only two or three corroborated stories in a 72-hour window for `breadth` to
+  promote, so the fix is §7.4's relevance and market-corroboration components in 4A, not more
+  clustering.
 
 ## Then
 
-3.D wires the brief onto `silver.story_clusters` and `silver.entity_mentions`, so the thing
+3.E ratchets the floors and writes ADR-0009 — which now has two verdicts to record rather
+than one: whether embeddings beat the lexical same-story rule (3.B's 0.500 held-out recall,
+and the `dedup_ratio` of 1.01 that says this corpus barely has duplicates to find), and
+whether they beat the lexical resolver on the `Meta`/`Apple` class 3.C cannot touch.
+
+*(superseded)* 3.D wires the brief onto `silver.story_clusters` and `silver.entity_mentions`, so the thing
 being read every morning is the thing being measured. Then 3.E ratchets the floors and writes
 ADR-0009 — which now has two verdicts to record rather than one: whether embeddings beat the
 lexical same-story rule (3.B's 0.500 held-out recall), and whether they beat the lexical
