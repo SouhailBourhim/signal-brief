@@ -226,6 +226,14 @@ the window. Record the input ordering key with each run so a replay can reproduc
 **Publish:** dedup ratio (articles in ÷ clusters out) and precision/recall against ~200 hand-labeled
 article pairs. The labeled set lives in `evals/` and is committed.
 
+**As built** (ADR-0009): stages 1, 2 and 4 ship; stage 3 ships as a lexical rule — titles against
+titles, bodies against bodies, never pooled — and the embeddings land in 4B. Measured against the
+252 real pairs, embeddings roughly double held-out recall (0.500 → 0.909) at a bounded precision
+cost that does not chain at corpus scale, so this is a scheduling decision and not a rejection.
+Banded LSH is also not shipped: stage 2 is exact simhash equality, because on *this* corpus
+(`dedup_ratio` 1.01, almost no true syndication) every looser distance was a collision source and
+no measured gain. Both would be worth re-asking on a corpus with real newswire reprints.
+
 ### 7.2 Entity resolution
 
 Dictionary built from SEC `company_tickers.json` plus Wikidata aliases. Then the hard cases: "Meta"
@@ -235,6 +243,13 @@ disguise, handled in `dim_entities` with `valid_from` / `valid_to`.
 
 Disambiguation by cosine similarity between article context and entity description embeddings, with
 a confidence floor below which a mention is left **unlinked rather than guessed**.
+
+**As built** (ADR-0009): the confidence floor ships and is fitted; the embeddings do not, and the
+reason is not the dependency. The dictionary carries names, tickers, CIKs and aliases and **no
+descriptions**, so there is nothing to embed on the entity side — and the alias index proposes the
+correct entity for only 34 of 54 linked mentions, capping any context-scoring rule at 0.630 recall
+against 0.611 shipped. The fix is `?itemDescription` in the WDQS projection and a wider candidate
+set, in that order, before an encoder is worth reaching for.
 
 **Publish:** precision/recall over 300 hand-labeled mentions. Very few portfolio projects quantify
 this, which is exactly why it reads as senior.
@@ -462,7 +477,7 @@ receiving phase's row below, so it is gated by an acceptance test rather than by
 | **0. Foundation** *(done)* | Repo, ADRs, §10.2 guardrails before any billable resource; walking skeleton (fake source → brief); CI; eval harness with enforced floors | Fresh clone runs `make setup && make skeleton && make test && make eval` green, CI green, **zero AWS resources beyond guardrails and Terraform state** |
 | **1. Ingest** *(done; 1.D open)* | Terraform-provisioned S3 / Glue / DynamoDB / budgets / alarms; 3 Lambda pollers on schedule; `bronze.raw_documents` Iceberg table; local Airflow coordinating monitoring and recovery | Stop ingestion for a day, restart. **Replay** reprocesses the stored interval with no duplicates and no gaps; **catch-up** recovers what each source's backfill horizon allows and records `gap_reason` for the rest (§6.3). **Carried to 4A** — the mechanism is proven in `tests/test_replay_catchup.py`; against the deployed pipeline it is not |
 | **2. Lake + query** *(done)* | 6 sources; Spark normalize → `silver.articles`, `silver.hn_comments`, `silver.parse_rejects`; Glue-registered Iceberg; Athena serving queries; partitioning rationale documented (ADR-0007); `ops.pipeline_costs` recording bytes scanned and S3 egress | A stranger runs `make up` and answers an ad-hoc question in Athena; bytes scanned and cost recorded for that query |
-| **3. Cluster + resolve** | **3.0 first: a real brief** — the existing renderer pointed at real `silver.articles`, ugly ranking, no enrichment, no email. Then: Spark dedup, clustering, entity resolution; both labeled eval sets committed | Reported precision/recall on both, reproducible via `make eval` — **and you have been reading a real brief every morning since 3.0**, not a fake one |
+| **3. Cluster + resolve** *(done)* | **3.0 first: a real brief** — the existing renderer pointed at real `silver.articles`, ugly ranking, no enrichment, no email. Then: Spark dedup, clustering, entity resolution; both labeled eval sets committed | Reported precision/recall on both, reproducible via `make eval` — **and you have been reading a real brief every morning since 3.0**, not a fake one |
 | **4A. Publish** | Ranker over real clusters; HTML brief with §11's health footer, emailed at 07:00; maintenance DAG; **plus the four carried-forward items below** | You read it three mornings running and the feedback loop records your marks. **1.D proven against the deployed pipeline**, not just in tests. Compaction delta measured |
 | **4B. Enrich + macro** | Ollama stage with content-hash cache, Pydantic validation and evals (§7.3); ALFRED bitemporal macro store (§8) | A 30-day backfill: **bronze bytes, normalization, hashing, simhash and entity resolution reproduce identically; clustering reproduces within a stated tolerance given a recorded ordering key; enrichment resolves from cache with a published hit rate** |
 | **5. Platform polish** | dbt migration of silver→gold; Kafka + Structured Streaming **if and only if §14's criteria are met** | 14+ consecutive daily briefs; each re-added component has a written before/after justification |
@@ -502,18 +517,30 @@ make. Listed here because a deliverable that appears in no phase row gets found 
 | **Stale-but-successful feed detection** — measure staleness from `last_content_change_at`, not `last_success_at` | `docs/runbooks/phase-2.md` | The health footer's freshness claims, §11 |
 | **HN score-velocity poller** — a second poller over `topstories.json`; the forward id walk fetches each item once, at score 1, so there is nothing to slope | `docs/runbooks/phase-2.md` | §7.4's velocity component |
 | **`project` cost-allocation tag** | `docs/runbooks/phase-1.md` | §10.3's per-project cost answer |
+| **Salience vs. resolution** — the brief shows every resolved mention as a subject, so a photo credit puts Getty Images on an Amazon story | `docs/runbooks/phase-3.md` 3.E | §7.4's relevance component |
+| **Publisher-diversity inflation** — one HN submission's outbound links count as three publishers | `docs/runbooks/phase-3.md` 3.E | §7.4's breadth component |
 
 ### Labeled sets are work, and they start now
 
 ~600 hand labels gate two phase acceptances: ~200 article pairs (§7.1) and ~300 mentions
-(§7.2) for Phase 3, ~100 enrichment examples (§7.3) for 4B. `evals/dedup/pairs.jsonl`
-currently holds 55 synthetic Phase 0 pairs; `evals/entities/` and `evals/enrichment/` are
-empty, with `evals/thresholds.toml`'s floors pinned at `0.0` waiting for them.
+(§7.2) for Phase 3, ~100 enrichment examples (§7.3) for 4B.
+
+**Phase 3's two are done**: `evals/dedup/pairs.jsonl` holds 252 real pairs beside the 55
+synthetic Phase 0 ones, scored separately so the fixture cannot flatter the real set, and
+`evals/entities/mentions.jsonl` holds 300. Both floors are off `0.0` and enforced in CI.
+`evals/enrichment/` is still empty, with its floors at `0.0` waiting for 4B.
 
 Label **incrementally against the real `silver.articles` data that already exists**, not in
 one block once the code is written — 20 pairs a day through Phase 3's build reaches 200 by
 the time the clusterer needs them. Label **before** writing the matching algorithm, so the
 labels are not quietly shaped to flatter the implementation they will judge.
+
+Phase 3 confirmed the second rule the expensive way round and added a third. The labeled set
+cannot certify a constant it scores flat: of the four the same-story grid searches, 252 pairs
+determine **one**, and the rest were being chosen by a tiebreak that had drifted to
+recommending a value already measured as harmful. **A constant the labels cannot separate is
+decided by a corpus-level measurement** (`evals/experiments/corpus_merge_rate.py`) **or it is
+not decided at all.**
 
 ---
 

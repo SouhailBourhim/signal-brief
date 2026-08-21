@@ -7,7 +7,7 @@ immutably; collapses syndicated coverage into ranked story clusters; and publish
 at 07:00 Africa/Casablanca with lineage, replay, cost controls, and locally run LLM
 enrichment built in.
 
-**Status: Phase 3, done bar the write-up.** Six pollers — Hacker News, SEC EDGAR + Form D,
+**Status: Phase 3, done.** Six pollers — Hacker News, SEC EDGAR + Form D,
 and three RSS/Atom feeds — run as scheduled Lambdas and land raw payloads in S3; local Spark
 jobs commit them to `bronze.raw_documents` on Iceberg, normalize that into `silver.articles`
 and `silver.hn_comments`, collapse it into story clusters, and resolve company mentions
@@ -16,11 +16,16 @@ scored** — 252 article pairs and 300 entity mentions — and a real brief has 
 morning since 3.0, which is what Phase 3's acceptance actually asks for. The infrastructure
 is Terraform, and applied. No LLM yet.
 
-What remains in the phase is 3.E: ratcheting the accuracy floors and writing ADR-0009, which
-has two verdicts to record — whether sentence embeddings beat the lexical same-story rule,
-and whether they beat the lexical resolver on the `Meta`-versus-metadata class it cannot
-touch. [`docs/runbooks/phase-3.md`](docs/runbooks/phase-3.md) is where this phase stands,
-including what broke on first real use, and there is a lot of that.
+**[ADR-0009](docs/decisions/ADR-0009-embeddings-for-same-story-and-entities.md) closed the
+phase with two verdicts, measured rather than argued.** Sentence embeddings beat the lexical
+same-story rule — held-out recall 0.500 → 0.909, at a precision cost that does not chain at
+corpus scale — so the stage is adopted, and scheduled for 4B via Ollama rather than shipped
+now behind 1.1 GB of torch. They do **not** beat the lexical resolver, and the reason turned
+out not to be the model: the entity dictionary has no descriptions to embed, and its alias
+index caps *any* context-scoring rule at 0.630 recall against 0.611 shipped. A gap recorded
+for two phases as "needs embeddings" was a data gap the whole time.
+[`docs/runbooks/phase-3.md`](docs/runbooks/phase-3.md) is where the phase stands, including
+what broke on first real use, and there is a lot of that.
 
 **Replay and catch-up are not the same promise.** Replay reprocesses an interval from bytes
 already in `bronze/` — deterministic, and always available. Catch-up re-fetches what was
@@ -72,15 +77,17 @@ SPEC §15: never publish a metric the pipeline cannot recompute. Current numbers
 | Dedup precision / recall, **real pairs** | **1.000 / 0.500** held out · 0.962 / 0.568 full set (n=252) | `evals/fit_thresholds.py`, labeled 2026-08-20 |
 | Dedup precision / recall, Phase 0 fixture | 1.000 / 1.000 (n=55) | `make eval` — a harness canary, not evidence |
 | **Entity resolution precision / recall** | **0.833 / 0.556** held out · 0.868 / 0.611 full set (n=300) | `evals/fit_thresholds.py --set entities`, labeled 2026-08-20 |
-| Dedup ratio | 11 → 7 clusters (fake) · 4,301 → 4,253 (real; 21 multi-publisher stories) | `make skeleton` / `signal brief` |
+| Dedup ratio | 11 → 7 clusters (fake) · 4,296 → 4,253 (real, 1.01x) | `make skeleton` / `signal brief` |
 | Entity resolution, one production window | 20,760 mentions detected over 4,303 articles → 2,509 linked (12.1%), 1,018 distinct companies | `spark/jobs/resolve.py`, real AWS |
 | Cost of one brief | 3 Athena queries, 1.7 MB scanned, **$0.00014** | brief footer, real AWS |
 | Ingestion, one production window | 521 bronze rows → 207 articles (19 quarantined, all `hackernews`/dead-item) | `docs/runbooks/phase-2.md` 2.E, real AWS |
 | Athena, `SELECT *` vs. projected vs. partition-pruned, same question | 184,259 / 73,373 / 64,713 bytes scanned | `docs/athena.md`, real AWS |
 | S3 egress, one commit | 3,468,248 bytes | `ops.pipeline_costs`, real AWS |
+| Embeddings vs. the lexical same-story rule | embedding **0.870 / 0.909** vs. lexical **1.000 / 0.500** held out; corpus false merges ~161/window vs. ~54 | `evals/experiments/embed_dedup.py`, ADR-0009 |
+| Embeddings vs. the lexical resolver | no gain at any threshold; ceiling **0.630** recall for any context-scoring rule over this dictionary | `evals/experiments/embed_entities.py`, ADR-0009 |
 | LLM eval accuracy, cache-hit rate | — | Phase 4B |
 | Cost per day (full pipeline) | — | Phase 4A — pieces above are real, a full day's total isn't assembled yet |
-| Consecutive daily briefs read | 2 | SPEC §12's brief ladder; the count started 2026-08-20 |
+| Consecutive daily briefs read | 2 days, 4 reads | SPEC §12's brief ladder; the count started 2026-08-20 |
 
 The fixture's 1.000/1.000 proved the harness runs, not that the clustering is good — and
 Phase 3's 252 real labeled pairs showed how much daylight sat between those two claims. On a
@@ -117,6 +124,25 @@ then reviewed by the reader**, who overrode three (`labeler` is stamped on every
 `reviewed_from` on every overridden one) — so the figures measure agreement with a model on
 the bulk of each set, spot-checked where the rule and the labeler disagreed.
 
+The two embedding rows are measured, reproducible, and **not runnable by `make eval`** —
+deliberately. Deciding whether a 1.1 GB dependency earns its place by first adding it to
+`pyproject.toml` would answer the question by assumption, so `evals/experiments/` runs
+against a throwaway virtualenv and each script carries the command that builds one. Both
+imported their split, objective and constraint selection from `evals/fit_thresholds.py`
+rather than choosing friendlier ones.
+
+**The last thing Phase 3 measured was its own fitting procedure, and that is the finding
+worth reading.** `evals/fit_thresholds.py` chooses the same-story constants; asked to
+re-derive them, it returned a configuration disagreeing with the shipped code in three places
+and recommending exactly the value 3.D had removed for merging a Disney lawsuit with a corgi
+tracker. Nothing had failed, because a fitter's output is prose until someone reads it. The
+cause: of the four constants in the grid, **252 labeled pairs determine one**. 336 of 385
+feasible grid points tie at the top score, so a tuple-order tiebreak was silently choosing
+the rest — and choosing badly. The fit now breaks ties by keeping what ships, reports which
+constants the labels leave free, and is pinned by tests; the two that a corpus rather than a
+labeled set must decide were moved out of the grid entirely, with
+`evals/experiments/corpus_merge_rate.py` as the thing that decides them.
+
 Every Athena dollar figure behind the bytes-scanned numbers above floors at Athena's real 10 MB
 per-query minimum (`ops/athena.py`) and currently rounds to the same $0.0000477 per query —
 the lake is still small enough that bytes scanned, not cost, is the metric that actually
@@ -133,6 +159,7 @@ moves; see `docs/athena.md` for why that's stated rather than hidden.
 | `handlers/` | Lambda entry point — one artifact, N functions |
 | `infra/terraform/` | `bootstrap/` (state backend), `main/` (everything else) |
 | `evals/` | Labeled sets, scorers, and the accuracy floors CI enforces |
+| `evals/experiments/` | Measurements that decide a question without shipping a dependency — ADR-0009's embedding trials, and the corpus-level false-merge rate a pairwise eval cannot see |
 | [`docs/architecture.md`](docs/architecture.md) | What runs where, and why the AWS/local line falls where it does — diagrams, table lineage, and what is not built yet |
 | [`docs/athena.md`](docs/athena.md) | Querying the lake: setup, real questions, the `SELECT *` vs. projected vs. partition-pruned measurement |
 | [`docs/how-signal-works.md`](docs/how-signal-works.md) | What each phase is for, in plain English — no prior knowledge assumed |
