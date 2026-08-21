@@ -25,6 +25,11 @@ window. What catch-up cannot recover is recorded as a `gap_reason` per source pe
 in `ops.source_health` and printed in the brief's footer, rather than left to look like a
 quiet day (SPEC §6.3).
 
+**The shape of it**, in one line: ingestion is serverless and in AWS because it must run
+whether or not a laptop is on; processing is local because EMR, MSK and MWAA buy nothing here
+that `s3a` and Docker Compose do not. [`docs/architecture.md`](docs/architecture.md) draws
+both halves, the table lineage, and what is deliberately still missing.
+
 **New to data engineering?** [`docs/how-signal-works.md`](docs/how-signal-works.md) explains
 what each phase is for, in plain English, with no prior knowledge assumed.
 
@@ -100,6 +105,7 @@ actually moves; see `docs/athena.md` for why that's stated rather than hidden.
 | `handlers/` | Lambda entry point — one artifact, N functions |
 | `infra/terraform/` | `bootstrap/` (state backend), `main/` (everything else) |
 | `evals/` | Labeled sets, scorers, and the accuracy floors CI enforces |
+| [`docs/architecture.md`](docs/architecture.md) | What runs where, and why the AWS/local line falls where it does — diagrams, table lineage, and what is not built yet |
 | [`docs/athena.md`](docs/athena.md) | Querying the lake: setup, real questions, the `SELECT *` vs. projected vs. partition-pruned measurement |
 | [`docs/how-signal-works.md`](docs/how-signal-works.md) | What each phase is for, in plain English — no prior knowledge assumed |
 | [`docs/decisions/`](docs/decisions/) | ADRs, including the ones that reversed earlier choices |

@@ -1,0 +1,197 @@
+# Architecture
+
+What runs where, and why the line falls where it does. [`SPEC.md`](../SPEC.md) §4 is the
+source of truth; this is the picture, kept current with what is actually built.
+
+**Read the shape first: two boundaries, one deliberate.** Ingestion is serverless and in AWS
+because it must run whether or not a laptop is on. Processing is local because EMR, MSK and
+MWAA buy nothing here that `s3a` and Docker Compose do not — [ADR-0002](decisions/ADR-0002-local-runtime-shape.md)
+records that decision and what would reverse it.
+
+## The system
+
+```mermaid
+flowchart TB
+    subgraph feeds [" "]
+        direction LR
+        F1["Hacker News"]
+        F2["SEC EDGAR<br/>+ Form D"]
+        F3["RSS · Ars,<br/>Verge, tech"]
+    end
+
+    subgraph aws ["AWS — always-free tier"]
+        direction TB
+        SCHED["EventBridge Scheduler<br/><i>one schedule per source</i>"]
+        LAMBDA["Lambda poller ×6<br/><i>handlers/poll_source.py</i><br/>fetch bytes, report outcome"]
+        DDB[("DynamoDB<br/>etags · watermarks")]
+        STAGING[("S3 staging/<br/>gzipped JSONL")]
+        BRONZE[("S3 bronze/<br/>Iceberg")]
+        GLUE["Glue Data Catalog"]
+        ATHENA["Athena<br/><i>workgroup with a<br/>bytes-scanned cutoff</i>"]
+        ALARM["CloudWatch alarms<br/>→ SNS → email"]
+
+        SCHED --> LAMBDA
+        LAMBDA <--> DDB
+        LAMBDA --> STAGING
+        LAMBDA -.-> ALARM
+    end
+
+    subgraph local ["local — Docker Compose + host"]
+        direction TB
+        AIRFLOW["Airflow<br/><i>ingest_monitor · process<br/>cluster · resolve</i>"]
+        COMMIT["Spark: commit_bronze<br/><i>MERGE on ingest_id</i>"]
+        NORM["Spark: normalize<br/><i>parse, hash, simhash</i>"]
+        CLUSTER["Spark: cluster<br/><i>blocking → decide → components</i>"]
+        RESOLVE["Spark: resolve<br/><i>detect → resolve → SCD2</i>"]
+        BRIEF["ranker + renderer<br/><i>reads over Athena</i>"]
+        DICT[["warehouse/entities/<br/>dictionary.json.gz<br/><i>SEC + Wikidata, pinned</i>"]]
+    end
+
+    OUT["out/brief-DATE.html"]
+
+    F1 & F2 & F3 -->|HTTP, conditional GET| LAMBDA
+    STAGING -->|read-once cache| COMMIT
+    COMMIT --> BRONZE
+    BRONZE --> NORM
+    NORM --> CLUSTER
+    NORM --> RESOLVE
+    DICT --> RESOLVE
+    BRONZE -.->|metadata| GLUE
+    GLUE --- ATHENA
+    ATHENA -->|result rows only| BRIEF
+    BRIEF --> OUT
+    AIRFLOW -.->|orchestrates| COMMIT & NORM & CLUSTER & RESOLVE
+
+    classDef store fill:#eef4ff,stroke:#5b7fb5,color:#123
+    classDef job fill:#fff6e8,stroke:#b5885b,color:#123
+    classDef out fill:#eefbf0,stroke:#5bb56f,color:#123
+    class DDB,STAGING,BRONZE,DICT store
+    class COMMIT,NORM,CLUSTER,RESOLVE,LAMBDA job
+    class OUT out
+```
+
+**The one arrow worth staring at** is `Athena → brief`. The brief is a *query*, not a
+transform, so it does not open a Spark session against `s3://`. Athena scans inside AWS and
+returns tens of result rows, which keeps SPEC §10.1's egress off the dev box and is what
+finally populates the footer's `bytes_scanned` and `estimated_cost_usd`. A morning brief is
+three queries and about **$0.00014**.
+
+## Why bytes cross the Lambda boundary undecoded
+
+The poller does one HTTP GET and writes **gzipped JSONL** to `staging/`, base64'ing the
+payload rather than decoding it. A separate local Spark job MERGEs staged objects into
+`bronze.raw_documents` on `ingest_id`.
+
+That split is a packaging constraint, not taste: writing Parquet in the Lambda means shipping
+pyarrow + numpy (~185 MB) into a function whose whole job is one GET, uncomfortably close to
+Lambda's 250 MB ceiling. `tests/test_lambda_artifact.py` fails the build if the handler's
+import chain ever pulls in pyarrow, pyspark, pandas or jinja2.
+
+Feeds also routinely lie about their encoding, and decoding is interpretation. Interpretation
+belongs later, against stored bytes, where a mistake is fixable by re-running rather than by
+re-fetching something that is no longer served.
+
+## Tables
+
+```mermaid
+flowchart LR
+    RAW[("bronze.raw_documents<br/><i>immutable · the record</i>")]
+
+    ART[("silver.articles")]
+    HN[("silver.hn_comments")]
+    REJ[("silver.parse_rejects")]
+
+    SC[("silver.story_clusters")]
+    AC[("silver.article_clusters")]
+    EM[("silver.entity_mentions")]
+    DE[("silver.dim_entities<br/><i>SCD2</i>")]
+
+    SH[("ops.source_health")]
+    PC[("ops.pipeline_costs")]
+
+    RAW --> ART & HN & REJ
+    ART --> SC & AC
+    ART --> EM
+    DE -.->|as-of join| EM
+
+    classDef immutable fill:#eef4ff,stroke:#5b7fb5,color:#123
+    classDef derived fill:#fff6e8,stroke:#b5885b,color:#123
+    classDef ops fill:#f4eeff,stroke:#7f5bb5,color:#123
+    class RAW immutable
+    class ART,HN,REJ,SC,AC,EM,DE derived
+    class SH,PC ops
+```
+
+**Three different relationships with time, and mixing them up is how a lake rots:**
+
+| | write mode | why |
+|---|---|---|
+| `bronze.raw_documents` | MERGE on `ingest_id`, insert-only | An immutable record of what a source served. Re-running an interval inserts nothing, which is what makes replay safe. |
+| `silver.articles`, `hn_comments` | MERGE on the natural key | Facts about documents. One row per article, ever. |
+| `story_clusters`, `article_clusters`, `entity_mentions` | **replace the partition** | Not facts — outputs of a function of (window, dictionary, algorithm). Re-running after a threshold change must *replace*, or the table accumulates contradictory answers and every count over it stops meaning anything. |
+| `dim_entities` | **SCD2 — supersede, never overwrite** | An article published the day before Facebook became Meta did not retroactively become an article about Meta. `valid_from` / `valid_to` / `is_current`. |
+
+Partitioning: bronze by `(source_id, ingest_date)`; `articles` by `days(event_date)` where
+`event_date = coalesce(published_at, fetched_at)` — a deliberate deviation recorded in
+[ADR-0007](decisions/ADR-0007-event-date-partitioning.md), because `published_at` is nullable
+by design and a null partition key cannot be pruned.
+
+## The daily cycle
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant S as EventBridge
+    participant L as Lambda ×6
+    participant A as Airflow
+    participant K as Spark
+    participant R as Reader
+
+    loop every 15 min
+        S->>L: invoke
+        L->>L: conditional GET · 304, empty and error<br/>are three different outcomes
+        L-->>A: staged objects
+    end
+    loop hourly
+        A->>K: commit_bronze → normalize
+        K-->>A: SILVER_COMMITTED asset
+    end
+    Note over A,K: daily, not per-commit — a 72h window<br/>recomputed hourly is 24× the work for one read
+    A->>K: 04:30 resolve · 05:00 cluster
+    A->>R: 07:00 brief
+    R-->>A: thumbs up/down (stored, §7.4)
+```
+
+Clustering and resolution run on a **daily cron rather than off the hourly asset**, and the
+asset is still declared so the dependency is visible in Airflow's graph rather than implied by
+a cron expression.
+
+## What is not built yet
+
+The diagram above is what exists. Kept separate on purpose — a diagram that draws the
+finished system is a diagram that lies about the current one.
+
+| | phase | status |
+|---|---|---|
+| Ollama enrichment — summary, topic, extraction, cached and validated | 4B | not started |
+| ALFRED bitemporal macro store | 4B | not started |
+| Email delivery at 07:00 | 4A | not started; the brief is `make brief` today |
+| Maintenance DAG — compaction, snapshot expiry, orphan cleanup | 4A | not started |
+| dbt migration of silver→gold; Kafka + Structured Streaming | 5 | gated on [ADR-0001](decisions/ADR-0001-no-kafka.md)'s re-entry criteria |
+
+## Why this is not an AWS Infrastructure Composer diagram
+
+Composer is a good tool for the shape it targets — and the ingestion path here
+(`EventBridge Scheduler → Lambda → S3 + DynamoDB`) is squarely in it. It does not fit the
+rest, for three reasons worth writing down so the question does not get re-asked:
+
+1. **Most of this is not AWS.** Composer models AWS resources only, so the entire processing
+   layer — every Spark job, Airflow, the eval harness, the renderer — is invisible to it.
+2. **It emits CloudFormation/SAM.** This repo's infrastructure is Terraform, with its own
+   state backend and a CI role assumed via OIDC ([ADR-0005](decisions/ADR-0005-aws-guardrails.md)).
+   Composer cannot import Terraform, so using it means either a rewrite or two definitions of
+   one system that will drift.
+3. **Only some resources get first-class treatment.** Lambda, S3, DynamoDB, SNS and
+   EventBridge have cards that wire themselves; Glue databases, the Athena workgroup,
+   CloudWatch alarms and IAM roles are generic resources you hand-edit, which is a YAML editor
+   with boxes around it.
