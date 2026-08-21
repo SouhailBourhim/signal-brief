@@ -42,6 +42,12 @@ fmt: ## autoformat
 	$(UV) run ruff check --fix .
 	$(UV) run ruff format .
 
+dictionary: ## rebuild warehouse/entities/dictionary.json.gz from SEC + Wikidata (network)
+	@# The only networked build step in the repo, and it is deliberately manual: the output
+	@# is committed so `make eval` stays offline and reproducible (SPEC 7.2). Takes ~30 min,
+	@# most of it Wikidata's rate limit. --skip-wikidata rebuilds the SEC tier in seconds.
+	$(UV) run python -m signal_core.entities.build
+
 eval: ## score the labeled eval sets and enforce the accuracy floors (SPEC 11)
 	$(UV) run python evals/score.py --gate
 

@@ -31,3 +31,8 @@ SILVER_COMMITTED = Asset("iceberg://silver/articles")
 
 # Emitted by `cluster`. 4A's brief and mailer are its consumers.
 CLUSTERS_COMMITTED = Asset("iceberg://silver/story_clusters")
+
+# Emitted by `resolve`. 3.D's brief joins clusters to entities through it, and SPEC §7.4's
+# market-corroboration component is the eventual consumer — it needs the ticker, which is
+# what an entity id in the UPPERCASE namespace carries.
+MENTIONS_RESOLVED = Asset("iceberg://silver/entity_mentions")

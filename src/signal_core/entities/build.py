@@ -40,8 +40,10 @@ would swamp the signal: an alias index is only as precise as its rarest junk ent
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -160,18 +162,27 @@ def _qid(binding: dict[str, Any] | None) -> str | None:
     return binding["value"].rsplit("/", 1)[-1] if binding else None
 
 
-def fetch_wikidata(client: httpx.Client) -> tuple[list[Entity], dict[str, str]]:
+def fetch_wikidata(
+    client: httpx.Client, cache: Path | None = None
+) -> tuple[list[Entity], dict[str, str]]:
     """Notable businesses SEC does not list, plus their parent links.
 
-    Returns entities keyed by slug and a `qid -> parent qid` map, which is resolved to
-    entity ids after the fact — a subsidiary's parent is only useful once both are known,
-    and the parent may arrive in a later chunk.
+    Returns entities keyed by slug and a `child id -> parent name` map, resolved after the
+    fact — a subsidiary's parent is only useful once both are known, and the parent may
+    arrive in a later chunk.
     """
+    # The fetch is ~30 minutes of somebody else's free service, and the merge below is the
+    # part that gets iterated on. Caching the raw rows means fixing a merge bug costs
+    # seconds instead of another half hour of WDQS's patience.
+    seen: dict[str, dict[str, Any]] = {}
+    if cache and cache.exists():
+        seen = json.loads(cache.read_text(encoding="utf-8"))
+        print(f"  {len(seen)} entities from cache {cache}")
+        return _wikidata_entities(seen)
+
     classes = _business_classes(client)
     print(f"  {len(classes)} business subclasses")
 
-    seen: dict[str, dict[str, Any]] = {}
-    parents: dict[str, str] = {}
     for start in range(0, len(classes), CLASS_CHUNK):
         chunk = classes[start : start + CLASS_CHUNK]
         values = " ".join(f"wd:{qid}" for qid in chunk)
@@ -193,17 +204,24 @@ def fetch_wikidata(client: httpx.Client) -> tuple[list[Entity], dict[str, str]]:
             if qid is None or qid in seen:
                 continue
             seen[qid] = row
-            parent = _qid(row.get("parent"))
-            if parent:
-                parents[qid] = parent
         print(
             f"  classes {start:>5}-{start + len(chunk):<5} {len(rows):>6} rows, "
             f"{len(seen)} entities so far"
         )
         time.sleep(WDQS_PAUSE_SECONDS)
 
+    if cache:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps(seen), encoding="utf-8")
+    return _wikidata_entities(seen)
+
+
+def _wikidata_entities(seen: dict[str, Any]) -> tuple[list[Entity], dict[str, str]]:
+    """Raw SPARQL bindings -> entities and a `child id -> parent name` map."""
     entities = []
-    qid_to_id = {}
+    qid_to_id: dict[str, str] = {}
+    qid_to_name: dict[str, str] = {}
+    parents_raw = {qid: _qid(row.get("parent")) for qid, row in seen.items() if row.get("parent")}
     for qid, row in seen.items():
         label = row["itemLabel"]["value"]
         # An unlabeled item comes back as its own QID. That is a Wikidata gap, not a name.
@@ -213,6 +231,7 @@ def fetch_wikidata(client: httpx.Client) -> tuple[list[Entity], dict[str, str]]:
         if not entity_id:
             continue
         qid_to_id[qid] = entity_id
+        qid_to_name[qid] = label
         raw = row.get("aliases", {}).get("value", "")
         entities.append(
             Entity(
@@ -223,10 +242,13 @@ def fetch_wikidata(client: httpx.Client) -> tuple[list[Entity], dict[str, str]]:
                 aliases=tuple(sorted({a.strip() for a in raw.split("|") if a.strip()})),
             )
         )
+    # Child entity id -> parent's canonical *name*, not its id. The name is what the SEC
+    # index can be searched with; a slug can only be compared for equality, and `paypal`
+    # never equals `paypal-holdings`.
     return entities, {
-        qid_to_id[child]: qid_to_id[parent]
-        for child, parent in parents.items()
-        if child in qid_to_id and parent in qid_to_id
+        qid_to_id[child]: qid_to_name[parent]
+        for child, parent in parents_raw.items()
+        if parent and child in qid_to_id and parent in qid_to_name
     }
 
 
@@ -237,52 +259,81 @@ def fetch_common_words(client: httpx.Client) -> list[str]:
 
 
 def _merge(sec: list[Entity], wikidata: list[Entity], parents: dict[str, str]) -> list[Entity]:
-    """SEC wins every collision, and subsidiaries inherit a tradable parent's id.
+    """Fold Wikidata into SEC. SEC wins every collision, and nothing ever replaces a ticker.
 
-    Two collisions to settle, in this order:
+    Three cases, and getting the third wrong is what made the first build of this worse than
+    no Wikidata at all:
 
-    1. **A Wikidata company that SEC also lists.** `Xerox` is in both. SEC's row carries the
-       ticker and the CIK, so it is strictly more useful, and keeping both would put two ids
-       on one company — the failure `dim_entities` exists to prevent.
-    2. **A subsidiary of a tradable parent.** Wikidata says `GitHub`'s parent organization is
-       Microsoft; Microsoft resolves to `MSFT`; so `GitHub` resolves to `MSFT` too. This is
-       SPEC §7.2's rollup rule, and it is the one place the dictionary makes an inference
-       rather than a lookup — recorded as `parent_entity_id` so it is visible afterwards.
+    1. **Wikidata knows a company SEC also lists.** `Xerox` is in both. SEC's row carries the
+       ticker and the CIK, so it stays; Wikidata's contribution is its *aliases*, folded onto
+       the SEC row. Two rows for one company is the failure `dim_entities` exists to prevent.
+    2. **Wikidata knows a company SEC does not.** `OpenAI`, `Substack`, `Sennheiser`. It
+       becomes its own entity with a `lower-kebab-case` id.
+    3. **A subsidiary of a tradable parent.** Wikidata says `Venmo`'s parent organization is
+       PayPal, and PayPal is `PYPL` — so a mention of `Venmo` should resolve to `PYPL`. SPEC
+       §7.2's rollup rule.
 
-       The rollup stops at the first tradable ancestor and only follows links inside the
-       snapshot, so a chain that leaves the dictionary leaves the entity as itself rather
-       than guessing.
+       **The subsidiary's names become aliases of the parent. It does not become an entity
+       carrying the parent's id.** The first cut did the latter and it was quietly
+       destructive: `Entity` rows are keyed by `entity_id`, so `Transamerica Corporation` —
+       a subsidiary of Aegon — overwrote AEGON's own SEC row, taking its CIK out of the
+       lookup with it. The CIK channel then failed on a filing that stated its CIK, and
+       `AEGON LTD.` resolved by minting a slug. One rollup silently disabled the single most
+       reliable channel for one company, and nothing said so.
+
+    Parents are matched through the SEC name index rather than by exact slug equality,
+    because Wikidata says `PayPal` where SEC says `PayPal Holdings, Inc.` — an equality test
+    finds neither of those in the other.
     """
-    by_name = {
-        " ".join(dict_module.strip_legal_suffix(dict_module.normalize(e.canonical_name))): e
-        for e in sec
-    }
-    tradable_slug = {slug(e.canonical_name): e.entity_id for e in sec}
+    sec_index = dict_module.build(sec)
+    extra_aliases: dict[str, list[str]] = {}
+
+    def sec_entity_for(name: str) -> str | None:
+        """The one SEC company this name denotes, or None if it is nobody or ambiguous."""
+        tokens = dict_module.strip_legal_suffix(dict_module.normalize(name))
+        alias = sec_index.aliases.get(" ".join(tokens))
+        if alias is None:
+            return None
+        if len(alias.completes) == 1:
+            return alias.completes[0]
+        # A prefix is good enough to attach an alias to, but only when it is unambiguous:
+        # `PayPal` starts exactly one SEC name, `Apple` starts two.
+        if not alias.completes and len(alias.starts) == 1:
+            return alias.starts[0]
+        return None
 
     merged = list(sec)
     for entity in wikidata:
-        name_key = " ".join(
-            dict_module.strip_legal_suffix(dict_module.normalize(entity.canonical_name))
-        )
-        if name_key in by_name:
+        names = [entity.canonical_name, *entity.aliases]
+        same_company = sec_entity_for(entity.canonical_name)
+        if same_company:
+            extra_aliases.setdefault(same_company, []).extend(entity.aliases)
             continue
-        parent_id = parents.get(entity.entity_id)
-        tradable_parent = tradable_slug.get(parent_id or "")
-        merged.append(
-            Entity(
-                entity_id=tradable_parent or entity.entity_id,
-                canonical_name=entity.canonical_name,
-                entity_type="public" if tradable_parent else "private",
-                source="wikidata",
-                ticker=tradable_parent,
-                parent_entity_id=tradable_parent,
-                aliases=entity.aliases,
+
+        parent_name = parents.get(entity.entity_id)
+        tradable_parent = sec_entity_for(parent_name) if parent_name else None
+        if tradable_parent:
+            extra_aliases.setdefault(tradable_parent, []).extend(names)
+            continue
+
+        merged.append(entity)
+
+    if not extra_aliases:
+        return merged
+    return [
+        (
+            entity
+            if entity.entity_id not in extra_aliases
+            else replace(
+                entity,
+                aliases=tuple(sorted({*entity.aliases, *extra_aliases[entity.entity_id]})),
             )
         )
-    return merged
+        for entity in merged
+    ]
 
 
-def run(out_path: Path, *, skip_wikidata: bool = False) -> int:
+def run(out_path: Path, *, skip_wikidata: bool = False, wikidata_cache: Path | None = None) -> int:
     started = utc_now()
     with _client() as client:
         print("SEC company_tickers.json …")
@@ -293,7 +344,7 @@ def run(out_path: Path, *, skip_wikidata: bool = False) -> int:
         parents: dict[str, str] = {}
         if not skip_wikidata:
             print("Wikidata …")
-            wikidata, parents = fetch_wikidata(client)
+            wikidata, parents = fetch_wikidata(client, cache=wikidata_cache)
             print(f"  {len(wikidata)} entities, {len(parents)} parent links")
 
         print("English frequency list …")
@@ -328,12 +379,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", type=Path, default=dict_module.DEFAULT_PATH)
     parser.add_argument(
+        "--wikidata-cache",
+        type=Path,
+        default=None,
+        help="read/write the raw WDQS rows here, so a re-merge does not re-fetch",
+    )
+    parser.add_argument(
         "--skip-wikidata",
         action="store_true",
         help="SEC and the word list only — a fast rebuild when WDQS is unavailable",
     )
     args = parser.parse_args(argv)
-    return run(args.out, skip_wikidata=args.skip_wikidata)
+    return run(args.out, skip_wikidata=args.skip_wikidata, wikidata_cache=args.wikidata_cache)
 
 
 if __name__ == "__main__":

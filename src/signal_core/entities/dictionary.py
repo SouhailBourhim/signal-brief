@@ -229,13 +229,19 @@ def build(
                 key = " ".join(tokens[:length])
                 completes, starts = aliases.setdefault(key, ([], []))
                 (completes if length == len(tokens) else starts).append(entity.entity_id)
+    # First writer wins. `build.py` puts SEC first, so a Wikidata row can never displace a
+    # ticker's canonical name, CIK or rank. This used to be a plain dict comprehension, and
+    # a single subsidiary rollup silently took AEGON's CIK out of `by_cik` — see `_merge`.
+    by_id: dict[str, Entity] = {}
+    for entity in entities:
+        by_id.setdefault(entity.entity_id, entity)
     return Dictionary(
-        entities={entity.entity_id: entity for entity in entities},
+        entities=by_id,
         aliases={
             key: Alias(completes=tuple(sorted(set(c))), starts=tuple(sorted(set(s))))
             for key, (c, s) in aliases.items()
         },
-        by_cik={e.cik: e.entity_id for e in entities if e.cik},
+        by_cik={e.cik: e.entity_id for e in by_id.values() if e.cik},
         common_words={word: rank for rank, word in enumerate(common_words or [])},
         built_at=built_at,
         sources=sources or {},

@@ -12,6 +12,10 @@ than recall, and silently excludes every company the dictionary has never heard 
 §7.2 names private companies with no ticker as a hard case; they are exactly the ones a
 dictionary-seeded sample would drop.
 
+The detector itself lives in `signal_core.entities.mentions`, not here — the Spark job has
+to find the same spans at the same offsets, or the accuracy measured against these labels
+describes spans nothing in the pipeline ever produces.
+
 It also means the labels exist before `entities/resolve.py` does, which is what
 `evals/entities/README.md` asks for: a rule written before labeling cannot be tuned to
 flatter an implementation that has not been written.
@@ -29,7 +33,6 @@ from __future__ import annotations
 import argparse
 import json
 import random
-import re
 import sys
 from collections import defaultdict
 from datetime import timedelta
@@ -38,116 +41,17 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from signal_core.entities.mentions import (
+    context_window,
+    detect,
+    mention_text,
+)
+from signal_core.entities.mentions import (
+    mention_id as make_mention_id,
+)
 from signal_core.timeutil import utc_now
 
 EVALS = Path(__file__).parent
-
-CONTEXT_CHARS = 200
-
-# Runs of capitalised words, optionally closed by a corporate suffix. Deliberately loose:
-# over-generating is cheap (a human answers "not a company" in a second) while a missed
-# surface form is a mention that can never be labeled and therefore never counted.
-_PROPER_NOUN = re.compile(
-    r"\b(?:[A-Z][\w&.'-]*)(?:[ ](?:of|for|and|de|van|der)?[ ]?[A-Z][\w&.'-]*){0,4}"
-    r"(?:,?[ ](?:Inc|Corp|Corporation|Co|Ltd|LLC|LP|PLC|plc|NV|SA|AG|GmbH|Group|Holdings)\.?)?"
-)
-_TICKER = re.compile(r"\$[A-Z]{1,5}\b")
-
-# Words that start sentences constantly and are never a company on their own. A single-word
-# candidate matching one of these is dropped; a multi-word one ("The Verge") survives.
-_SENTENCE_STARTERS = frozenset(
-    [
-        "The",
-        "A",
-        "An",
-        "This",
-        "That",
-        "These",
-        "Those",
-        "It",
-        "He",
-        "She",
-        "They",
-        "We",
-        "You",
-        "I",
-        "If",
-        "When",
-        "While",
-        "After",
-        "Before",
-        "But",
-        "And",
-        "Or",
-        "So",
-        "Then",
-        "Now",
-        "Today",
-        "Yesterday",
-        "Tomorrow",
-        "For",
-        "To",
-        "In",
-        "On",
-        "At",
-        "By",
-        "With",
-        "From",
-        "As",
-        "Is",
-        "Are",
-        "Was",
-        "Were",
-        "Be",
-        "Been",
-        "Being",
-        "Has",
-        "Have",
-        "Had",
-        "Will",
-        "Would",
-        "Could",
-        "Should",
-        "May",
-        "Might",
-        "Its",
-        "Their",
-        "His",
-        "Her",
-        "Our",
-        "Your",
-        "My",
-        "What",
-        "Why",
-        "How",
-        "Where",
-        "Who",
-        "Which",
-        "There",
-        "Here",
-        "All",
-        "Some",
-        "Many",
-        "Most",
-        "More",
-        "Less",
-        "Other",
-        "New",
-        "Old",
-        "First",
-        "Last",
-        "Next",
-        "One",
-        "Two",
-        "Three",
-        "Show",
-        "Ask",
-        "Tell",
-        "Get",
-        "Make",
-        "Use",
-    ]
-)
 
 # Enough that a labeler is not staring at "AI" a hundred times, few enough that a genuinely
 # frequent company still appears more than once.
@@ -163,32 +67,6 @@ def _kind(source_id: str) -> str:
     if source_id == "hackernews":
         return "hn"
     return "news"
-
-
-def _candidates(text: str) -> list[tuple[str, int, int]]:
-    """(surface_form, char_start, char_end) for every proper-noun-ish span."""
-    found: list[tuple[str, int, int]] = []
-    for match in _TICKER.finditer(text):
-        found.append((match.group(), match.start(), match.end()))
-    for match in _PROPER_NOUN.finditer(text):
-        surface = match.group().strip().rstrip(",")
-        if not surface or len(surface) < 2:
-            continue
-        # Single capitalised word that is just a sentence opening: not worth a judgement.
-        if " " not in surface and surface in _SENTENCE_STARTERS:
-            continue
-        # All-caps single tokens are usually acronyms in headlines (AI, CEO, SEC); keep the
-        # ones long enough to plausibly be a name, drop the two-letter noise.
-        if surface.isupper() and len(surface) <= 2:
-            continue
-        found.append((surface, match.start(), match.start() + len(surface)))
-    return found
-
-
-def _context(text: str, start: int, end: int) -> str:
-    lo = max(0, start - CONTEXT_CHARS)
-    hi = min(len(text), end + CONTEXT_CHARS)
-    return ("…" if lo else "") + text[lo:hi].replace("\n", " ") + ("…" if hi < len(text) else "")
 
 
 def _already_labeled(path: Path) -> set[str]:
@@ -233,15 +111,15 @@ def main(argv: list[str] | None = None) -> int:
         if kind == "filing" and by_kind["filing"] >= filing_cap:
             continue
 
-        text = f"{article['title']}\n{article['body_text']}"
-        spans = _candidates(text)
+        text = mention_text(article["title"], article["body_text"])
+        spans = [(m.surface_form, m.char_start, m.char_end) for m in detect(text)]
         rng.shuffle(spans)
         for surface, start, end in spans[:3]:  # at most three per article, for variety
             if len(records) >= args.n:
                 break
             if seen_surface[surface] >= MAX_PER_SURFACE_FORM:
                 continue
-            mention_id = f"{article['article_id']}:{start}"
+            mention_id = make_mention_id(article["article_id"], start)
             if mention_id in labeled:
                 continue
             seen_surface[surface] += 1
@@ -258,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
                     "surface_form": surface,
                     "char_start": start,
                     "char_end": end,
-                    "context": _context(text, start, end),
+                    "context": context_window(text, start, end),
                     # No `entity_id`. Absent means unanswered; `null` once answered means
                     # deliberately unlinked, which is a correct answer and is scored as one.
                     "origin": origin,
