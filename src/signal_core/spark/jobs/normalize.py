@@ -188,7 +188,7 @@ HN_SCORES_TABLE = "silver.hn_score_snapshots"
 # reported. `hn_scores` alone commits ~240 documents an hour, so leaving it in would show a
 # rising bronze count against a flat article count — the exact shape of a broken parser,
 # permanently, in a metric SPEC §11 expects someone to read.
-NON_ARTICLE_SOURCES: tuple[str, ...] = ("hn_scores",)
+NON_ARTICLE_SOURCES: tuple[str, ...] = ("hn_scores", "market")
 
 # Same properties as `commit_bronze.py`'s bronze table, for the same reason: payloads
 # and article bodies are whole documents, not tiny rows, so small-file fragmentation is

@@ -10,6 +10,7 @@ a publisher changes; one built on imagined shape fails when someone's imaginatio
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from signal_core.parse.feedparse import (
 )
 from signal_core.parse.hackernews import parse as parse_hackernews
 from signal_core.parse.hn_scores import parse as parse_hn_scores
+from signal_core.parse.market import parse as parse_market
 from signal_core.parse.rss import parse_rss_ars, parse_rss_tech, parse_rss_verge
 
 FIXTURES = Path(__file__).parent / "fixtures" / "bronze"
@@ -301,6 +303,104 @@ def test_a_story_with_no_score_contributes_no_snapshot():
 
 def test_hn_scores_rejects_a_non_json_payload():
     assert parse_hn_scores(b"<html>nope").error is not None
+
+
+# --- market: Yahoo chart JSON, real captured bytes ------------------------------------
+
+
+def test_market_parses_a_real_chart_response():
+    """`chart_aapl.json` is a live capture (2026-08-22), not a hand-built shape — the same
+    rule every other fixture here follows."""
+    result = parse_market(_fixture("market", "chart_aapl.json"))
+    assert result.error is None
+    assert not result.items, "a price bar is not an article"
+    assert len(result.market_observations) == 63, "range=3mo should carry its own baseline"
+
+    latest = result.market_observations[-1]
+    assert latest.ticker == "AAPL"
+    assert latest.close > 0
+    assert latest.high >= latest.low
+    # Ordered oldest-first, which is what a trailing-window calculation expects.
+    dates = [o.trade_date for o in result.market_observations]
+    assert dates == sorted(dates)
+
+
+def test_market_reports_an_unknown_ticker_as_a_row_level_error():
+    """Also a live capture. Yahoo answers a delisted or misspelled symbol in-band, so this
+    has to land in `parse_rejects` rather than looking like a ticker with no trading days."""
+    result = parse_market(_fixture("market", "chart_unknown.json"))
+    assert result.error is not None
+    assert "chart_error" in result.error
+    assert result.market_observations == []
+
+
+def test_a_bar_with_no_close_is_dropped_and_counted():
+    """A halted session. Zero-filling would be a catastrophic price move to anything
+    computing returns; the bronze row still holds the original bytes (SPEC §6.2)."""
+    payload = json.dumps(
+        {
+            "chart": {
+                "result": [
+                    {
+                        "meta": {"symbol": "AAPL"},
+                        "timestamp": [1786060800, 1786147200],
+                        "indicators": {
+                            "quote": [
+                                {
+                                    "open": [1.0, None],
+                                    "high": [2.0, None],
+                                    "low": [0.5, None],
+                                    "close": [1.5, None],
+                                    "volume": [100, None],
+                                }
+                            ]
+                        },
+                    }
+                ],
+                "error": None,
+            }
+        }
+    ).encode()
+
+    result = parse_market(payload)
+    assert len(result.market_observations) == 1
+    assert result.warnings and "dropped_bars_without_close" in result.warnings[0]
+
+
+def test_a_bar_with_a_close_but_a_null_open_keeps_the_bar():
+    """The close is the only field the ranker reads, so a partial bar is still usable."""
+    payload = json.dumps(
+        {
+            "chart": {
+                "result": [
+                    {
+                        "meta": {"symbol": "NVDA"},
+                        "timestamp": [1786060800],
+                        "indicators": {
+                            "quote": [
+                                {
+                                    "open": [None],
+                                    "high": [None],
+                                    "low": [None],
+                                    "close": [7.5],
+                                    "volume": [None],
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        }
+    ).encode()
+
+    (observation,) = parse_market(payload).market_observations
+    assert observation.close == 7.5
+    assert observation.open == 7.5, "falls back to the close rather than dropping the bar"
+    assert observation.volume is None
+
+
+def test_market_rejects_a_non_json_payload():
+    assert parse_market(b"<html>nope").error is not None
 
 
 # --- fake: Phase 0 shape, now just another registry entry -----------------------------

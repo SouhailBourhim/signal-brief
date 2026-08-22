@@ -18,10 +18,12 @@ shaping are this phase's work, not prerequisites for starting it.
   1.1 GB ADR-0009 declined to spend, one phase before the stage that pays for it. `WEIGHTS`
   ships without it and says so.
 - **Market corroboration ships, and brings a source with it.** The other four components are
-  wiring over data that exists. This one needs prices, so 4A adds source #8. Stooq over
-  yfinance: yfinance pulls pandas transitively, and `tests/test_lambda_artifact.py` fails the
-  build if the handler's import chain acquires it (ADR-0006's 250 MB ceiling). Stooq is CSV
-  over HTTP and needs nothing past `httpx`. ADR-0010 records it.
+  wiring over data that exists. This one needs prices, so 4A adds source #8. No client
+  library: yfinance pulls pandas transitively and `tests/test_lambda_artifact.py` fails the
+  build if the handler's import chain acquires it (ADR-0006's 250 MB ceiling), so the poller
+  is a plain `httpx` GET against a JSON endpoint. *This decision was made twice* — see 4A.D,
+  where the first choice turned out to be gated behind a browser challenge. ADR-0010 records
+  both halves.
 - **Email sends from the local side.** ADR-0002 puts ingestion in AWS because it must run
   whether or not the laptop is on, and everything interpretive locally. The brief is rendered
   locally, so it is mailed locally — SES via boto3 on the credentials Athena already uses, not
@@ -129,6 +131,82 @@ a document exists once. **A snapshot is a measurement**, so the same story an ho
 new row, not a duplicate — deduping on `item_id` would keep one score per story and delete
 the very slope the table exists to provide. The key is `ingest_id`, unique per fetch, which
 keeps replay deterministic (SPEC §6.3).
+
+## 4A.D — Market data, source #8 *(done 2026-08-22)*
+
+SPEC §7.4's market-corroboration component asks "did the linked ticker move beyond its
+normal range?", and the lake held no prices. This is the only ranker component that needed a
+new source rather than wiring over data that already existed.
+
+### What broke before a line was written
+
+The plan said Stooq, on a packaging argument: `yfinance` pulls pandas transitively and
+`tests/test_lambda_artifact.py` fails the build if the handler's import chain acquires it
+(ADR-0006's 250 MB ceiling), while Stooq serves CSV that needs nothing past `httpx`. The
+argument was sound. The premise was not — **Stooq now answers every request with a JavaScript
+proof-of-work challenge**:
+
+    $ curl -s "https://stooq.com/q/d/l/?s=aapl.us&i=d"
+    <noscript>This site requires JavaScript to verify your browser.</noscript>
+
+Tried with the project User-Agent, a browser's, and curl's default — identical. An HTTP GET
+cannot clear it, and **it should not try**: the challenge is an access control the operator
+deliberately erected, so solving it in a Lambda would be evading a stated "no automated
+access" and would break the first time the challenge changed.
+
+This is Phase 1's EDGAR lesson arriving a second time (`sources/edgar.py`: *measured against
+the live endpoint, not inferred from the docs*). The difference is that this time the check
+happened **before** the module was written rather than after it was deployed, which is the
+only reason it cost twenty minutes instead of a debugging session against a live schedule.
+
+The fix separates the library from the source. The pandas objection was always about
+yfinance the *package*, never Yahoo the *data* — and Yahoo's chart endpoint serves daily
+OHLCV as plain JSON with no key. The poller is an `httpx` GET; the parser is stdlib `json`.
+ADR-0010 carries both halves of the decision, and the "what would reverse this" section now
+names access as the first risk, because it has already been the failure once.
+
+### Measured, and better than the design it replaced
+
+A single `range=3mo` request returns **63 daily bars**. That was not the plan — the plan was
+one bar a day accumulating into a history — and it matters: the corroboration threshold
+compares the latest return against the trailing window's standard deviation, and both now
+come out of the same response. **Market corroboration works on the poller's first day**
+rather than after twenty days of accumulation. It also makes a missed day self-repairing,
+since every fetch re-states the recent past (SPEC §6.3).
+
+- [x] `sources/market.py`, `parse/market.py`, `spark/jobs/market.py`, `airflow/dags/market_dag.py`
+- [x] `silver.market_observations`, MERGEd on `(ticker, trade_date)` with **UPDATE on match**
+- [x] Fixtures captured live, both the success and the delisted-symbol case
+
+### The one silver table that overwrites
+
+Its siblings insert only, and `normalize_window`'s docstring says why: nothing in a published
+article legitimately changes after first sight, so an UPDATE clause would be a way to
+silently rewrite history. **Prices invert that.** A split restates every prior bar and the
+restated number is the correct one — insert-only would leave the table holding pre-split
+prices that no longer describe anything. So this table matches on `(ticker, trade_date)` and
+updates, following `cost_snapshot.record`'s shape rather than `normalize_window`'s.
+
+It is also deliberately *not* bitemporal, despite SPEC §9 filing `macro_observations` under
+gold with `valid_time`/`known_time`. That is 4B's ALFRED work and it is a different claim:
+ALFRED serves every vintage, so "what was knowable on date X" is answerable. Yahoo serves
+only the current view of history, so a `known_time` column here would be a fiction meaning
+"as of our last fetch" — which is not a vintage (SPEC §17).
+
+### Two more things the schedule had to account for
+
+**The concurrency budget again.** Source #8 lands at `cron(11 2 * * ? *)` — daily, after the
+US close, before `resolve` (04:30) and `cluster` (05:00), and on a minute nothing else uses.
+`test_the_phase_4a_pollers_do_not_collide_with_the_phase_1_2_six` now covers both 4A sources.
+
+**A daily source breaks two monitoring assumptions built for 15-minute ones.** Health is
+assessed over the closed prior *hour*, so `min_docs_per_window` is 0 like `rss_ars` — any
+positive floor reports a daily source as thin in 23 hours out of 24, and the content-staleness
+SLA is what actually catches a dead market feed. And `freshness_sla_seconds` sits at the 2x
+floor the test enforces rather than the 3x the other sources use, because a multiple means
+something different at this cadence: 3x a 15-minute poll is 45 minutes, 3x a daily poll is
+three days of silence. 48 h is two consecutive missed runs — the first unambiguous signal,
+where 30 h would also have fired on a run that merely started late.
 
 ## 4A.G — EDGAR shaping: one Form 4, indexed twice *(done 2026-08-22)*
 

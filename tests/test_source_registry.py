@@ -61,26 +61,52 @@ def _terraform_sources() -> dict[str, str]:
     return out
 
 
+_RATE = re.compile(r"rate\((\d+) minutes?\)")
+_CRON_HOURLY = re.compile(r"cron\(([\d,]+) \*.*\)")
+_CRON_DAILY = re.compile(r"cron\((\d+) (\d+) .*\)")
+
+
 def _cadence_seconds(expression: str) -> int | None:
     """The longest gap between two consecutive fires, in seconds, or None if unparsed.
 
-    `rate(N minutes)` is the whole story for the Phase 1-2 sources. 4A's `hn_scores` is
-    scheduled with cron instead, because `rate(...)` gives no control over *phase* and that
-    source exists to not collide with the others (see the map's own comment). The longest
-    gap is the right reading for both: it is the interval an SLA has to survive, and for a
-    minute list it is what wraps across the hour boundary rather than what sits inside it.
+    `rate(N minutes)` is the whole story for the Phase 1-2 sources. 4A added two cron
+    schedules — `hn_scores` because `rate(...)` gives no control over *phase* and that source
+    exists to not collide with the others, `market` because it runs once a day at a chosen
+    hour. The longest gap is the right reading for all three: it is the interval an SLA has
+    to survive, and for a minute list it is the one wrapping across the hour boundary rather
+    than any sitting inside it.
     """
-    minutes = re.fullmatch(r"rate\((\d+) minutes?\)", expression)
-    if minutes:
-        return int(minutes.group(1)) * 60
+    if rate := _RATE.fullmatch(expression):
+        return int(rate.group(1)) * 60
 
-    cron = re.fullmatch(r"cron\(([\d,]+) \*.*\)", expression)
-    if cron:
-        fires = sorted(int(m) for m in cron.group(1).split(","))
+    if hourly := _CRON_HOURLY.fullmatch(expression):
+        fires = sorted(int(m) for m in hourly.group(1).split(","))
         gaps = [b - a for a, b in itertools.pairwise(fires)]
         gaps.append(fires[0] + 60 - fires[-1])  # wrapping into the next hour
         return max(gaps) * 60
+
+    if _CRON_DAILY.fullmatch(expression):
+        return 24 * 60 * 60
     return None
+
+
+def _fire_minutes(expression: str) -> set[int]:
+    """Which minutes past the hour a schedule can fire at.
+
+    Concurrency is a same-minute question, so this deliberately ignores *which* hour a daily
+    schedule lands in: two schedules that share a minute collide on the days they coincide,
+    and a schedule that shares no minute with anything never collides at all. The stronger
+    property is the one worth holding.
+    """
+    if rate := _RATE.fullmatch(expression):
+        # `rate` has no guaranteed phase, so the conservative reading is that it can land
+        # on any multiple of its step — including 0.
+        return set(range(0, 60, int(rate.group(1))))
+    if hourly := _CRON_HOURLY.fullmatch(expression):
+        return {int(m) for m in hourly.group(1).split(",")}
+    if daily := _CRON_DAILY.fullmatch(expression):
+        return {int(daily.group(1))}
+    raise AssertionError(f"unhandled schedule expression {expression!r}")
 
 
 def test_every_configured_source_has_a_poller():
@@ -113,44 +139,34 @@ def test_fake_is_not_deployed():
 def test_the_deployed_source_count_is_what_the_phases_claim():
     """SPEC §3: three in Phase 1, six by Phase 2 — the sixth being the one §3's "adding
     source #6 must be a 30-minute job" is measured against. Phase 4A adds `hn_scores` for
-    §7.4's velocity component, which SPEC §12 carried forward from Phase 2.
+    §7.4's velocity component, which SPEC §12 carried forward from Phase 2, and `market`
+    for its market-corroboration component.
 
     A literal, deliberately: this is the only assertion that notices a source being added
     or dropped without anyone deciding to, and comparing the config against itself would
     notice nothing."""
-    assert len(DEPLOYED_SOURCE_IDS) == 7
+    assert len(DEPLOYED_SOURCE_IDS) == 8
 
 
-def test_the_seventh_poller_does_not_collide_with_the_other_six():
-    """Why `hn_scores` is scheduled with cron. SPEC §3's map comment records that six
+@pytest.mark.parametrize("source_id", ["hn_scores", "market"])
+def test_the_phase_4a_pollers_do_not_collide_with_the_phase_1_2_six(source_id: str):
+    """Why both 4A sources are scheduled with cron. SPEC §3's map comment records that six
     pollers fit under a new account's total concurrency limit of 10 only because they fit,
-    and that "source #7 is where it stops fitting". Source #7 exists now.
+    and that "source #7 is where it stops fitting". Sources #7 and #8 exist now.
 
-    It fits by never firing at the same minute as anything else. `rate(N minutes)` cannot
-    express that — it has no phase — so this asserts the property the cron expression was
-    chosen for, rather than the expression itself, which is free to change as long as the
-    property holds."""
+    They fit by never firing at the same minute as anything else. `rate(N minutes)` cannot
+    express that — it has no phase — so this asserts the property the cron expressions were
+    chosen for, rather than the expressions themselves, which are free to change as long as
+    the property holds."""
     schedules = _terraform_sources()
-
-    def fires_in_hour(expression: str) -> set[int]:
-        rate = re.fullmatch(r"rate\((\d+) minutes?\)", expression)
-        if rate:
-            step = int(rate.group(1))
-            # `rate` has no guaranteed phase, so the conservative reading is that it can
-            # land on any multiple of its step — including 0.
-            return set(range(0, 60, step))
-        cron = re.fullmatch(r"cron\(([\d,]+) \*.*\)", expression)
-        assert cron, f"unhandled schedule expression {expression!r}"
-        return {int(m) for m in cron.group(1).split(",")}
-
-    hn_scores = fires_in_hour(schedules["hn_scores"])
-    for source_id, expression in schedules.items():
-        if source_id == "hn_scores":
+    mine = _fire_minutes(schedules[source_id])
+    for other_id, expression in schedules.items():
+        if other_id == source_id:
             continue
-        overlap = hn_scores & fires_in_hour(expression)
+        overlap = mine & _fire_minutes(expression)
         assert not overlap, (
-            f"hn_scores fires at the same minute as {source_id} ({sorted(overlap)}), "
-            "putting peak concurrency back to 7 — see the sources map comment"
+            f"{source_id} fires at the same minute as {other_id} ({sorted(overlap)}), "
+            "raising the concurrency peak — see the sources map comment"
         )
 
 

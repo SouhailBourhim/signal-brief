@@ -13,6 +13,7 @@ from signal_core.parse.edgar import parse as edgar_parse
 from signal_core.parse.fake import parse as fake_parse
 from signal_core.parse.hackernews import parse as hackernews_parse
 from signal_core.parse.hn_scores import parse as hn_scores_parse
+from signal_core.parse.market import parse as market_parse
 from signal_core.parse.models import (
     ParsedComment,
     ParsedItem,
@@ -37,6 +38,7 @@ REGISTRY: dict[str, Parser] = {
     # the observation here rather than incidental `extra`. Separate parsers because one
     # returning both shapes would re-file every top story into `silver.articles` every poll.
     "hn_scores": hn_scores_parse,
+    "market": market_parse,
 }
 
 __all__ = [

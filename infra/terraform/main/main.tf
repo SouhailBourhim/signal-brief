@@ -178,6 +178,15 @@ variable "sources" {
       timeout_seconds     = 120 # TOP_N=60 items per invocation, paced at 5/sec
       description         = "HN top-story score snapshots for §7.4 velocity. Horizon: window."
     }
+    # Source #8, once a day. 02:11 UTC is after the US close (20:00 UTC + settlement) and
+    # before the 04:30/05:00 processing chain, so the brief reads bars that are already
+    # committed. Off the :00 minute for the same reason `hn_scores` is: nothing else runs
+    # at :11, so this never adds to a concurrency peak.
+    market = {
+      schedule_expression = "cron(11 2 * * ? *)"
+      timeout_seconds     = 120 # one request per watchlist ticker, paced at 2/sec
+      description         = "Daily OHLCV for watchlist tickers, §7.4 market corroboration."
+    }
   }
 }
 

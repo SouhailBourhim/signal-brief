@@ -1,4 +1,4 @@
-# ADR-0010 — Stooq for market data, SES from the local side, novelty deferred to 4B
+# ADR-0010 — Market data over plain HTTP, SES from the local side, novelty deferred to 4B
 
 **Status:** Accepted · **Date:** 2026-08-22
 
@@ -22,29 +22,52 @@ that line.
 
 ## Decision
 
-### 1. Market data comes from Stooq, and the choice is a packaging constraint
+### 1. Market data comes over plain HTTP, with no client library
 
-yfinance is the better-known library and the worse fit here. It pulls **pandas** transitively,
-and `tests/test_lambda_artifact.py` fails the build if the poller handler's import chain
-acquires any of `("pyarrow", "pyspark", "pandas", "numpy", "jinja2")` — the assertion that
-enforces ADR-0006's 250 MB unzipped ceiling. A market poller is a Lambda like the other seven,
-so its parser lives in the same import chain as the rest, and adding pandas to reach it would
-either break that test or force the market source out of the shape every other source has.
+The binding constraint is packaging, not data quality. `tests/test_lambda_artifact.py` fails
+the build if the poller handler's import chain acquires any of
+`("pyarrow", "pyspark", "pandas", "numpy", "jinja2")` — the assertion enforcing ADR-0006's
+250 MB unzipped ceiling. A market poller is a Lambda like the other seven and its parser sits
+in the same import chain, so **yfinance is unavailable: it pulls pandas transitively.**
 
-Stooq serves daily OHLCV as plain CSV over HTTP. The poller is an `httpx` GET and the parser
-is `csv` from the standard library — nothing new in `pyproject.toml`'s `lambda` extra, and the
-source implements the same `poll(config, state) -> (list[RawDocument], State)` contract as
-every other. **The library that needed no dependency won on the constraint the architecture
-already had**, not on data quality; if Stooq's coverage turns out to be the binding problem,
-the re-entry criterion is a *fetch* change, because the contract keeps parsing on the far
-side of stored bytes where it can be redone against the archive.
+That ruled out the library. It did not, as this ADR first assumed, rule in Stooq.
+
+**Stooq was chosen first and did not survive being checked.** Its daily CSV endpoint
+(`stooq.com/q/d/l/?s=aapl.us&i=d`) now answers every request — any User-Agent, a browser's
+included — with an HTML page carrying a JavaScript proof-of-work challenge:
+
+    <noscript>This site requires JavaScript to verify your browser.</noscript>
+
+An HTTP GET cannot clear that, and it should not try. The challenge is an access control the
+operator deliberately erected; solving it inside a Lambda would be evading a stated "no
+automated access", and would break the first time the challenge changed. This is Phase 1's
+EDGAR lesson arriving a second time — *measured against the live endpoint, not inferred from
+the docs* (`sources/edgar.py`) — and it is why the check happened before the module was
+written rather than after it was deployed.
+
+**The fix is to separate the library from the source.** The pandas objection was always about
+yfinance the *package*, never about Yahoo the *data*. Yahoo's chart endpoint
+(`query1.finance.yahoo.com/v8/finance/chart/{ticker}`) serves daily OHLCV as plain JSON, needs
+no API key, and answers a bare `httpx` GET. The poller is that GET; the parser is `json` from
+the standard library. Nothing new enters `pyproject.toml`'s `lambda` extra, and the source
+implements the same `poll(config, state) -> (list[RawDocument], State)` contract as every other.
+
+One measured consequence, better than the design it replaced: a single `range=3mo` fetch
+returns **63 daily bars**, so one request carries both the latest move *and* the trailing
+window the corroboration threshold is measured against. Market corroboration works on the
+poller's first day rather than after twenty days of accumulating one bar at a time.
+
+An API key was the other way out — Alpha Vantage, Tiingo and Finnhub all serve this cleanly.
+Declined for the reason ADR-0005 declined long-lived AWS keys: a secret that has to live
+somewhere a daily job can read it, in a project whose CI deliberately holds no static
+credentials.
 
 Observations land in `silver.market_observations`, not gold. SPEC §9 lists `macro_observations`
 under gold, but that classification is about a **bitemporal** store with `valid_time`/`known_time`
-axes — §8's ALFRED work, 4B. Stooq OHLCV is a straight parse of one source's bytes, structurally
+axes — §8's ALFRED work, 4B. Daily OHLCV is a straight parse of one source's bytes, structurally
 `silver.hn_comments`: a second table off a single source, not a cross-source aggregate. It is
-written by a MERGE that **updates on match** rather than appending, because Stooq restates
-history for splits and dividends, and a re-fetch that corrects an old row has to overwrite it.
+written by a MERGE that **updates on match** rather than appending, because prices are restated
+for splits and dividends, and a re-fetch correcting an old bar has to overwrite it.
 
 ### 2. The brief is mailed from the local side, via SES
 
@@ -111,7 +134,12 @@ ADR-0009 recorded that the veto "is now load-bearing for a stage that does not e
 `make eval` reporting unchanged precision and recall after that change is the expected result
 and the reason to run it.
 
-**What would reverse the Stooq choice.** Coverage. The watchlist is small and US-listed today;
-a watchlist that needs non-US tickers, intraday data, or corporate-action detail Stooq's CSV
-does not carry is a different problem, and the poller contract is what keeps that a
-one-module change.
+**What would reverse the market-source choice.** Two things, and the first has already
+happened once. **Access:** Yahoo's chart endpoint is undocumented and unversioned, and the
+Stooq experience is the proof that a free endpoint can gate itself without notice. If it
+does, the next candidate is an API key and the trade above gets re-made against a project
+that by then has somewhere to put one. **Coverage:** the watchlist is small and US-listed
+today; needing non-US tickers, intraday bars, or corporate-action detail is a different
+problem. Either way the blast radius is one module, because the poll contract keeps parsing
+on the far side of stored bytes — bronze holds what was fetched, and a re-parse costs no
+network (SPEC §6.3).
