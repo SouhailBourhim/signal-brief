@@ -516,13 +516,20 @@ make. Listed here because a deliverable that appears in no phase row gets found 
 decision, held here through two phases, and closed on 2026-08-21 against the deployed
 pipeline rather than quietly forgotten. Its numbers are in the README.
 
+**Stale-but-successful feed detection has left it too**, and for a less flattering reason:
+it was fixed on 2026-08-20 in 1.E and stayed on this list anyway. `State.last_content_change_at`
+carries the signal, `assess_source` reports `dead_feed` against a separate per-source SLA, and
+the footer prints fetch staleness and content staleness as two columns. A table of open items
+that lists a closed one costs the same as one that omits an open one — 4A.A found this by
+checking the code against the row rather than trusting either.
+
 | Item | Recorded in | Gates |
 |---|---|---|
-| **Stale-but-successful feed detection** — measure staleness from `last_content_change_at`, not `last_success_at` | `docs/runbooks/phase-2.md` | The health footer's freshness claims, §11 |
 | **HN score-velocity poller** — a second poller over `topstories.json`; the forward id walk fetches each item once, at score 1, so there is nothing to slope | `docs/runbooks/phase-2.md` | §7.4's velocity component |
 | **`project` cost-allocation tag** | `docs/runbooks/phase-1.md` | §10.3's per-project cost answer |
 | **Salience vs. resolution** — the brief shows every resolved mention as a subject, so a photo credit puts Getty Images on an Amazon story | `docs/runbooks/phase-3.md` 3.E | §7.4's relevance component |
 | **Publisher-diversity inflation** — one HN submission's outbound links count as three publishers | `docs/runbooks/phase-3.md` 3.E | §7.4's breadth component |
+| **EDGAR shaping** — one Form 4 clusters twice, once per CIK: the filing is indexed under both the reporting person and the issuer | `docs/runbooks/phase-3.md` 3.E | The brief's top ten |
 
 ### Labeled sets are work, and they start now
 
