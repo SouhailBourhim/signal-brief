@@ -479,7 +479,7 @@ receiving phase's row below, so it is gated by an acceptance test rather than by
 | **1. Ingest** *(done)* | Terraform-provisioned S3 / Glue / DynamoDB / budgets / alarms; 3 Lambda pollers on schedule; `bronze.raw_documents` Iceberg table; local Airflow coordinating monitoring and recovery | Stop ingestion for a day, restart. **Replay** reprocesses the stored interval with no duplicates and no gaps; **catch-up** recovers what each source's backfill horizon allows and records `gap_reason` for the rest (§6.3). **Passed against the deployed pipeline**, 2026-08-21: a deliberate 24.2 h outage, 23,306 rows re-read and 0 committed, and RSS gaps of 0.0 / 3.6 / 5.3 h recorded rather than hidden — `docs/runbooks/phase-1.md` 1.D |
 | **2. Lake + query** *(done)* | 6 sources; Spark normalize → `silver.articles`, `silver.hn_comments`, `silver.parse_rejects`; Glue-registered Iceberg; Athena serving queries; partitioning rationale documented (ADR-0007); `ops.pipeline_costs` recording bytes scanned and S3 egress | A stranger runs `make up` and answers an ad-hoc question in Athena; bytes scanned and cost recorded for that query |
 | **3. Cluster + resolve** *(done)* | **3.0 first: a real brief** — the existing renderer pointed at real `silver.articles`, ugly ranking, no enrichment, no email. Then: Spark dedup, clustering, entity resolution; both labeled eval sets committed | Reported precision/recall on both, reproducible via `make eval` — **and you have been reading a real brief every morning since 3.0**, not a fake one |
-| **4A. Publish** | Ranker over real clusters; HTML brief with §11's health footer, emailed at 07:00; maintenance DAG; **plus the carried-forward items below** | You read it three mornings running and the feedback loop records your marks. Compaction delta measured |
+| **4A. Publish** *(built 2026-08-22; acceptance pending)* | Ranker over real clusters; HTML brief with §11's health footer, emailed at 07:00; maintenance DAG; **plus the carried-forward items below** | You read it three mornings running and the feedback loop records your marks. Compaction delta measured |
 | **4B. Enrich + macro** | Ollama stage with content-hash cache, Pydantic validation and evals (§7.3); ALFRED bitemporal macro store (§8) | A 30-day backfill: **bronze bytes, normalization, hashing, simhash and entity resolution reproduce identically; clustering reproduces within a stated tolerance given a recorded ordering key; enrichment resolves from cache with a published hit rate** |
 | **5. Platform polish** | dbt migration of silver→gold; Kafka + Structured Streaming **if and only if §14's criteria are met** | 14+ consecutive daily briefs; each re-added component has a written before/after justification |
 
@@ -516,13 +516,20 @@ make. Listed here because a deliverable that appears in no phase row gets found 
 decision, held here through two phases, and closed on 2026-08-21 against the deployed
 pipeline rather than quietly forgotten. Its numbers are in the README.
 
+**Stale-but-successful feed detection has left it too**, and for a less flattering reason:
+it was fixed on 2026-08-20 in 1.E and stayed on this list anyway. `State.last_content_change_at`
+carries the signal, `assess_source` reports `dead_feed` against a separate per-source SLA, and
+the footer prints fetch staleness and content staleness as two columns. A table of open items
+that lists a closed one costs the same as one that omits an open one — 4A.A found this by
+checking the code against the row rather than trusting either.
+
 | Item | Recorded in | Gates |
 |---|---|---|
-| **Stale-but-successful feed detection** — measure staleness from `last_content_change_at`, not `last_success_at` | `docs/runbooks/phase-2.md` | The health footer's freshness claims, §11 |
 | **HN score-velocity poller** — a second poller over `topstories.json`; the forward id walk fetches each item once, at score 1, so there is nothing to slope | `docs/runbooks/phase-2.md` | §7.4's velocity component |
 | **`project` cost-allocation tag** | `docs/runbooks/phase-1.md` | §10.3's per-project cost answer |
 | **Salience vs. resolution** — the brief shows every resolved mention as a subject, so a photo credit puts Getty Images on an Amazon story | `docs/runbooks/phase-3.md` 3.E | §7.4's relevance component |
 | **Publisher-diversity inflation** — one HN submission's outbound links count as three publishers | `docs/runbooks/phase-3.md` 3.E | §7.4's breadth component |
+| **EDGAR shaping** — one Form 4 clusters twice, once per CIK: the filing is indexed under both the reporting person and the issuer | `docs/runbooks/phase-3.md` 3.E | The brief's top ten |
 
 ### Labeled sets are work, and they start now
 

@@ -92,6 +92,11 @@ _HEALTH_COLUMNS = (
     "baseline_docs",
 )
 
+# What a mark is worth to the ranker. Symmetric on purpose: a thumbs-down that only removed
+# a story would make the brief agree with itself over time, and §7.4 wants the marks to be
+# instrumentation rather than a filter that narrows what it is possible to see.
+_FEEDBACK_SCORES = {"up": 1.0, "down": -1.0}
+
 
 def _sql_timestamp(moment: datetime) -> str:
     """Trino's timestamp literal body. Second precision is deliberate: the partition
@@ -482,3 +487,181 @@ def read_health(
         for source_id in source_ids
     ]
     return healths, result
+
+
+# --------------------------------------------------------------------------------------
+# Phase 4A: the three reads SPEC §7.4's remaining ranker components need.
+# --------------------------------------------------------------------------------------
+
+
+def read_hn_velocity(
+    since: datetime,
+    *,
+    database: str | None = None,
+    workgroup: str | None = None,
+    client: Any | None = None,
+) -> tuple[dict[str, float], QueryResult]:
+    """`cluster_id -> points per hour`, from `silver.hn_score_snapshots`.
+
+    Keyed on the cluster rather than the item, with the join done in Athena — the same
+    choice `read_cluster_entities` makes, and for the same reason: the alternative ships
+    every snapshot across the wire to do a dictionary lookup here (SPEC §10.1).
+
+    The chain is `article_clusters` -> `articles.external_id` -> `hn_score_snapshots.item_id`.
+    That middle hop is why 4A.H added `external_id` to `silver.articles`: `article_id` is
+    derived from content, so it changes when a headline is edited — exactly when a story is
+    still developing and its velocity matters most.
+
+    The slope is between the oldest and newest snapshot in the window, not a fitted line.
+    Two points is what the data reliably has for a story that entered the ranking recently,
+    and a regression over three would claim a precision the sampling does not support.
+
+    Stories with one snapshot are absent rather than zero: a single observation is not a
+    slope, and zero would assert "not moving" about a story nobody has looked at twice.
+    A cluster takes its fastest member — a cluster is one story, and if any copy of it is
+    climbing, the story is climbing.
+    """
+    sql = f"""
+        WITH slopes AS (
+            SELECT item_id,
+                   (max_by(score, observed_at) - min_by(score, observed_at))
+                       / (date_diff('second', min(observed_at), max(observed_at)) / 3600.0)
+                       AS points_per_hour
+            FROM silver.hn_score_snapshots
+            WHERE observed_at >= timestamp '{_sql_timestamp(since)}'
+            GROUP BY item_id
+            HAVING count(*) > 1
+               AND date_diff('second', min(observed_at), max(observed_at)) > 0
+        )
+        SELECT ac.cluster_id AS cluster_id,
+               max(s.points_per_hour) AS points_per_hour
+        FROM silver.article_clusters ac
+        JOIN silver.articles a
+          ON a.article_id = ac.article_id
+         AND a.source_id = 'hackernews'
+         AND a.external_id IS NOT NULL
+        JOIN slopes s
+          ON s.item_id = a.external_id
+        WHERE ac.window_start = (SELECT max(window_start) FROM silver.article_clusters)
+        GROUP BY ac.cluster_id
+    """
+    result = run_query(
+        sql,
+        database=database or settings.athena_database,
+        workgroup=workgroup or settings.athena_workgroup,
+        client=client,
+    )
+
+    slopes: dict[str, float] = {}
+    for row in result.rows:
+        cluster_id = row.get("cluster_id") or ""
+        slope = _parse_float(row.get("points_per_hour"))
+        if cluster_id and slope is not None:
+            slopes[cluster_id] = slope
+    return slopes, result
+
+
+def read_market_moves(
+    *,
+    trailing_days: int = 20,
+    database: str | None = None,
+    workgroup: str | None = None,
+    client: Any | None = None,
+) -> tuple[dict[str, float], QueryResult]:
+    """`ticker -> |latest return| / trailing stddev of returns`, from
+    `silver.market_observations`.
+
+    A z-like ratio rather than a boolean, so the ranker can scale rather than step and the
+    number survives into `score_components` as something a reader can check (SPEC §7.4's
+    explainability requirement). ADR-0010 records the threshold this feeds.
+
+    Everything is computed in Athena rather than pulled and looped over here, for the same
+    reason `read_cluster_entities` aggregates server-side: the alternative ships ~63 rows
+    per ticker across the wire to compute one number each (SPEC §10.1).
+
+    A ticker whose trailing standard deviation is zero — a halted stock, or a window with
+    one bar — is absent rather than infinite.
+    """
+    sql = f"""
+        WITH returns AS (
+            SELECT ticker,
+                   trade_date,
+                   close / nullif(lag(close) OVER (
+                       PARTITION BY ticker ORDER BY trade_date
+                   ), 0) - 1 AS daily_return
+            FROM silver.market_observations
+        ),
+        recent AS (
+            SELECT ticker,
+                   daily_return,
+                   row_number() OVER (PARTITION BY ticker ORDER BY trade_date DESC) AS recency
+            FROM returns
+            WHERE daily_return IS NOT NULL
+        )
+        SELECT ticker,
+               max_by(abs(daily_return), -recency) AS latest_move,
+               stddev_samp(daily_return) AS trailing_stddev,
+               count(*) AS observations
+        FROM recent
+        WHERE recency <= {trailing_days}
+        GROUP BY ticker
+        HAVING count(*) >= 3
+    """
+    result = run_query(
+        sql,
+        database=database or settings.athena_database,
+        workgroup=workgroup or settings.athena_workgroup,
+        client=client,
+    )
+
+    moves: dict[str, float] = {}
+    for row in result.rows:
+        ticker = (row.get("ticker") or "").upper()
+        latest = _parse_float(row.get("latest_move"))
+        stddev = _parse_float(row.get("trailing_stddev"))
+        if not ticker or latest is None or not stddev:
+            continue
+        moves[ticker] = latest / stddev
+    return moves, result
+
+
+def read_feedback(
+    since: datetime,
+    *,
+    database: str | None = None,
+    workgroup: str | None = None,
+    client: Any | None = None,
+) -> tuple[dict[str, float], QueryResult]:
+    """`cluster_id -> +1.0 / -1.0`, the reader's own marks from `gold.brief_items`.
+
+    SPEC §7.4: "your morning thumbs up/down", and §14 keeps automated weight-fitting behind
+    "several hundred marked items" — so this is instrumentation feeding one hand-set weight,
+    not a training signal.
+
+    Keyed on `cluster_id`, which means a mark only carries forward while a story keeps the
+    same cluster. Consecutive daily runs share 48 of 72 hours and `cluster.py` can assign a
+    new id, so a mark's reach is a day or two by construction. That is the right lifetime
+    for "I have seen this one" and the wrong one for training, which is another reason §14's
+    bar sits where it does.
+    """
+    sql = f"""
+        SELECT cluster_id, user_feedback
+        FROM gold.brief_items
+        WHERE brief_date >= date '{since.date().isoformat()}'
+          AND user_feedback IS NOT NULL
+    """
+    result = run_query(
+        sql,
+        database=database or settings.athena_database,
+        workgroup=workgroup or settings.athena_workgroup,
+        client=client,
+    )
+
+    marks: dict[str, float] = {}
+    for row in result.rows:
+        cluster_id = row.get("cluster_id") or ""
+        mark = (row.get("user_feedback") or "").strip().lower()
+        if not cluster_id or mark not in _FEEDBACK_SCORES:
+            continue
+        marks[cluster_id] = _FEEDBACK_SCORES[mark]
+    return marks, result

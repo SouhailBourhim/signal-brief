@@ -165,6 +165,28 @@ variable "sources" {
       schedule_expression = "rate(15 minutes)"
       description         = "Ars Technica RSS 2.0. Backfill horizon: the feed window only."
     }
+    # Phase 4A, and the source that reaches #7 — the point the comment above named as where
+    # six colliding pollers stop fitting under a new account's concurrency limit of 10.
+    #
+    # It fits because it does not collide. `rate(...)` gives no control over phase, so this
+    # is the first schedule in the map expressed as cron: :07/:22/:37/:52 misses the
+    # :00/:15/:30/:45 pileup the other five share, and misses every multiple of 5, which is
+    # where `hackernews` lands. Peak concurrency stays where it was instead of going to 7,
+    # and Service Quota L-B99A9384 stays optional.
+    hn_scores = {
+      schedule_expression = "cron(7,22,37,52 * * * ? *)"
+      timeout_seconds     = 120 # TOP_N=60 items per invocation, paced at 5/sec
+      description         = "HN top-story score snapshots for §7.4 velocity. Horizon: window."
+    }
+    # Source #8, once a day. 02:11 UTC is after the US close (20:00 UTC + settlement) and
+    # before the 04:30/05:00 processing chain, so the brief reads bars that are already
+    # committed. Off the :00 minute for the same reason `hn_scores` is: nothing else runs
+    # at :11, so this never adds to a concurrency peak.
+    market = {
+      schedule_expression = "cron(11 2 * * ? *)"
+      timeout_seconds     = 120 # one request per watchlist ticker, paced at 2/sec
+      description         = "Daily OHLCV for watchlist tickers, §7.4 market corroboration."
+    }
   }
 }
 

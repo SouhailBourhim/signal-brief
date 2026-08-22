@@ -132,6 +132,11 @@ _URL = re.compile(r"https?://\S+|www\.\S+")
 # `$2.4B`, `600%`, `24 days` are things an article is actually about.
 _LONG_DIGITS = re.compile(r"^\d{5,}$")
 
+# An EDGAR accession number, whole: `0001872100-26-000003`. Matched against text rather than
+# against tokens, because `_TOKEN` excludes the hyphen and would leave three fragments that
+# are indistinguishable from the CIKs in the same line.
+_ACCESSION = re.compile(r"\d{10}-\d{2}-\d{6}")
+
 # Field names the feeds emit about themselves. These are not words anyone chose while writing
 # about an event, and in this corpus they are the single largest source of shared vocabulary
 # between unrelated documents. Kept separate from `_STOPWORDS` because that list is about
@@ -283,6 +288,12 @@ class Prepared:
     # document's *identity*, and identity is what tells two filings apart when everything
     # else about them agrees.
     identifiers: frozenset[str] = frozenset()
+    # The accession numbers, whole. `identifiers` cannot hold these: `_TOKEN` has no hyphen
+    # in its character class, so `0001872100-26-000003` reaches it as three unrelated digit
+    # runs, indistinguishable from the CIKs sitting beside them. EDGAR's submission id
+    # survives here intact because it is the one identifier that says *same filing* rather
+    # than merely *some number this document contains*. See 4A.G.
+    accessions: frozenset[str] = frozenset()
 
 
 def identifiers(text: str) -> frozenset[str]:
@@ -292,14 +303,27 @@ def identifiers(text: str) -> frozenset[str]:
     )
 
 
+def accessions(text: str) -> frozenset[str]:
+    """EDGAR accession numbers, matched whole against text tokenization would shatter.
+
+    An accession number identifies a *submission*, and EDGAR indexes one submission under
+    every CIK it concerns — so a Form 4 appears twice in the feed, once under the reporting
+    person and once under the issuer, with different titles and different CIKs. Everything
+    else about the pair disagrees; this is the only field that says they are one filing.
+    """
+    return frozenset(_ACCESSION.findall(strip_boilerplate(text or "")))
+
+
 def prepare(title: str, body: str) -> Prepared:
     clean_title = strip_boilerplate(title or "")
     clean_body = strip_boilerplate(body or "")
+    raw = f"{title or ''} {body or ''}"
     return Prepared(
         title=content_tokens(title or ""),
         body=content_tokens(body or ""),
         simhash=simhash64(f"{clean_title} {clean_body}".strip()),
-        identifiers=identifiers(f"{title or ''} {body or ''}"),
+        identifiers=identifiers(raw),
+        accessions=accessions(raw),
     )
 
 
@@ -319,6 +343,21 @@ def decide(a: Prepared, b: Prepared) -> bool:
     3. Bodies that agree, when both are substantial. Never pooled with titles: a headline
        against 120 tokens of prose scores near zero however well the headline matches.
     """
+    # Same submission, stated by EDGAR itself. Checked *before* the veto because the two
+    # rules read the same documents and disagree about them: a Form 4 is indexed under the
+    # reporting person and under the issuer, so the pair carries one accession number and two
+    # different CIKs, and the veto below sees only the CIKs. 3.E found this as "one Form 4
+    # clusters twice"; the committed EDGAR fixture has 19 such pairs in 40 entries.
+    #
+    # A positive rule rather than a loosening of the veto, deliberately. ADR-0009 recorded
+    # that the veto "is now load-bearing for a stage that does not exist yet" — 4B's embedding
+    # branch has a 14x worse corpus false-merge rate without it, all of it EDGAR — so this
+    # adds evidence in front of it instead of weakening it. Equality, not intersection: two
+    # filings that merely *cite* a common third document overlap without being one filing,
+    # and the Allspring pair pinned below shares a CIK that is also its accession prefix.
+    if a.accessions and a.accessions == b.accessions:
+        return True
+
     # A veto, checked before any evidence for merging. Two documents that each carry
     # identifiers and carry *different* ones are different documents, however completely the
     # rest of them agrees. This is what tells 47 filings by one fund trust apart: their titles
@@ -365,6 +404,40 @@ DEFAULT_AUTHORITY = 0.5
 
 def authority(domain: str) -> float:
     return _AUTHORITY.get(domain, DEFAULT_AUTHORITY)
+
+
+# Where an aggregator's submissions actually come from. SPEC §7.4 defines `breadth` as the
+# count of **independent** publishers, and an aggregator breaks that definition in a specific
+# way: `transform.to_article` sets `publisher_domain` from the submitted URL, so three Hacker
+# News posts about one project — its site, its GitHub repo, a thread about it — arrive as
+# three distinct domains and score as three independent outlets corroborating a story.
+#
+# They are one community's attention, not three newsrooms. 3.E recorded it as
+# "publisher-diversity inflation" and SPEC §12 carried it into 4A, gating `breadth` and the
+# brief's top ten.
+#
+# Keyed on `source_id` rather than on a domain list because the property belongs to the
+# *source*: anything whose documents are user submissions of other people's URLs has this
+# shape, and a future aggregator source would need adding here, not to a denylist of domains.
+AGGREGATOR_PUBLISHERS: dict[str, str] = {
+    "hackernews": "news.ycombinator.com",
+}
+
+
+def effective_publisher(article: dict[str, Any]) -> str:
+    """The publisher a cluster should count for `breadth`.
+
+    Identity for ordinary sources — a TechCrunch article's publisher is TechCrunch. For an
+    aggregator it is the aggregator itself, collapsing its submissions to one voice however
+    many outbound domains they point at. See `AGGREGATOR_PUBLISHERS`.
+
+    Deliberately not applied to `publisher_domain` at parse time: the submitted URL is a true
+    fact about the document and `silver.articles` should keep it. This is a *ranking*
+    question — what counts as independent corroboration — so it is answered where ranking
+    reads, not by rewriting the record (SPEC §6.2).
+    """
+    aggregated = AGGREGATOR_PUBLISHERS.get(article.get("source_id") or "")
+    return aggregated or (article.get("publisher_domain") or "")
 
 
 def blocking_keys(tokens: frozenset[str], frequency: dict[str, int], threshold: float) -> list[str]:
@@ -505,11 +578,14 @@ def group_edges(articles: list[dict[str, Any]], edges: Iterable[tuple[str, str]]
     for members in components:
         # Canonical = most authoritative, earliest-seen. The rest become
         # distinct_publisher_count, which feeds ranking instead of being discarded.
+        #
+        # `effective_publisher`, not `publisher_domain`: see its docstring. Three Show HN
+        # posts about one project are one publisher, not three.
         head = min(
             members,
             key=lambda a: (-authority(a["publisher_domain"]), a["fetched_at"], a["article_id"]),
         )
-        publishers = {m["publisher_domain"] for m in members}
+        publishers = {effective_publisher(m) for m in members}
         # Both ends, because they answer different questions and a brief needs the second.
         # The canonical head is by construction the *earliest* article (most authoritative,
         # then earliest seen), so timestamping a cluster by its head measured when the story

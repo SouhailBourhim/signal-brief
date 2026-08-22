@@ -11,6 +11,8 @@ from signal_core.sources.edgar import poll as edgar_poll
 from signal_core.sources.edgar_formd import poll as edgar_formd_poll
 from signal_core.sources.fake import poll as fake_poll
 from signal_core.sources.hackernews import poll as hackernews_poll
+from signal_core.sources.hn_scores import poll as hn_scores_poll
+from signal_core.sources.market import poll as market_poll
 from signal_core.sources.rss_ars import poll as rss_ars_poll
 from signal_core.sources.rss_tech import poll as rss_tech_poll
 from signal_core.sources.rss_verge import poll as rss_verge_poll
@@ -24,6 +26,13 @@ REGISTRY: dict[str, Poller] = {
     "edgar_formd": edgar_formd_poll,
     "rss_verge": rss_verge_poll,
     "rss_ars": rss_ars_poll,
+    # Phase 4A. `hn_scores` re-reads ids `hackernews` has already walked past — the one
+    # place in this registry where re-fetching is the point rather than a bug (SPEC §7.4's
+    # velocity component; see sources/hn_scores.py).
+    "hn_scores": hn_scores_poll,
+    # Source #8, and the only one whose fetch list is read from a hand-edited file rather
+    # than from `SourceConfig` — the watchlist decides which tickers exist (ADR-0010).
+    "market": market_poll,
 }
 
 

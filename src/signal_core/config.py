@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from signal_core.contracts import BackfillHorizon, PayloadFormat, SourceConfig
@@ -44,6 +44,26 @@ class Settings(BaseSettings):
     # scanned cutoff — win regardless of what a client requests.
     athena_workgroup: str = "signal"
     athena_database: str = "silver"
+
+    # Phase 4A delivery (infra/terraform/main/mail.tf). Both default to `contact_email`
+    # because the brief has one reader who is also its sender — the SES identity stays in
+    # the sandbox for exactly that reason (ADR-0010).
+    mail_from: str = ""
+    mail_to: str = ""
+
+    @model_validator(mode="after")
+    def _default_mail_addresses(self) -> Settings:
+        """`mail_from`/`mail_to` fall back to `contact_email` unless set explicitly.
+
+        A validator rather than two properties, because these are overridable from the
+        environment (`SIGNAL_MAIL_TO`) and a property could not be. The fallback is what
+        makes the SES sandbox the right default: one address, sending to itself.
+        """
+        if not self.mail_from:
+            object.__setattr__(self, "mail_from", self.contact_email)
+        if not self.mail_to:
+            object.__setattr__(self, "mail_to", self.contact_email)
+        return self
 
     @property
     def user_agent(self) -> str:
@@ -227,6 +247,63 @@ SOURCES: dict[str, SourceConfig] = {
         min_docs_per_window=0,
         content_staleness_sla_seconds=259200,  # 72 h, matching its lower publish rate
         rate_limit_per_sec=1.0,
+        user_agent=settings.user_agent,
+    ),
+    # Phase 4A — SPEC §7.4's velocity component. See sources/hn_scores.py for why this is a
+    # separate source rather than a mode of `hackernews`.
+    "hn_scores": SourceConfig(
+        source_id="hn_scores",
+        url="https://hacker-news.firebaseio.com/v0",
+        payload_format=PayloadFormat.JSON,
+        # WINDOW, not COMPLETE — the opposite of `hackernews`, from the same API. That
+        # source's horizon is COMPLETE because item ids are addressable forever; this one
+        # samples *the ranking*, which is a set that reshuffles and is gone once it has.
+        # A missed poll is a missing point on a slope and no later fetch recovers it.
+        backfill_horizon=BackfillHorizon.WINDOW,
+        freshness_sla_seconds=2700,  # 3x rate(15 minutes)
+        # One poll emits TOP_N documents, every poll, unconditionally — this source has no
+        # 304 and no "nothing new" state. Four polls an hour at TOP_N=60 is 240; a floor
+        # well under that catches a partially failing poll, not just a dead one.
+        min_docs_per_window=180,
+        # The ranked id list going static for an hour is a dead API. HN's front page turns
+        # over continuously — this is the same reasoning as `hackernews`'s 3600.
+        content_staleness_sla_seconds=3600,
+        rate_limit_per_sec=5.0,
+        timeout_seconds=5.0,
+        user_agent=settings.user_agent,
+    ),
+    # Phase 4A — SPEC §7.4's market-corroboration component. ADR-0010 records why this is a
+    # bare JSON endpoint rather than yfinance (pandas) or Stooq (browser challenge).
+    "market": SourceConfig(
+        source_id="market",
+        url="https://query1.finance.yahoo.com",
+        payload_format=PayloadFormat.JSON,
+        # Every fetch re-states ~63 trading days, so any past bar is re-fetchable and a
+        # missed day repairs itself on the next poll rather than needing a backfill.
+        backfill_horizon=BackfillHorizon.COMPLETE,
+        # 48 h — two consecutive missed runs. This is the 2x floor
+        # `test_freshness_sla_is_longer_than_the_poll_cadence` enforces, not the 3x the
+        # other sources use, and the difference is what a multiple *means* at this cadence:
+        # 3x a 15-minute poll is 45 minutes, while 3x a daily poll is three days of silence
+        # before anyone hears about it. One missed run on a daily schedule is a real event
+        # and 30 h would have caught it — but it would also fire on any run that merely
+        # started late, which is how an alert gets trained away (SPEC §11). Two misses is
+        # the first unambiguous signal.
+        freshness_sla_seconds=172800,
+        # Zero, like `rss_ars` and for a sharper version of the same reason: health is
+        # assessed over the closed prior *hour* (`monitor.window_bounds`), and a daily
+        # source is legitimately silent in 23 of them. Any positive floor would report this
+        # source as thin almost permanently. What catches a genuinely dead market feed is
+        # the content-staleness SLA below, which is measured against `last_content_change_at`
+        # rather than volume (SPEC §11, 1.E).
+        min_docs_per_window=0,
+        # 120 h, past the longest legitimate gap. Markets close weekends, and a Thursday-
+        # Friday holiday puts ~4 days between sessions — the same reasoning as `edgar`'s
+        # 96 h, extended because equities add no partial-day filings in between. Firing
+        # every Thanksgiving is how an alert gets trained away (SPEC §11).
+        content_staleness_sla_seconds=432000,
+        rate_limit_per_sec=2.0,
+        timeout_seconds=15.0,
         user_agent=settings.user_agent,
     ),
 }

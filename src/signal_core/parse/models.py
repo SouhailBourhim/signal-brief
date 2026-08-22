@@ -9,7 +9,7 @@ or JSON shape again.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 
@@ -59,6 +59,45 @@ class ParsedComment:
 
 
 @dataclass(frozen=True)
+class ParsedScoreSnapshot:
+    """One observation of a Hacker News story's score at a point in time. SPEC §7.4.
+
+    Deliberately not a `ParsedItem`, for the same reason `ParsedComment` is not: routing
+    these into `silver.articles` would multiply "articles in" by the number of times each
+    story is sampled and make the dedup ratio meaningless. It is also not the same *kind*
+    of record — a `ParsedItem` is a document, this is a measurement of one.
+
+    `observed_at` is the fetch time, taken from the bronze row rather than the payload. The
+    payload's `time` is when the story was *submitted* and never moves; what makes a slope
+    is when we looked. That is why this dataclass leaves it unset and `normalize` fills it
+    from `fetched_at` — the parser cannot see it.
+    """
+
+    item_id: str
+    score: int
+    descendants: int | None = None
+    title: str = ""
+
+
+@dataclass(frozen=True)
+class ParsedMarketObservation:
+    """One daily OHLCV bar for one ticker. SPEC §7.4's market-corroboration input.
+
+    `trade_date` is a date, not a timestamp: Stooq serves daily bars and the close is the
+    only price the ranker asks about. Volume is carried because a move on no volume is a
+    different claim than a move on heavy volume, and the threshold may later want it.
+    """
+
+    ticker: str
+    trade_date: date
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float | None = None
+
+
+@dataclass(frozen=True)
 class ParseResult:
     """What one bronze row parses into.
 
@@ -67,9 +106,15 @@ class ParseResult:
     format, XML that doesn't parse even after the encoding-lie fallback — never when a
     single entry within an otherwise-good feed is missing a field; that entry still
     comes back in `items`, carrying its own `parse_error`.
+
+    The four collections are parallel sinks, not alternatives: a parser fills exactly the
+    one its source produces. Adding a shape here rather than overloading `items` is what
+    keeps `dedup_ratio` an honest number (docs/runbooks/phase-2.md's comments finding).
     """
 
     items: list[ParsedItem] = field(default_factory=list)
     comments: list[ParsedComment] = field(default_factory=list)
+    score_snapshots: list[ParsedScoreSnapshot] = field(default_factory=list)
+    market_observations: list[ParsedMarketObservation] = field(default_factory=list)
     error: str | None = None
     warnings: tuple[str, ...] = ()

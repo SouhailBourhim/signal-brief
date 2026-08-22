@@ -160,6 +160,63 @@ def test_group_stories_collapses_syndication(polled):
     assert acq["publisher_domain"] in {"arstechnica.com", "techcrunch.com", "theverge.com"}
 
 
+def _hn_article(article_id: str, url: str, title: str) -> dict:
+    """A minimal silver row shaped like an HN submission — `publisher_domain` is the
+    *submitted* URL's domain, which is exactly where the inflation comes from."""
+    from signal_core.transform import publisher_domain as domain_of
+
+    now = datetime.now(UTC)
+    return {
+        "article_id": article_id,
+        "source_id": "hackernews",
+        "url_canonical": url,
+        "title": title,
+        "body_text": "",
+        "published_at": now,
+        "fetched_at": now,
+        "publisher_domain": domain_of(url),
+        "timestamp_flagged": False,
+        "story_key": None,
+        "parse_error": None,
+    }
+
+
+def test_one_aggregators_submissions_are_one_publisher():
+    """3.E's publisher-diversity inflation, which SPEC §12 carried into 4A gating `breadth`.
+
+    Three Show HN posts about one project — its site, its repo, a thread — carry three
+    different `publisher_domain`s and used to score as three independent outlets. SPEC §7.4
+    defines breadth as *independent* publishers, and this is one community's attention, not
+    three newsrooms."""
+    from signal_core.dedup import effective_publisher, group_stories
+
+    members = [
+        _hn_article("a", "https://fx.sh/post", "Show HN: Fx, a terminal JSON viewer"),
+        _hn_article("b", "https://github.com/x/fx", "Show HN: Fx, a terminal JSON viewer"),
+        _hn_article("c", "https://twitter.com/x/1", "Show HN: Fx, a terminal JSON viewer"),
+    ]
+    assert len({m["publisher_domain"] for m in members}) == 3, "three raw domains, as stored"
+
+    (cluster,) = group_stories(members).clusters
+    assert cluster["article_count"] == 3
+    assert cluster["distinct_publisher_count"] == 1, "one aggregator, one voice"
+    assert cluster["publishers"] == ["news.ycombinator.com"]
+
+    # The stored fact is untouched — this is a ranking question, answered where ranking
+    # reads, not by rewriting `silver.articles` (SPEC §6.2).
+    assert members[0]["publisher_domain"] == "fx.sh"
+    assert effective_publisher(members[0]) == "news.ycombinator.com"
+
+
+def test_a_real_newsroom_keeps_its_own_domain():
+    """The fix must not collapse genuine syndication, which is the signal breadth exists
+    to detect."""
+    from signal_core.dedup import effective_publisher
+
+    article = {"source_id": "rss_tech", "publisher_domain": "techcrunch.com"}
+    assert effective_publisher(article) == "techcrunch.com"
+
+
 def test_no_article_is_lost_to_clustering(polled):
     documents, _ = polled
     articles = _polled_articles(documents)
@@ -252,6 +309,49 @@ def test_two_filings_by_one_company_are_two_stories():
     assert not is_same_story(*a, *b)
     # The same filing, fetched twice, still merges: identical identifiers are agreement.
     assert is_same_story(*a, *a)
+
+
+def test_one_form_4_indexed_under_two_ciks_is_one_story():
+    """3.E's "EDGAR shaping": EDGAR indexes a submission under every CIK it concerns, so a
+    Form 4 arrives twice — once under the reporting person, once under the issuer. The
+    titles name different parties and the CIKs differ, so the identity veto sees two
+    documents. The accession number says otherwise, and it is EDGAR's own statement that
+    this is one filing.
+
+    Real entries from the committed feed, which holds 19 such pairs in 40 entries."""
+    reporting = (
+        "4 - Koss Jennifer G. (0001872100) (Reporting)",
+        "<b>Filed:</b> 2026-08-21 <b>AccNo:</b> 0001872100-26-000003 <b>Size:</b> 9 KB",
+    )
+    issuer = (
+        "4 - Reservoir Media, Inc. (0001824403) (Issuer)",
+        "<b>Filed:</b> 2026-08-21 <b>AccNo:</b> 0001872100-26-000003 <b>Size:</b> 9 KB",
+    )
+    assert is_same_story(*reporting, *issuer)
+
+
+def test_the_accession_rule_needs_the_whole_number_not_a_shared_prefix():
+    """Why the rule reads `accessions` and not `identifiers`. Tokenization splits
+    `0001081400-26-000347` on the hyphen, and the leading run is the filer's own CIK — so
+    the two Allspring filings above already *share* two of three fragments. Equality on the
+    whole accession separates them; any intersection rule over the fragments would not."""
+    from signal_core.dedup import accessions, identifiers, prepare
+
+    a = prepare(
+        "497 - ALLSPRING FUNDS TRUST (0001081400) (Filer)",
+        "<b>AccNo:</b> 0001081400-26-000347",
+    )
+    b = prepare(
+        "497 - ALLSPRING FUNDS TRUST (0001081400) (Filer)",
+        "<b>AccNo:</b> 0001081400-26-000352",
+    )
+    assert a.identifiers & b.identifiers, "the fragments overlap, which is the trap"
+    assert a.accessions != b.accessions, "the whole numbers do not"
+
+    assert accessions("<b>AccNo:</b> 0001872100-26-000003") == {"0001872100-26-000003"}
+    # Prose carries none, so the rule cannot fire on ordinary coverage.
+    assert accessions("NASA calls off Swift rescue mission") == frozenset()
+    assert identifiers("no long digit runs here") == frozenset()
 
 
 def test_the_identity_veto_leaves_prose_alone():

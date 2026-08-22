@@ -12,7 +12,15 @@ from collections.abc import Callable
 from signal_core.parse.edgar import parse as edgar_parse
 from signal_core.parse.fake import parse as fake_parse
 from signal_core.parse.hackernews import parse as hackernews_parse
-from signal_core.parse.models import ParsedComment, ParsedItem, ParseResult
+from signal_core.parse.hn_scores import parse as hn_scores_parse
+from signal_core.parse.market import parse as market_parse
+from signal_core.parse.models import (
+    ParsedComment,
+    ParsedItem,
+    ParsedMarketObservation,
+    ParsedScoreSnapshot,
+    ParseResult,
+)
 from signal_core.parse.rss import parse_rss_ars, parse_rss_tech, parse_rss_verge
 
 Parser = Callable[[bytes], ParseResult]
@@ -26,9 +34,22 @@ REGISTRY: dict[str, Parser] = {
     "rss_tech": parse_rss_tech,
     "rss_verge": parse_rss_verge,
     "rss_ars": parse_rss_ars,
+    # Phase 4A. Same endpoint and payload shape as `hackernews`, different record: score is
+    # the observation here rather than incidental `extra`. Separate parsers because one
+    # returning both shapes would re-file every top story into `silver.articles` every poll.
+    "hn_scores": hn_scores_parse,
+    "market": market_parse,
 }
 
-__all__ = ["REGISTRY", "ParseResult", "ParsedComment", "ParsedItem", "get_parser"]
+__all__ = [
+    "REGISTRY",
+    "ParseResult",
+    "ParsedComment",
+    "ParsedItem",
+    "ParsedMarketObservation",
+    "ParsedScoreSnapshot",
+    "get_parser",
+]
 
 
 def get_parser(source_id: str) -> Parser:

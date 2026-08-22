@@ -381,18 +381,24 @@ quietly does the wrong thing is far more dangerous than one that stops and says 
 | Phase | Status |
 |---|---|
 | 0 — Prove the shape | Done |
-| 1 — Collect the real thing | Collectors live and running; day-long switch-off test deferred by decision |
+| 1 — Collect the real thing | Done — including the day-long switch-off test, run for real on 2026-08-21 |
 | 2 — Make it answerable | Done |
-| 3 — Same story, and who's who *(now opens with the first real brief)* | Not started |
-| 4A — Rank it and send it | Not started |
+| 3 — Same story, and who's who *(opens with the first real brief)* | Done |
+| 4A — Rank it and send it | In progress |
 | 4B — AI summaries, and revision history | Not started |
 | 5 — Polish | Not started |
 
-No brief is being produced from real data yet — that starts at the very beginning of
-Phase 3, and it starts deliberately rough. Email delivery comes later, in 4A. What exists
-today is a system that reliably collects and archives, tells you honestly when it couldn't,
-and now turns that archive into rows you can ask real questions of and get a real answer
-with a real price tag attached.
+A real brief is being produced from real data and read every morning — that started at the
+very beginning of Phase 3, deliberately rough, and the roughness is the point: it has found
+a defect on every reading so far. What exists today is a system that reliably collects and
+archives, tells you honestly when it couldn't, turns that archive into rows you can ask real
+questions of with a real price tag attached, and groups the day's coverage into stories with
+the companies in them identified.
+
+What 4A is adding now: a ranker that uses more than "how recent and how many outlets", and
+delivery to your inbox at 07:00 rather than a command you have to remember to run. The AI
+summaries everyone assumes come first come last, in 4B — because a summary of the wrong ten
+stories is worse than no summary at all.
 
 *Phase 4 was one phase until 2026-08-20; it held ten separate deliverables, including both
 of the things this project most wants to be judged on. It was split so those two can't be
