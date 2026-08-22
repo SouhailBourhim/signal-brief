@@ -60,6 +60,15 @@ MAINTAINED_TABLES: tuple[str, ...] = (
     "silver.dim_entities",
     "ops.source_health",
     "ops.pipeline_costs",
+    # The gold marts. Written through Athena rather than Spark (`brief/items.py`,
+    # `enrich/store.py`), which is exactly why they were missed until 4B:
+    # `test_every_maintained_table_is_one_the_pipeline_actually_writes` walks the DDL
+    # constants in `spark/jobs/`, so a table no Spark job writes could never fail it.
+    # `gold.brief_items` has been written since 4A and swept by nothing. They are Iceberg
+    # tables in the same Glue catalog, so the procedures reach them the same way.
+    "gold.brief_items",
+    "gold.cluster_enrichment",
+    "gold.enrichment_rejects",
 )
 
 MAINTENANCE_DDL = """

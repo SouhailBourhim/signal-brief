@@ -24,6 +24,12 @@
           font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .meta .flag { color: var(--accent); }
   p.body { margin: .5rem 0 0; color: var(--fg); }
+  /* A summary is model output; a snippet is source text. They are different kinds of claim,
+     so they do not look identical on the page (SPEC 7.3's determinism boundary, made visible
+     to the reader rather than only recorded in lineage). The rule marks which one this is;
+     the fallback to a snippet is what makes a brief still readable when Ollama was off. */
+  p.body.summary { border-left: 2px solid var(--rule); padding-left: .6rem; }
+  .meta .topic { color: var(--accent); }
   /* Companies resolved out of the story's articles (SPEC 7.2). Chips rather than a comma
      list because the ticker has to read as attached to its company and not to the next one. */
   p.entities { margin: .45rem 0 0; display: flex; flex-wrap: wrap; gap: .3rem; }
@@ -57,6 +63,7 @@
       {% if c.distinct_publisher_count > 1 %}
         · {{ c.distinct_publisher_count }} publishers ({{ c.publishers|join(', ') }})
       {% endif %}
+      {% if c.topic %}· <span class="topic">{{ c.topic }}</span>{% endif %}
       · score {{ '%.2f'|format(c.score) }}
       {% for k, v in c.score_components.items() %}· {{ k }} {{ '%.2f'|format(v) }}{% endfor %}
       {% if c.timestamp_flagged %}<span class="flag">· timestamp unverified</span>{% endif %}
@@ -68,7 +75,11 @@
       {% endfor %}
     </p>
     {% endif %}
+    {% if c.summary %}
+    <p class="body summary">{{ c.summary }}</p>
+    {% else %}
     <p class="body">{{ c.snippet }}</p>
+    {% endif %}
   </article>
   {% else %}
   <article><p class="body">No stories cleared the threshold.</p></article>
@@ -83,7 +94,7 @@
     {% if health.exact_duplicates_removed is not none %}
     · {{ health.exact_duplicates_removed }} exact dupes removed
     {% endif %}
-    · cache {{ '%.0f'|format(health.cache_hit_rate * 100) }}%
+    · enriched {{ '%.0f'|format(health.enrichment_coverage * 100) }}%
     · {{ health.runtime_seconds }}s
     · {{ '{:,}'.format(health.bytes_scanned) }} bytes scanned
     · ${{ '%.4f'|format(health.estimated_cost_usd) }}

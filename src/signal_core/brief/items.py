@@ -33,7 +33,7 @@ from datetime import datetime
 from typing import Any
 
 from signal_core.config import Settings
-from signal_core.ops.athena import run_query
+from signal_core.ops.athena import run_query, sql_string
 from signal_core.timeutil import brief_date, utc_now
 
 settings = Settings()
@@ -55,19 +55,10 @@ BRIEF_ITEMS_DDL = """
 """
 
 
-def _sql_string(value: str | None) -> str:
-    """A Trino string literal, or NULL. Single quotes double to escape, and a headline with
-    an apostrophe is not an edge case."""
-    if value is None:
-        return "NULL"
-    escaped = value.replace("'", "''")
-    return f"'{escaped}'"
-
-
 def _components_map(components: dict[str, float]) -> str:
     if not components:
         return "MAP(ARRAY[], ARRAY[])"
-    keys = ", ".join(_sql_string(k) for k in sorted(components))
+    keys = ", ".join(sql_string(k) for k in sorted(components))
     values = ", ".join(f"{float(components[k])}" for k in sorted(components))
     return f"MAP(ARRAY[{keys}], ARRAY[{values}])"
 
@@ -149,8 +140,8 @@ def write_brief_items(
         "("
         f"date '{day}', "
         f"{int(cluster['rank'])}, "
-        f"{_sql_string(cluster['cluster_id'])}, "
-        f"{_sql_string(cluster.get('title'))}, "
+        f"{sql_string(cluster['cluster_id'])}, "
+        f"{sql_string(cluster.get('title'))}, "
         f"{float(cluster.get('score', 0.0))}, "
         f"{_components_map(cluster.get('score_components') or {})}, "
         f"{'true' if cluster.get('included') else 'false'}, "

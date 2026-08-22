@@ -160,7 +160,13 @@ class RunHealth:
     # `cluster_window` does, and reports it as a task result. A 0 here would be a number
     # nobody measured, which SPEC §17 rules out.
     exact_duplicates_removed: int | None = 0
-    cache_hit_rate: float = 0.0
+    # The share of *shown* stories that carry an enrichment. Renamed in 4B from
+    # `cache_hit_rate`, which was a Phase 0 placeholder written when the brief was assumed to
+    # do the inference itself. It does not: `enrich_dag` runs earlier and the brief only
+    # reads what it wrote, so the brief cannot observe an inference-avoidance rate and would
+    # have had to print something it did not measure (SPEC §17). §7.3's cache-hit rate is
+    # still published — by the stage that can actually measure it, `enrich/run.py`.
+    enrichment_coverage: float = 0.0
     runtime_seconds: float = 0.0
     bytes_scanned: int = 0
     estimated_cost_usd: float = 0.0
@@ -190,7 +196,7 @@ class RunHealth:
             "clusters_out": self.clusters_out,
             "dedup_ratio": round(self.dedup_ratio, 2),
             "exact_duplicates_removed": self.exact_duplicates_removed,
-            "cache_hit_rate": round(self.cache_hit_rate, 3),
+            "enrichment_coverage": round(self.enrichment_coverage, 3),
             "runtime_seconds": round(self.runtime_seconds, 2),
             # Both, not just the dollar figure: at this lake's size the cost of every query
             # floors at Athena's 10 MB minimum and rounds to the same number, so bytes

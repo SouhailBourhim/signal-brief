@@ -72,6 +72,9 @@ CLUSTER_COLUMNS = [
 
 ENTITY_COLUMNS = ["cluster_id", "entity_id", "canonical_name", "ticker", "mentions"]
 
+# 4B: what `enrich/store.py::read_rows` selects, in its order.
+ENRICHMENT_COLUMNS = ["cluster_id", "input_hash", "summary", "topic", "extracted_json"]
+
 HEALTH_COLUMNS = [
     "source_id",
     "window_start",
@@ -186,8 +189,8 @@ class _Paginator:
 
 
 class _RoutingAthenaClient:
-    """Answers each of the brief's four queries with its own column set, and records every
-    SQL it was asked so the tests can assert on the query itself.
+    """Answers each of the brief's queries with its own column set, and records every SQL it
+    was asked so the tests can assert on the query itself.
 
     Routing order matters: the cluster query names `silver.articles` too (it joins to it for
     the snippet), so `silver.story_clusters` has to be checked first."""
@@ -199,12 +202,14 @@ class _RoutingAthenaClient:
         clusters: list[list[str | None]] | None = None,
         entities: list[list[str | None]] | None = None,
         healths: list[list[str | None]] | None = None,
+        enrichment: list[list[str | None]] | None = None,
         bytes_scanned: int = 4 * 1024 * 1024,
     ) -> None:
         self.articles = articles or []
         self.clusters = clusters or []
         self.entities = entities or []
         self.healths = healths or []
+        self.enrichment = enrichment or []
         self.bytes_scanned = bytes_scanned
         self.queries: list[str] = []
         self._current = ""
@@ -234,6 +239,8 @@ class _RoutingAthenaClient:
             return _Paginator(ENTITY_COLUMNS, self.entities)
         if "ops.source_health" in self._current:
             return _Paginator(HEALTH_COLUMNS, self.healths)
+        if "gold.cluster_enrichment" in self._current:
+            return _Paginator(ENRICHMENT_COLUMNS, self.enrichment)
         return _Paginator(ARTICLE_COLUMNS, self.articles)
 
 
@@ -525,7 +532,7 @@ def test_an_entity_with_no_dimension_row_keeps_its_id_rather_than_vanishing():
 # --- end to end --------------------------------------------------------------------------
 
 
-def test_run_writes_a_brief_from_the_cluster_tables_with_costs_from_all_three_queries(tmp_path):
+def test_run_writes_a_brief_from_the_cluster_tables_with_costs_from_every_query(tmp_path):
     client = _RoutingAthenaClient(
         clusters=[_cluster_row(cluster_id="c1"), _cluster_row(cluster_id="c2", title="Second")],
         entities=[_entity_row(cluster_id="c1")],
@@ -536,10 +543,12 @@ def test_run_writes_a_brief_from_the_cluster_tables_with_costs_from_all_three_qu
 
     assert path == tmp_path / "brief-2026-08-20.html"
     html = path.read_text(encoding="utf-8")
-    # Six queries as of 4A: clusters, entities, velocity, market, feedback, health.
-    # Every one is charged for and every one is in the footer — a component that reads a
-    # table the reader is not told about is a cost SPEC §10.3 would not see.
-    assert "18,874,368 bytes scanned" in html
+    # Seven queries as of 4B: clusters, entities, velocity, market, feedback, health, and
+    # the enrichment read. Every one is charged for and every one is in the footer — a
+    # component that reads a table the reader is not told about is a cost SPEC §10.3 would
+    # not see. The count is asserted through the total rather than separately, so adding a
+    # read without accounting for it fails here.
+    assert "22,020,096 bytes scanned" in html
     assert "Northwind" in html
     # The resolved company shows on the story, with its ticker.
     assert "Northwind Corp" in html

@@ -60,6 +60,18 @@ def main(argv: list[str] | None = None) -> int:
     cost.add_argument("--days", type=int, default=30, help="how far back, default 30")
     cost.add_argument("--project", default="signal", help="the tag value to filter on")
 
+    enrich = sub.add_parser(
+        "enrich", help="run the Ollama enrichment stage over the ranked head of the window"
+    )
+    enrich.add_argument(
+        "--limit", type=int, default=None, help="how many heads, default enrich.run.ENRICH_TOP_N"
+    )
+    enrich.add_argument(
+        "--check-model",
+        action="store_true",
+        help="report the local model digest against the pin, and exit without inferring",
+    )
+
     athena_query = sub.add_parser(
         "athena-query", help="run a SQL query against the lake, print rows + bytes scanned + cost"
     )
@@ -103,6 +115,12 @@ def main(argv: list[str] | None = None) -> int:
         end = date.today()
         print(format_cost(project_cost(end - timedelta(days=args.days), end, project=args.project)))
         return 0
+    if args.command == "enrich":
+        from signal_core.cli_enrich import run_check_model, run_enrich
+
+        if args.check_model:
+            return run_check_model()
+        return run_enrich(limit=args.limit)
     if args.command == "athena-query":
         from signal_core.cli_athena import run_athena_query
 

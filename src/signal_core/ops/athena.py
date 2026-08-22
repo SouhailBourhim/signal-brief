@@ -28,6 +28,20 @@ def athena_cost_usd(bytes_scanned: int) -> float:
     return billed_bytes / (1024**4) * ATHENA_USD_PER_TB
 
 
+def sql_string(value: str | None) -> str:
+    """A Trino string literal, or `NULL`. Single quotes double to escape.
+
+    Lives here rather than beside its first caller because it now has three: `brief/items.py`
+    writes `gold.brief_items`, and 4B's enrichment writes two more gold tables through the
+    same `run_query` primitive. A headline with an apostrophe is not an edge case, and three
+    private copies of this would eventually disagree about escaping — the same argument
+    `brief/select.py::optional_read` makes about its own generalization.
+    """
+    if value is None:
+        return "NULL"
+    return "'" + value.replace("'", "''") + "'"
+
+
 @dataclass(frozen=True)
 class QueryResult:
     """One completed query: rows plus the numbers `ops.pipeline_costs` records."""

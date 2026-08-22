@@ -190,7 +190,15 @@ def test_a_record_table_created_before_a_column_existed_gains_it(spark):
 
 def test_every_maintained_table_is_one_the_pipeline_actually_writes(spark):
     """A hardcoded list is the thing a reviewer can check; this asserts it has not drifted
-    from the DDL constants the jobs use."""
+    from the DDL constants the jobs use.
+
+    **Extended in 4B to the gold marts.** It used to walk `spark/jobs/` only, so a table
+    written through Athena instead of Spark could never fail it — which is how
+    `gold.brief_items` shipped in 4A and went unswept until 4B noticed. The three Athena-
+    written tables are named here explicitly for that reason.
+    """
+    from signal_core.brief.items import BRIEF_ITEMS_TABLE
+    from signal_core.enrich.store import CLUSTER_ENRICHMENT_TABLE, ENRICHMENT_REJECTS_TABLE
     from signal_core.spark.jobs.cluster import ARTICLE_CLUSTERS_TABLE, CLUSTERS_TABLE
     from signal_core.spark.jobs.commit_bronze import BRONZE_TABLE
     from signal_core.spark.jobs.cost_snapshot import COSTS_TABLE
@@ -213,5 +221,8 @@ def test_every_maintained_table_is_one_the_pipeline_actually_writes(spark):
         CLUSTERS_TABLE,
         ARTICLE_CLUSTERS_TABLE,
         COSTS_TABLE,
+        BRIEF_ITEMS_TABLE,
+        CLUSTER_ENRICHMENT_TABLE,
+        ENRICHMENT_REJECTS_TABLE,
     ):
         assert table in MAINTAINED_TABLES, f"{table} is written but never maintained"

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
-from assets import CLUSTERS_COMMITTED, MENTIONS_RESOLVED
+from assets import CLUSTERS_COMMITTED, ENRICHMENT_READY, MENTIONS_RESOLVED
 
 
 @dag(
@@ -34,7 +34,7 @@ from assets import CLUSTERS_COMMITTED, MENTIONS_RESOLVED
     tags=["phase4a", "brief"],
 )
 def brief_dag():
-    @task(inlets=[CLUSTERS_COMMITTED, MENTIONS_RESOLVED])
+    @task(inlets=[CLUSTERS_COMMITTED, ENRICHMENT_READY, MENTIONS_RESOLVED])
     def build() -> str:
         """Rank and render, writing `gold.brief_items` on the way through."""
         from signal_core.brief.build import run
