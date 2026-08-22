@@ -59,6 +59,82 @@ it points the same direction: **the docs are a claim about the code, and a stale
 exactly like a live one.** Worth stating here because 4A adds four more documents that can
 drift.
 
+## 4A.C — The watchlist *(done 2026-08-22)*
+
+- [x] `watchlist.toml` + `watchlist.py`. One file, three collections, two consumers —
+      `relevance` and `market_corroboration` both read it, because two lists would
+      eventually disagree about whether a company is interesting and the ranker would score
+      it both ways in the same run.
+- [x] `tickers()` needs no join. `entities/dictionary.py` fixed the namespace in 3.C —
+      **UPPERCASE is a tradable ticker, `lower-kebab-case` is an entity without one** — and
+      its docstring says it did so for exactly this component: *"a namespace where that
+      question is answerable by looking at the id, rather than by a join that might come back
+      empty."* A private company on the watchlist (`openai`) counts for relevance and is
+      simply not fetched. That is a property of the id, not a branch.
+- [x] `matched_technologies` returns which keywords hit rather than a bool, so the component
+      can explain itself in `score_components` (§7.4's actual requirement).
+- [x] `macro_series` recorded and inert until 4B.
+
+## 4A.G — EDGAR shaping: one Form 4, indexed twice *(done 2026-08-22)*
+
+3.E recorded "one Form 4 clusters twice, once per CIK" and gated the brief's top ten on it.
+
+**The mechanism.** `_TOKEN`'s character class has no hyphen, so `0001872100-26-000003`
+reaches `identifiers` as three separate digit runs, indistinguishable from the CIKs beside
+them. EDGAR indexes one submission under every CIK it concerns, so the reporting person's
+copy and the issuer's copy carry the same accession and different CIKs — and the identity
+veto, which reads only `identifiers`, sees two different documents and refuses to merge them.
+
+**The fix is a positive rule, not a weaker veto.** `Prepared.accessions` keeps the accession
+whole, matched by regex against text rather than against tokens, and `decide` returns True on
+set equality *before* the veto runs. ADR-0009 recorded that the veto "is now load-bearing for
+a stage that does not exist yet" — 4B's embedding branch measured a 14x worse corpus
+false-merge rate without it, all of it EDGAR — so loosening it was not available.
+
+Equality rather than intersection, for a reason the existing regression test makes concrete:
+the two Allspring filings pinned by
+`test_two_filings_by_one_company_are_two_stories` **already share two of three fragments**,
+because a filer's own CIK is also its accession prefix. An intersection rule over `identifiers`
+would have merged 47 distinct filings into one story. The test that has guarded this since 3.B
+would have caught it; it is worth saying that the naive version of this fix was tried against
+that test first and failed it.
+
+### What the fixture already knew
+
+The defect did not need a synthetic reproduction. The EDGAR feed committed in 2.B has been
+carrying it since:
+
+| | |
+|---|---|
+| Entries in `tests/fixtures/bronze/edgar/feed.xml` | 40 |
+| Distinct filings those entries represent | **19** |
+| Entries that are *not* part of a duplicate group | **0** |
+| Pairs the accession rule newly merges | 24 |
+
+Every entry in the feed is a duplicate of another. Eighteen accessions appear twice; one
+appears four times — a Form 4/A with three co-reporting persons plus the issuer, which is
+also the case that shows the rule has to work n-way rather than pairwise:
+
+    0001104659-26-098473   4/A - Snyderman David J. (0001953511) (Reporting)
+                           4/A - CoreWeave, Inc. (0001769628) (Issuer)
+                           4/A - Supernova Management LLC (0001368026) (Reporting)
+                           4/A - Magnetar Capital Partners LP (0001353085) (Reporting)
+
+EDGAR was contributing roughly **2.1x its real filing volume** to clustering, and `breadth`
+counts members. 3.D's "nine of the ten stories were SEC form numbers" had a second cause
+underneath the one it fixed.
+
+### `make eval` is unchanged, and that is the finding
+
+    dedup  n=252  precision=0.962  recall=0.568  (tp=25 fp=1 fn=19)   — before and after
+
+Byte-identical across the change. The plan predicted this and treated it as the reason to
+run it, but the honest reading is sharper: **the labeled set contains none of these pairs**,
+so it cannot certify this fix in either direction. That is 3.B's finding recurring
+(*"the pairwise eval cannot certify the clustering"*) and it is why the evidence here is a
+corpus count over real captured bytes plus a fixture-derived regression test, not a green gate.
+The gate's job was to show the change did not cost anything elsewhere. It didn't.
+
 ## Then
 
 *(open — closed when the three-morning acceptance completes)*

@@ -254,6 +254,49 @@ def test_two_filings_by_one_company_are_two_stories():
     assert is_same_story(*a, *a)
 
 
+def test_one_form_4_indexed_under_two_ciks_is_one_story():
+    """3.E's "EDGAR shaping": EDGAR indexes a submission under every CIK it concerns, so a
+    Form 4 arrives twice — once under the reporting person, once under the issuer. The
+    titles name different parties and the CIKs differ, so the identity veto sees two
+    documents. The accession number says otherwise, and it is EDGAR's own statement that
+    this is one filing.
+
+    Real entries from the committed feed, which holds 19 such pairs in 40 entries."""
+    reporting = (
+        "4 - Koss Jennifer G. (0001872100) (Reporting)",
+        "<b>Filed:</b> 2026-08-21 <b>AccNo:</b> 0001872100-26-000003 <b>Size:</b> 9 KB",
+    )
+    issuer = (
+        "4 - Reservoir Media, Inc. (0001824403) (Issuer)",
+        "<b>Filed:</b> 2026-08-21 <b>AccNo:</b> 0001872100-26-000003 <b>Size:</b> 9 KB",
+    )
+    assert is_same_story(*reporting, *issuer)
+
+
+def test_the_accession_rule_needs_the_whole_number_not_a_shared_prefix():
+    """Why the rule reads `accessions` and not `identifiers`. Tokenization splits
+    `0001081400-26-000347` on the hyphen, and the leading run is the filer's own CIK — so
+    the two Allspring filings above already *share* two of three fragments. Equality on the
+    whole accession separates them; any intersection rule over the fragments would not."""
+    from signal_core.dedup import accessions, identifiers, prepare
+
+    a = prepare(
+        "497 - ALLSPRING FUNDS TRUST (0001081400) (Filer)",
+        "<b>AccNo:</b> 0001081400-26-000347",
+    )
+    b = prepare(
+        "497 - ALLSPRING FUNDS TRUST (0001081400) (Filer)",
+        "<b>AccNo:</b> 0001081400-26-000352",
+    )
+    assert a.identifiers & b.identifiers, "the fragments overlap, which is the trap"
+    assert a.accessions != b.accessions, "the whole numbers do not"
+
+    assert accessions("<b>AccNo:</b> 0001872100-26-000003") == {"0001872100-26-000003"}
+    # Prose carries none, so the rule cannot fire on ordinary coverage.
+    assert accessions("NASA calls off Swift rescue mission") == frozenset()
+    assert identifiers("no long digit runs here") == frozenset()
+
+
 def test_the_identity_veto_leaves_prose_alone():
     """It fires only when both sides carry identifiers, so ordinary coverage — which carries
     none — is untouched, and one-sided evidence is not read as disagreement."""
