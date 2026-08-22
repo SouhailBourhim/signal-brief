@@ -255,8 +255,20 @@ describes is invisible: nothing alerts on a local Airflow DAG failing, so ten co
 failures produced no signal anywhere.
 
 **Fixed properly rather than re-documented.** `make clean` now checks whether the Airflow
-containers are running and skips `.cache` if they are, saying why; `make clean-cache` does the
-destructive version and recreates the containers so the mount survives.
+containers are running and keeps the bind-mounted paths if they are, saying why;
+`make clean-mounted` does the destructive version and recreates the containers so the mounts
+survive.
+
+**The first version of that guard was wrong in the same way, within the hour.** It protected
+`.cache` and nothing else — but `docker-compose.yml` also mounts `./data` and `./out`, and
+running `make clean` to test the guard promptly broke both. `/opt/signal/out` went to link
+count 0, which is where the 07:00 brief writes its HTML: the send would have failed on the
+first morning of 4A's acceptance, from a fix intended to prevent exactly that.
+
+Caught by checking the container's view rather than trusting the guard, and it is why
+`MOUNTED_PATHS` is now a variable listed beside the `volumes:` block it has to track, instead
+of a path inlined in a recipe. **A guard derived from an incident is only as good as its
+inventory**, and the inventory is the part that silently goes stale.
 
 **What it cost, and what it did not.** Ingestion itself never stopped — the pollers are Lambdas
 on EventBridge and kept staging to S3 throughout. What stopped was the *commit* into

@@ -85,29 +85,38 @@ tf-validate: ## terraform fmt + validate
 	terraform -chdir=infra/terraform/main init -backend=false && \
 		terraform -chdir=infra/terraform/main validate
 
+# Every host path `docker-compose.yml` bind-mounts into the Airflow containers, except
+# `./src` and `./airflow/dags` which `clean` has no business touching.
+#
+# Deleting one of these while the containers are up breaks the mount **at the inode level**:
+# the container's view survives as a directory with link count 0, and every `mkdir` inside it
+# fails with ENOENT. Recreating the directory on the host does NOT fix a running container —
+# only recreating the container re-establishes the mount.
+#
+# Keep this in step with the `volumes:` block. Missing one is not a small mistake: omitting
+# `.cache` cost ten hours of silently failed `ingest_monitor` runs on 2026-08-22, and the
+# first version of this guard covered `.cache` alone and promptly broke `out` and `data` the
+# same way — a brief the 07:00 DAG would have failed to write. See docs/runbooks/phase-4b.md.
+MOUNTED_PATHS := data out .cache
+
+# Generated, and mounted nowhere. Safe to delete whatever is running.
+UNMOUNTED_PATHS := build .pytest_cache .ruff_cache .mypy_cache
+
 clean: ## remove generated data and briefs (never touches bronze in S3)
-	@# `.cache` is bind-mounted into every Airflow container (docker-compose.yml). Deleting
-	@# it while the containers are up breaks that mount at the inode level: the container's
-	@# view survives as a directory with link count 0, and every `mkdir` inside it fails with
-	@# ENOENT. Recreating the directory on the host does NOT fix a running container —
-	@# the mount has to be re-established by recreating it.
-	@#
-	@# This used to be a comment telling you what to do afterwards. It cost ten hours of
-	@# silently failed `ingest_monitor` runs on 2026-08-22 (docs/runbooks/phase-4b.md), so
-	@# it is a guard now: the check is cheap and the failure is invisible.
 	@if docker compose ps --services --filter status=running 2>/dev/null | grep -q airflow; then \
-		echo "Airflow is up — skipping .cache, which is bind-mounted into the containers."; \
-		echo "Deleting it now would break ingest_monitor until the containers are recreated."; \
-		echo "Run 'make down' first, or 'make clean-cache' to delete it and recreate them."; \
-		rm -rf data out build .pytest_cache .ruff_cache .mypy_cache; \
+		echo "Airflow is up — keeping $(MOUNTED_PATHS), which are bind-mounted into the"; \
+		echo "containers. Deleting them now breaks those mounts until the containers are"; \
+		echo "recreated, which stops ingestion and the 07:00 brief silently."; \
+		echo "Run 'make down' first, or 'make clean-mounted' to delete them and recreate."; \
+		rm -rf $(UNMOUNTED_PATHS); \
 	else \
-		rm -rf data out build .cache .pytest_cache .ruff_cache .mypy_cache; \
+		rm -rf $(MOUNTED_PATHS) $(UNMOUNTED_PATHS); \
 	fi
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
 
-clean-cache: ## delete .cache even with Airflow up, recreating the containers so the mount survives
-	rm -rf .cache
-	mkdir -p .cache/ivy2
-	@# Order matters: the host directory has to exist before the containers are recreated,
-	@# or Docker creates it root-owned and the containers cannot write to it.
+clean-mounted: ## delete the bind-mounted dirs even with Airflow up, recreating the containers
+	rm -rf $(MOUNTED_PATHS)
+	@# Order matters: the host directories have to exist before the containers are recreated,
+	@# or Docker creates them root-owned and the containers cannot write to them.
+	mkdir -p $(MOUNTED_PATHS) .cache/ivy2
 	docker compose up -d --force-recreate airflow-scheduler airflow-apiserver airflow-dag-processor
