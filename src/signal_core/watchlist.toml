@@ -1,0 +1,76 @@
+# The watchlist. SPEC §7.4: "*your* watchlist of companies, technologies, macro series."
+#
+# Hand-edited, deliberately. This is the one input to the ranker that is a statement of
+# interest rather than a measurement, and `dim_entities.rank` already exists for the
+# different question of which `Apple` a mention means. Editing this file changes tomorrow's
+# brief; it does not require a redeploy, because `sources/stooq.py` reads it at fetch time
+# rather than through `SourceConfig.options`.
+
+# Entity ids, matching the dictionary's namespace exactly (see `entities/dictionary.py`:
+# **UPPERCASE is a tradable ticker, lower-kebab-case is an entity without one**). That
+# convention is why market corroboration needs no join to discover whether a company is
+# tradable — the id answers it. Anything uppercase here is fetched by the Stooq poller.
+companies = [
+  "NVDA",
+  "AAPL",
+  "MSFT",
+  "GOOGL",
+  "AMZN",
+  "META",
+  "TSLA",
+  "AMD",
+  "INTC",
+  "AVGO",
+  "ORCL",
+  "CRM",
+  "ADBE",
+  "NFLX",
+  "UBER",
+  "COIN",
+  "PLTR",
+  "SNOW",
+  "openai",
+  "anthropic",
+]
+
+# Matched case-insensitively against a cluster's title and snippet. Substrings, not tokens:
+# "open source" has a space in it, and `post-training` should match inside `post-training`.
+# Keep these specific — a keyword this corpus contains every day (`ai`, `data`) scores
+# every cluster and therefore ranks nothing.
+technologies = [
+  "llm",
+  "large language model",
+  "transformer",
+  "inference",
+  "fine-tuning",
+  "post-training",
+  "open source",
+  "open-weight",
+  "gpu",
+  "cuda",
+  "datacenter",
+  "semiconductor",
+  "quantization",
+  "rag",
+  "agent",
+  "kubernetes",
+  "rust",
+  "wasm",
+  "postgres",
+  "iceberg",
+  "spark",
+  "duckdb",
+]
+
+# FRED series ids. **Recorded but inert until 4B** — nothing ingests macro data in 4A, and
+# SPEC §8's bitemporal store is what gives these meaning. Listed now because the watchlist
+# is one surface (SPEC §7.4 names all three kinds together) and a second file later would
+# be the thing this file exists to avoid.
+macro_series = [
+  "PAYEMS",   # nonfarm payrolls — SPEC §8's worked example of a revision that matters
+  "CPIAUCSL", # CPI, all urban consumers
+  "UNRATE",   # unemployment rate
+  "DFF",      # effective fed funds rate
+  "GDPC1",    # real GDP
+  "DGS10",    # 10-year treasury constant maturity
+]
