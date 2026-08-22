@@ -21,13 +21,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from signal_core.config import DEPLOYED_SOURCE_IDS, settings
 from signal_core.ops.athena import QueryResult, run_query
 from signal_core.ops.health import SourceHealth
-from signal_core.timeutil import ensure_utc
+from signal_core.timeutil import ensure_utc, utc_now
 
 # SPEC §7.1: same-story clustering runs over a time-decayed 72-hour window.
 CLUSTER_WINDOW_HOURS = 72
@@ -152,6 +152,18 @@ def _parse_timestamp(value: str | None) -> datetime | None:
         except ValueError:
             continue
     raise ValueError(f"unparseable Athena timestamp: {value!r}")
+
+
+def _parse_date(value: str | None) -> date | None:
+    """Athena renders a `date` column as `YYYY-MM-DD`. Distinct from `_parse_timestamp`
+    because a date has no timezone to normalize and pretending otherwise would put a
+    period-start on the wrong day for anyone east of UTC."""
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value.strip()[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
 
 
 def _parse_bool(value: str | None) -> bool | None:
@@ -665,3 +677,93 @@ def read_feedback(
             continue
         marks[cluster_id] = _FEEDBACK_SCORES[mark]
     return marks, result
+
+
+# How far back a vintage still counts as news. §8's worked example is "revised down 46k
+# across the prior two months", which is a claim about revisions published *recently*, not
+# about the periods they describe — a revision landing today to a figure from March is
+# exactly the thing coverage buries and this line exists to surface.
+REVISION_LOOKBACK_DAYS = 45
+
+# Below this, a revision is rounding rather than news. Stated as a fraction of the value
+# rather than an absolute, because these series have wildly different units — payrolls in
+# thousands, the fed funds rate in percent — and one absolute threshold cannot serve both.
+REVISION_MIN_FRACTION = 0.0005
+
+
+@dataclass(frozen=True)
+class MacroRevision:
+    """One published revision, in the shape the brief renders."""
+
+    series_id: str
+    period: date
+    value: float
+    previous_value: float
+    revision_delta: float
+    vintage_date: date
+
+
+def read_macro_revisions(
+    now: datetime | None = None,
+    *,
+    lookback_days: int = REVISION_LOOKBACK_DAYS,
+    limit: int = 5,
+    database: str | None = None,
+    workgroup: str | None = None,
+    client: Any | None = None,
+) -> tuple[list[MacroRevision], QueryResult]:
+    """Recently published revisions from `gold.macro_observations`. SPEC §8.
+
+    **Filtered on `vintage_date`, not `period`.** The interesting event is a number being
+    *republished*, and the two axes come apart precisely when it matters: a benchmark revision
+    issued this week can restate a figure from eighteen months ago, and a `period` filter
+    would drop exactly that case while keeping every unrevised recent month.
+
+    Only `is_latest` rows, so a period revised three times contributes its current value once
+    rather than appearing as three competing claims — the reader wants "what changed", not the
+    full audit trail, which stays in the table for anyone who asks it a bitemporal question.
+    """
+    now = now or utc_now()
+    since = (now - timedelta(days=lookback_days)).date()
+    sql = f"""
+        SELECT series_id,
+               period,
+               value,
+               revision_delta,
+               vintage_date
+        FROM gold.macro_observations
+        WHERE is_latest
+          AND revision_delta IS NOT NULL
+          AND revision_delta <> 0
+          AND value IS NOT NULL
+          AND vintage_date >= date '{since.isoformat()}'
+          AND abs(revision_delta) >= abs(value) * {REVISION_MIN_FRACTION}
+        ORDER BY abs(revision_delta / nullif(value, 0)) DESC
+        LIMIT {int(limit)}
+    """
+    result = run_query(
+        sql,
+        database=database or settings.athena_database,
+        workgroup=workgroup or settings.athena_workgroup,
+        client=client,
+    )
+
+    revisions: list[MacroRevision] = []
+    for row in result.rows:
+        value = _parse_float(row.get("value"))
+        delta = _parse_float(row.get("revision_delta"))
+        period = _parse_date(row.get("period"))
+        vintage = _parse_date(row.get("vintage_date"))
+        if value is None or delta is None or period is None or vintage is None:
+            continue
+        revisions.append(
+            MacroRevision(
+                series_id=row.get("series_id") or "",
+                period=period,
+                value=value,
+                previous_value=value - delta,
+                revision_delta=delta,
+                vintage_date=vintage,
+            )
+        )
+    return revisions, result

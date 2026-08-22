@@ -30,6 +30,22 @@
      the fallback to a snippet is what makes a brief still readable when Ollama was off. */
   p.body.summary { border-left: 2px solid var(--rule); padding-left: .6rem; }
   .meta .topic { color: var(--accent); }
+  /* SPEC §8's revision block. Monospace and small, like the health footer, because it is a
+     table of numbers rather than prose — and set apart from the stories because it is a
+     different kind of claim: a fact about data being restated, not about an event. */
+  .revisions { margin-bottom: 1.5rem; padding: .75rem 0 .9rem; border-top: 1px solid var(--rule);
+               border-bottom: 1px solid var(--rule);
+               font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .76rem; }
+  .revisions h2 { font-size: .76rem; margin: 0 0 .45rem; color: var(--muted);
+                  font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
+  .revision { color: var(--muted); padding: .12rem 0; }
+  .revision .series { color: var(--fg); }
+  .revision .up { color: #3f7d3f; }
+  .revision .down { color: #a34141; }
+  .revision .vintage { opacity: .75; }
+  @media (prefers-color-scheme: dark) {
+    .revision .up { color: #7ab77a; } .revision .down { color: #e08585; }
+  }
   /* Companies resolved out of the story's articles (SPEC 7.2). Chips rather than a comma
      list because the ticker has to read as attached to its company and not to the next one. */
   p.entities { margin: .45rem 0 0; display: flex; flex-wrap: wrap; gap: .3rem; }
@@ -54,6 +70,26 @@
     <h1>Signal</h1>
     <div class="date">{{ date }} · {{ clusters|length }} stories</div>
   </header>
+
+  {# SPEC §8: "payrolls revised down 46k across the prior two months" — the thing coverage
+     routinely buries, and which often matters more than the headline print. Above the
+     stories, not below, because a revision is context for everything under it. #}
+  {% if revisions %}
+  <section class="revisions">
+    <h2>Revised since last month</h2>
+    {% for r in revisions %}
+    <div class="revision">
+      <span class="series">{{ r.series_id }}</span>
+      <span class="period">{{ r.period }}</span>
+      {{ '%g'|format(r.previous_value) }} &rarr; {{ '%g'|format(r.value) }}
+      <span class="{{ 'down' if r.revision_delta < 0 else 'up' }}">
+        {{ '%+g'|format(r.revision_delta) }}
+      </span>
+      <span class="vintage">published {{ r.vintage_date }}</span>
+    </div>
+    {% endfor %}
+  </section>
+  {% endif %}
 
   {% for c in clusters %}
   <article>

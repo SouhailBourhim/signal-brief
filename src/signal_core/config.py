@@ -306,6 +306,39 @@ SOURCES: dict[str, SourceConfig] = {
         timeout_seconds=15.0,
         user_agent=settings.user_agent,
     ),
+    # Phase 4B — SPEC §8's bitemporal macro store. The one source that needs a secret; the
+    # key is read from SSM at fetch time, never from the environment (see sources/macro.py
+    # and infra/terraform/main/macro.tf).
+    "macro": SourceConfig(
+        source_id="macro",
+        url="https://api.stlouisfed.org",
+        payload_format=PayloadFormat.JSON,
+        # ALFRED serves every vintage a series has ever had, so any historical value is
+        # re-fetchable from a standing start — which is precisely what SPEC §8 means by
+        # "backfillable from a standing start" and exactly what COMPLETE promises.
+        backfill_horizon=BackfillHorizon.COMPLETE,
+        # 48 h, matching `market` and for the same reason: two consecutive missed runs on a
+        # daily schedule is the first unambiguous signal, where one miss is indistinguishable
+        # from a run that started late.
+        freshness_sla_seconds=172800,
+        # Zero, like `market`: health is assessed over the closed prior hour and a daily
+        # source is legitimately silent in 23 of them.
+        min_docs_per_window=0,
+        # 45 days, and this one is genuinely different in kind from every other source here.
+        # These series *release monthly* — PAYEMS on the first Friday, CPI mid-month, GDP
+        # quarterly — so a fortnight of no new vintage is an ordinary fortnight, not a fault.
+        # An SLA sized like a feed's would fire for most of every month, which is the
+        # alarm-nobody-reads failure SPEC §11 is built to avoid. 45 days clears the longest
+        # ordinary gap (a quarterly series between releases still sees its monthly siblings
+        # move, and the hash is over all six combined).
+        content_staleness_sla_seconds=3888000,
+        rate_limit_per_sec=2.0,
+        timeout_seconds=60.0,
+        user_agent=settings.user_agent,
+        # Terraform creates this parameter and owns its existence, never its value. The
+        # poller resolves it lazily and caches per container — see `sources/macro.py`.
+        options={"api_key_parameter": "/signal/fred-api-key"},
+    ),
 }
 
 # The deployed sources: everything with a Lambda, a schedule, and a state item. `fake` is

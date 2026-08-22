@@ -142,17 +142,19 @@ def test_the_deployed_source_count_is_what_the_phases_claim():
     §7.4's velocity component, which SPEC §12 carried forward from Phase 2, and `market`
     for its market-corroboration component.
 
+    Phase 4B adds `macro` for SPEC §8's bitemporal store.
+
     A literal, deliberately: this is the only assertion that notices a source being added
     or dropped without anyone deciding to, and comparing the config against itself would
     notice nothing."""
-    assert len(DEPLOYED_SOURCE_IDS) == 8
+    assert len(DEPLOYED_SOURCE_IDS) == 9
 
 
-@pytest.mark.parametrize("source_id", ["hn_scores", "market"])
-def test_the_phase_4a_pollers_do_not_collide_with_the_phase_1_2_six(source_id: str):
-    """Why both 4A sources are scheduled with cron. SPEC §3's map comment records that six
-    pollers fit under a new account's total concurrency limit of 10 only because they fit,
-    and that "source #7 is where it stops fitting". Sources #7 and #8 exist now.
+@pytest.mark.parametrize("source_id", ["hn_scores", "market", "macro"])
+def test_the_later_pollers_do_not_collide_with_the_phase_1_2_six(source_id: str):
+    """Why every source after the sixth is scheduled with cron. SPEC §3's map comment records
+    that six pollers fit under a new account's total concurrency limit of 10 only because
+    they fit, and that "source #7 is where it stops fitting". Sources #7, #8 and #9 exist now.
 
     They fit by never firing at the same minute as anything else. `rate(N minutes)` cannot
     express that — it has no phase — so this asserts the property the cron expressions were

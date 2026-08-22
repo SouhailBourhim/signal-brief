@@ -202,6 +202,7 @@ def test_every_maintained_table_is_one_the_pipeline_actually_writes(spark):
     from signal_core.spark.jobs.cluster import ARTICLE_CLUSTERS_TABLE, CLUSTERS_TABLE
     from signal_core.spark.jobs.commit_bronze import BRONZE_TABLE
     from signal_core.spark.jobs.cost_snapshot import COSTS_TABLE
+    from signal_core.spark.jobs.macro import MACRO_TABLE
     from signal_core.spark.jobs.maintain import MAINTAINED_TABLES
     from signal_core.spark.jobs.market import MARKET_TABLE
     from signal_core.spark.jobs.normalize import (
@@ -224,5 +225,6 @@ def test_every_maintained_table_is_one_the_pipeline_actually_writes(spark):
         BRIEF_ITEMS_TABLE,
         CLUSTER_ENRICHMENT_TABLE,
         ENRICHMENT_REJECTS_TABLE,
+        MACRO_TABLE,
     ):
         assert table in MAINTAINED_TABLES, f"{table} is written but never maintained"

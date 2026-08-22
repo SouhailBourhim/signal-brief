@@ -43,7 +43,12 @@ from pathlib import Path
 from typing import Any
 
 from signal_core.brief.items import write_brief_items
-from signal_core.brief.read import CLUSTER_WINDOW_HOURS, HEALTH_LOOKBACK_HOURS, read_health
+from signal_core.brief.read import (
+    CLUSTER_WINDOW_HOURS,
+    HEALTH_LOOKBACK_HOURS,
+    read_health,
+    read_macro_revisions,
+)
 from signal_core.brief.render import write_brief
 from signal_core.brief.select import optional_read, ranked_window
 from signal_core.config import Settings
@@ -124,7 +129,7 @@ def run(
     degraded = [h.source_id for h in healths if h.status != "ok"]
     print(f"        {len(healths)} sources, {len(degraded)} not ok: {', '.join(degraded) or '—'}")
 
-    print("[3/4] enrich — gold.cluster_enrichment, keyed on head text")
+    print("[3/4] enrich — gold.cluster_enrichment + gold.macro_observations")
     shown = [c for c in ranked if c.get("included")]
     enrichment, enrichment_query = optional_read(
         lambda: _read_enrichment(shown, settings=settings, client=client),
@@ -147,7 +152,16 @@ def run(
     coverage_rate = covered / len(shown) if shown else 0.0
     print(f"        {covered}/{len(shown)} shown stories enriched")
 
+    revisions, revision_query = optional_read(
+        lambda: read_macro_revisions(now, client=client),
+        warning="no gold.macro_observations yet — has the macro DAG run? (4B.I)",
+        progress=print,
+    )
+    revisions = revisions or []
+    print(f"        {len(revisions)} macro revisions in the last 45 days")
+
     print("[4/4] brief  — render + record")
+    charged = (*window.queries, health_query, enrichment_query, revision_query)
     health = RunHealth(
         sources=healths,
         articles_in=cluster_read.articles_in,
@@ -159,14 +173,12 @@ def run(
         exact_duplicates_removed=None,
         enrichment_coverage=coverage_rate,
         runtime_seconds=time.monotonic() - started,
-        bytes_scanned=sum(
-            q.bytes_scanned for q in (*window.queries, health_query, enrichment_query)
-        ),
-        estimated_cost_usd=sum(
-            q.cost_usd for q in (*window.queries, health_query, enrichment_query)
-        ),
+        # Every query the morning made, charged and reported. A component that reads a table
+        # the reader is not told about is a cost SPEC §10.3 would not see.
+        bytes_scanned=sum(q.bytes_scanned for q in charged),
+        estimated_cost_usd=sum(q.cost_usd for q in charged),
     )
-    path = write_brief(ranked, health, settings.out_root, date=date)
+    path = write_brief(ranked, health, settings.out_root, date=date, revisions=revisions)
 
     # Written after rendering, not before: the row records what the reader actually saw,
     # including `included`, which is a property of the cut rather than of the score. This is

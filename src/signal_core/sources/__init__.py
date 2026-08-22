@@ -12,6 +12,7 @@ from signal_core.sources.edgar_formd import poll as edgar_formd_poll
 from signal_core.sources.fake import poll as fake_poll
 from signal_core.sources.hackernews import poll as hackernews_poll
 from signal_core.sources.hn_scores import poll as hn_scores_poll
+from signal_core.sources.macro import poll as macro_poll
 from signal_core.sources.market import poll as market_poll
 from signal_core.sources.rss_ars import poll as rss_ars_poll
 from signal_core.sources.rss_tech import poll as rss_tech_poll
@@ -33,6 +34,7 @@ REGISTRY: dict[str, Poller] = {
     # Source #8, and the only one whose fetch list is read from a hand-edited file rather
     # than from `SourceConfig` — the watchlist decides which tickers exist (ADR-0010).
     "market": market_poll,
+    "macro": macro_poll,
 }
 
 

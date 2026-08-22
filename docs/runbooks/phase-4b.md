@@ -83,3 +83,141 @@ circularity in ordering it that way: §7.4's `WEIGHTS` has no enrichment compone
 does not read what enrichment writes, and enriching after ranking spends the budget on exactly
 the stories that will be read. This is recorded as a design decision rather than a detail
 because the naive reading is the expensive one and it is right there in the spec's wording.
+
+## 4B.B-G — The enrichment stage *(built 2026-08-22)*
+
+- [x] `enrich/client.py` — `/api/generate` at temperature 0 with a fixed seed and a long
+      `keep_alive`, so a batch pays ADR-0003's ~22.5 s model load once rather than forty times.
+      Structured output is **probed, not assumed**: newer Ollama constrains decoding to a
+      supplied JSON Schema, older builds accept only `format: "json"`, and the version
+      numbering has not tracked the capability cleanly. Falls back, and validates on our side
+      either way.
+- [x] `enrich/schema.py` — Pydantic `Enrichment` with `extra="forbid"` on both levels, a
+      closed `Topic` enum, and the five extraction fields §7.3 names, every one nullable.
+- [x] `enrich/prompt.py` — `PROMPT_VERSION` participates in the cache key, so editing the
+      prompt without bumping it would serve output the current prompt would not have produced.
+- [x] `enrich/store.py` — `gold.cluster_enrichment` and `gold.enrichment_rejects` through
+      Athena, with `information_schema` reconciliation on every run (see below).
+- [x] `enrich/run.py` — cache, retry bound, quarantine, and the run-level hit rate.
+- [x] `airflow/dags/enrich_dag.py` at 06:15, asserting §7.3's capacity bound.
+- [x] `evals/score.py::score_enrichment`, `evals/sample_enrichment.py`,
+      `evals/enrichment_predict.py`.
+- [ ] The 100 labeled examples and the ratcheted floors — **blocked on Ollama**, below.
+
+### The topic list is fitted to the corpus, not borrowed
+
+`evals/enrichment/README.md` scores topic as "exact match against the accepted-values list",
+which is only coherent if the list is closed — and a closed list has to be closed around
+something real. It was drawn after reading eighty actual cluster heads, and two findings
+shaped it:
+
+- **`sec-filing` exists because 57% of clusters are one.** A taxonomy without a home for
+  `ABS-EE` and `N-PX` files them under something editorial and makes the topic distribution a
+  lie.
+- **The editorial half is HN and tech press, not business news.** A taxonomy led by
+  `earnings` / `m-and-a` / `funding` would mislabel most of this corpus, because most of it is
+  people shipping software, breaking software, or writing about models.
+
+`other` is deliberate and load-bearing: a closed enum with no escape hatch does not produce
+better labels, it produces confident wrong ones — the same preference for abstention §7.2's
+confidence floor records.
+
+### Scoring records predictions rather than calling the model
+
+Every other scorer in `evals/` calls the pipeline's own decision function, because
+`is_same_story` and `resolve` are deterministic and dependency-free. This one cannot: it needs
+a GPU, a running Ollama and ~40 seconds, and `make eval` gates every PR in CI.
+
+So `enrichment_predict.py` records answers stamped with the digest and prompt version that
+produced them, and `score.py` scores what was recorded — declining, loudly, to score one
+model's answers under another's pin. That is not a workaround for CI; it is what §7.3's
+"accuracy tracked per model and prompt version" actually requires, and it makes a model swap a
+visible event rather than a silent re-scoring.
+
+The confusion matrix is over **field decisions, not examples**: one example is seven decisions
+(a topic, five extraction fields, a summary), and counting an example as one prediction would
+let a model that gets the topic right and every field wrong score the same as one that gets
+everything right but the topic. Abstention counts as a true negative and a wrong non-null
+counts twice, both exactly as `score_entities` already does — without that, an extractor that
+fills nothing looks perfect and so does one that fills everything, depending which half you
+forgot to count.
+
+## 4B.H-J — The bitemporal macro store *(built 2026-08-22)*
+
+- [x] `infra/terraform/main/macro.tf` — SSM `SecureString` created with a placeholder and
+      `ignore_changes = [value]`, plus a poller grant scoped to that one parameter ARN.
+- [x] `sources/macro.py` — source #9, resolving the key from SSM at fetch time and caching it
+      per container.
+- [x] `parse/macro.py` — ALFRED's flat observations array into `ParsedMacroObservation`.
+- [x] `spark/jobs/macro.py` — `gold.macro_observations`, insert-only MERGE plus a whole-table
+      recompute of `is_latest` and `revision_delta`.
+- [x] `airflow/dags/macro_dag.py` at 03:40, its own cron for the reason `market_dag` has one.
+- [x] `brief/read.py::read_macro_revisions` and the brief's revision block.
+- [ ] A real fetch — **blocked on the FRED key**, below.
+
+### Three payload details that would each have been a silent wrong answer
+
+- **`value` is a string and `"."` means missing.** It becomes `None`, not `0.0`. A zero
+  unemployment rate is a very different claim from an unpublished one, and a `revision_delta`
+  computed against a zero-filled gap would report a fictional revision the size of the whole
+  series.
+- **`realtime_end` of `9999-12-31` means "still current"**, not a date in the year 9999. It
+  becomes `superseded_at = None`, because a sentinel that survives into the table is one
+  somebody eventually does arithmetic on.
+- **FRED never echoes the series id in the response body.** It is a property of the request,
+  so it is recovered from the stored `source_url` — which means it comes out of the immutable
+  record rather than from mutating the payload before storing it, which SPEC §6.1 forbids. A
+  row whose id cannot be recovered is dropped rather than landing under an empty series id and
+  merging six unrelated series into one.
+
+### `is_latest` and `revision_delta` are recomputed over the whole table
+
+Not the incoming batch. A new vintage for June demotes June's previous `is_latest` and gives
+the new row a delta against it — and the demoted row may not be in today's window at all.
+Scoping the recompute to the batch would leave two rows claiming to be current, which is the
+single most damaging thing a bitemporal store can get wrong, because every "what is the number
+now" query then silently doubles. `test_a_later_vintage_demotes_a_row_the_batch_never_touched`
+is that scenario.
+
+A first vintage has a **null** delta, not zero. "Not yet revised" and "revised by zero" are
+different facts, and §8's whole argument is that collapsing facts about revisions is how
+pipelines lose them.
+
+### The vintage window is bounded, and the bound is a decision
+
+`REALTIME_START` is 2015-01-01 rather than each series' first observation. §8's worked payoff
+is "payrolls revised down 46k across the prior two months" — a claim about *recent* revisions
+— and a full vintage history of PAYEMS back to 1939 is a much larger response for data no
+brief will cite. It also stays well inside FRED's 100,000-observation per-request ceiling,
+which a full daily series across all vintages could plausibly approach. Widening it is a
+one-line change; the parser reports a truncated response rather than trusting it either way.
+
+## 4B.K — The reproducibility harness *(built 2026-08-22)*
+
+`ops/reproduce.py`, plus `signal reproduce --days N`. SPEC §12's 4B gate is **three different
+claims**, and the harness keeps them apart because SPEC §18 names over-claiming reproducibility
+as a known failure mode — the easy version of this module, one boolean called `reproducible`,
+is precisely that over-claim.
+
+| Stage | Claim | Gates? |
+|---|---|---|
+| bronze bytes | identical | yes — a mismatch is storage corruption |
+| normalize + hashing + simhash | identical | yes — pure functions of stored bytes |
+| entity resolution | identical | yes — a dictionary lookup at a fixed floor |
+| clustering | agreement ≥ 0.95, given the recorded ordering key | yes |
+| enrichment | resolves from cache | **no — it publishes a rate** |
+
+Two decisions worth flagging:
+
+**Clustering is compared as a partition, not by cluster id.** Two runs that group the same
+articles together but name the groups differently have reproduced the clustering; comparing
+ids would call that a failure and make the number describe id generation rather than the
+algorithm. Agreement is the fraction of articles whose set of co-members is identical.
+
+**The enrichment stage never fails.** §12 asks for "a published hit rate", not a floor, and
+inventing one would be a claim the spec did not make — and would fail an acceptance test about
+determinism on a cold cache. The model is not reproducible; the cache is, and that distinction
+is the whole reason §12 words that clause differently from the other two.
+
+Each stage replays into a **shadow table** under the `repro` namespace. Re-running into the
+live tables would make the test pass by overwriting the thing it was meant to check.

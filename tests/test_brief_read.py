@@ -75,6 +75,9 @@ ENTITY_COLUMNS = ["cluster_id", "entity_id", "canonical_name", "ticker", "mentio
 # 4B: what `enrich/store.py::read_rows` selects, in its order.
 ENRICHMENT_COLUMNS = ["cluster_id", "input_hash", "summary", "topic", "extracted_json"]
 
+# 4B: what `read_macro_revisions` selects, in its order.
+REVISION_COLUMNS = ["series_id", "period", "value", "revision_delta", "vintage_date"]
+
 HEALTH_COLUMNS = [
     "source_id",
     "window_start",
@@ -203,6 +206,7 @@ class _RoutingAthenaClient:
         entities: list[list[str | None]] | None = None,
         healths: list[list[str | None]] | None = None,
         enrichment: list[list[str | None]] | None = None,
+        revisions: list[list[str | None]] | None = None,
         bytes_scanned: int = 4 * 1024 * 1024,
     ) -> None:
         self.articles = articles or []
@@ -210,6 +214,7 @@ class _RoutingAthenaClient:
         self.entities = entities or []
         self.healths = healths or []
         self.enrichment = enrichment or []
+        self.revisions = revisions or []
         self.bytes_scanned = bytes_scanned
         self.queries: list[str] = []
         self._current = ""
@@ -241,6 +246,8 @@ class _RoutingAthenaClient:
             return _Paginator(HEALTH_COLUMNS, self.healths)
         if "gold.cluster_enrichment" in self._current:
             return _Paginator(ENRICHMENT_COLUMNS, self.enrichment)
+        if "gold.macro_observations" in self._current:
+            return _Paginator(REVISION_COLUMNS, self.revisions)
         return _Paginator(ARTICLE_COLUMNS, self.articles)
 
 
@@ -543,12 +550,12 @@ def test_run_writes_a_brief_from_the_cluster_tables_with_costs_from_every_query(
 
     assert path == tmp_path / "brief-2026-08-20.html"
     html = path.read_text(encoding="utf-8")
-    # Seven queries as of 4B: clusters, entities, velocity, market, feedback, health, and
-    # the enrichment read. Every one is charged for and every one is in the footer — a
-    # component that reads a table the reader is not told about is a cost SPEC §10.3 would
-    # not see. The count is asserted through the total rather than separately, so adding a
-    # read without accounting for it fails here.
-    assert "22,020,096 bytes scanned" in html
+    # Eight queries as of 4B: clusters, entities, velocity, market, feedback, health, the
+    # enrichment read and the macro revisions. Every one is charged for and every one is in
+    # the footer — a component that reads a table the reader is not told about is a cost SPEC
+    # §10.3 would not see. The count is asserted through the total rather than separately, so
+    # adding a read without accounting for it fails here.
+    assert "25,165,824 bytes scanned" in html
     assert "Northwind" in html
     # The resolved company shows on the story, with its ticker.
     assert "Northwind Corp" in html

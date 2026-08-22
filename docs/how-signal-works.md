@@ -243,7 +243,7 @@ not after, so the answers aren't quietly bent to agree with whatever was just bu
 
 ---
 
-### Phase 4A — Rank it and send it *(not started)*
+### Phase 4A — Rank it and send it *(built 2026-08-22; three mornings still to read)*
 
 **In one sentence:** the scoring system decides what's worth your morning, and the brief
 starts arriving in your inbox instead of sitting in a file.
@@ -270,7 +270,7 @@ remembered.
 
 ---
 
-### Phase 4B — Let an AI help, and remember what was revised *(not started)*
+### Phase 4B — Let an AI help, and remember what was revised *(built 2026-08-22; acceptance pending)*
 
 **In one sentence:** a local AI writes the summaries, and the economic figures start
 keeping track of their own corrections.
@@ -384,8 +384,8 @@ quietly does the wrong thing is far more dangerous than one that stops and says 
 | 1 — Collect the real thing | Done — including the day-long switch-off test, run for real on 2026-08-21 |
 | 2 — Make it answerable | Done |
 | 3 — Same story, and who's who *(opens with the first real brief)* | Done |
-| 4A — Rank it and send it | In progress |
-| 4B — AI summaries, and revision history | Not started |
+| 4A — Rank it and send it | Built — the acceptance is three mornings read, which is calendar time |
+| 4B — AI summaries, and revision history | Built — waiting on a local model, a free API key, and 30 days of history |
 | 5 — Polish | Not started |
 
 A real brief is being produced from real data and read every morning — that started at the

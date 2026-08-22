@@ -57,7 +57,12 @@ def _environment() -> Environment:
     )
 
 
-def render_brief(clusters: list[dict[str, Any]], health: RunHealth, date: str | None = None) -> str:
+def render_brief(
+    clusters: list[dict[str, Any]],
+    health: RunHealth,
+    date: str | None = None,
+    revisions: list[Any] | None = None,
+) -> str:
     template = _environment().get_template("brief.html.j2")
     # Cleaned here rather than by whoever assembled the clusters, because every path that
     # renders needs it and they do not share a builder: `brief/build.py` reads Athena,
@@ -73,14 +78,21 @@ def render_brief(clusters: list[dict[str, Any]], health: RunHealth, date: str | 
         date=date or brief_date(),
         clusters=shown,
         health=health.to_dict(),
+        # SPEC §8's payoff line. Defaults to empty so `skeleton.py` — which has no macro
+        # store and never will — renders the same template without knowing about it.
+        revisions=revisions or [],
     )
 
 
 def write_brief(
-    clusters: list[dict[str, Any]], health: RunHealth, out_root: Path, date: str | None = None
+    clusters: list[dict[str, Any]],
+    health: RunHealth,
+    out_root: Path,
+    date: str | None = None,
+    revisions: list[Any] | None = None,
 ) -> Path:
     date = date or brief_date()
     out_root.mkdir(parents=True, exist_ok=True)
     path = out_root / f"brief-{date}.html"
-    path.write_text(render_brief(clusters, health, date), encoding="utf-8")
+    path.write_text(render_brief(clusters, health, date, revisions), encoding="utf-8")
     return path

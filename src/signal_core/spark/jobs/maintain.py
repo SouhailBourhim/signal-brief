@@ -69,6 +69,7 @@ MAINTAINED_TABLES: tuple[str, ...] = (
     "gold.brief_items",
     "gold.cluster_enrichment",
     "gold.enrichment_rejects",
+    "gold.macro_observations",
 )
 
 MAINTENANCE_DDL = """
