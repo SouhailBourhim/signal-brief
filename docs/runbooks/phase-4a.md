@@ -437,6 +437,81 @@ query, sending mail has an outward-facing side effect.
 installed environment rather than assumed, since "it needs no new credential" was the whole
 argument for SES over Gmail SMTP.
 
+## 4A.E — The `project` cost tag, read back *(done 2026-08-22)*
+
+SPEC §12 carried this forward and the carried item was right, but **not for the reason it was
+written down.** The tag has been on every taggable resource since Phase 1 and was activated
+as a cost-allocation tag on 2026-08-20 (1.B). The tagging was done. What was missing was
+anything that reads it.
+
+`ops/athena.py::athena_cost_usd` is a different number and it is worth being precise about
+the difference: it is Athena's byte-scanned estimate for *one query*, computed locally from a
+published rate. Exact for its purpose, and completely blind to Lambda invocations, S3 storage
+and requests, DynamoDB, and data transfer. SPEC §10.3 asks what the *project* costs; only
+Cost Explorer answers that, and nothing called it.
+
+`ops/costs.py` does, filtered on the tag and grouped by service, with `signal cost`.
+
+**Deliberately not in a DAG.** Cost Explorer lags up to 24 hours and restates as AWS
+finalizes charges, so a daily task presenting it as a live metric would be publishing a
+number stale by construction — SPEC §17's rule is that a metric the pipeline cannot recompute
+does not get claimed. It is also billed per request ($0.01), which is nothing weekly and real
+money hourly. Manual, like `make dictionary`.
+
+Two details worth having written down, because both produce a wrong number silently:
+`GetCostAndUsage`'s end date is **exclusive**, and MONTHLY granularity over a range crossing a
+month boundary returns **one entry per month** — summing rather than taking the last is the
+difference between a 30-day figure and half of one. An empty result also gets an explanation
+rather than being rendered as `$0.00`, since cost-allocation tags take up to 24h to appear and
+never apply retroactively; "this is free" is a claim §17 would not let stand unexamined.
+
+## 4A.F — The maintenance DAG *(done 2026-08-22)*
+
+Compaction, snapshot expiry and orphan cleanup over all twelve tables, nightly at 02:00, with
+before/after file counts in `ops.maintenance_runs`. This is where SPEC §12's "compaction delta
+measured" gets its number.
+
+### The procedures were probed before the job was written, and two needed correcting
+
+The plan flagged the `CALL` syntax as cited from general Iceberg knowledge rather than
+verified against this repo's pin. Probing it first was the right call — the obvious form was
+wrong twice:
+
+| | probed against Spark 4.1 / Iceberg (ADR-0006) |
+|---|---|
+| `rewrite_data_files` | **silently no-ops** below `min-input-files` (default 5): returns `rewritten_data_files_count=0`, no error |
+| `expire_snapshots` | worked as expected |
+| `remove_orphan_files` | **refuses** any `older_than` under 24 h: `IllegalArgumentException: Cannot remove orphan files with an interval less than 24 hours` |
+
+The orphan guard exists because a shorter interval can delete files an in-flight write is
+about to commit, and it happens to match what this job wants anyway — so it is respected
+rather than overridden. The rewrite no-op is the more dangerous of the two: it is easy to read
+"0 files rewritten" as *nothing to do* when the real answer is *not enough fragments yet*, so
+`min_input_files` is a named parameter and a test forces a real rewrite to assert a real
+delta (6 files → 1).
+
+Both corrections are pinned by tests rather than only described here.
+
+### Three smaller decisions
+
+**One task over all tables**, not one per table, matching `cluster_dag`'s preference for
+fewer moving parts. `maintain_table` never raises — a sweep that abandons eleven tables
+because the twelfth is locked has made the problem worse — so errors are recorded per table
+and the DAG fails on the aggregate.
+
+**A table that does not exist yet is skipped, not failed.** A fresh environment has no
+`silver.market_observations` until the market DAG first runs, and a nightly job reporting
+failures for tables nobody has built is one whose failures stop being read (SPEC §11).
+
+**Cron at 02:00, not asset-triggered.** Iceberg's snapshot isolation makes compaction safe
+alongside readers and writers, so the schedule is about resource contention, not correctness
+— 02:00 is clear of the 02:11 market poll, the 03:30 market DAG, `resolve` at 04:30, `cluster`
+at 05:00 and the 07:00 brief. `assets.py` already anticipated this hook.
+
+`test_every_maintained_table_is_one_the_pipeline_actually_writes` asserts the hardcoded list
+against the jobs' own table constants, because a table missing from a sweep degrades
+quietly — slower queries and a growing bill, with no failure anywhere.
+
 ## Then
 
 *(open — closed when the three-morning acceptance completes)*

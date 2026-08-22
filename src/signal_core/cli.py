@@ -54,6 +54,12 @@ def main(argv: list[str] | None = None) -> int:
         help="show what that brief contained, with any marks already left",
     )
 
+    cost = sub.add_parser(
+        "cost", help="what this project has cost, by the `project` cost-allocation tag"
+    )
+    cost.add_argument("--days", type=int, default=30, help="how far back, default 30")
+    cost.add_argument("--project", default="signal", help="the tag value to filter on")
+
     athena_query = sub.add_parser(
         "athena-query", help="run a SQL query against the lake, print rows + bytes scanned + cost"
     )
@@ -89,6 +95,14 @@ def main(argv: list[str] | None = None) -> int:
             # meant to keep.
             parser.error("feedback needs a cluster_id and a mark, or --list")
         return run_feedback(args.date, args.cluster_id, args.mark)
+    if args.command == "cost":
+        from datetime import date, timedelta
+
+        from signal_core.ops.costs import format_cost, project_cost
+
+        end = date.today()
+        print(format_cost(project_cost(end - timedelta(days=args.days), end, project=args.project)))
+        return 0
     if args.command == "athena-query":
         from signal_core.cli_athena import run_athena_query
 
