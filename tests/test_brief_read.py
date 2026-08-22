@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from signal_core.brief.build import run
-from signal_core.brief.ranker import score_cluster
+from signal_core.brief.ranker import WEIGHTS, score_cluster
 from signal_core.brief.read import (
     _coerce_article,
     _parse_array,
@@ -428,7 +428,9 @@ def test_a_cluster_row_coerces_into_what_the_ranker_already_speaks():
     assert cluster["body_text"].startswith("Northwind said")
 
     scored = score_cluster(cluster, now=NOW)
-    assert set(scored["score_components"]) == {"breadth", "recency"}
+    assert set(scored["score_components"]) == set(WEIGHTS), (
+        "every weighted component must explain itself, or the score is partly unexplained"
+    )
 
 
 def test_articles_in_is_the_denominator_the_cluster_job_used():
@@ -534,8 +536,10 @@ def test_run_writes_a_brief_from_the_cluster_tables_with_costs_from_all_three_qu
 
     assert path == tmp_path / "brief-2026-08-20.html"
     html = path.read_text(encoding="utf-8")
-    # Three queries now, not two: clusters, entities, health.
-    assert "9,437,184 bytes scanned" in html
+    # Six queries as of 4A: clusters, entities, velocity, market, feedback, health.
+    # Every one is charged for and every one is in the footer — a component that reads a
+    # table the reader is not told about is a cost SPEC §10.3 would not see.
+    assert "18,874,368 bytes scanned" in html
     assert "Northwind" in html
     # The resolved company shows on the story, with its ticker.
     assert "Northwind Corp" in html

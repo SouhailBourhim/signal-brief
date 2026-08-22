@@ -268,6 +268,104 @@ so it cannot certify this fix in either direction. That is 3.B's finding recurri
 corpus count over real captured bytes plus a fixture-derived regression test, not a green gate.
 The gate's job was to show the change did not cost anything elsewhere. It didn't.
 
+## 4A.H — The ranker over real clusters *(done 2026-08-22)*
+
+Five of SPEC §7.4's six components, and the two carried-forward defects that gate them.
+
+| Component | Weight | Reads |
+|---|---|---|
+| `breadth` | 0.25 | `distinct_publisher_count`, now honest (see below) |
+| `relevance` | 0.25 | the watchlist against the cluster's **highest-mention** entity |
+| `recency` | 0.20 | `last_seen` |
+| `velocity` | 0.10 | `silver.hn_score_snapshots` (4A.B) |
+| `market_corroboration` | 0.10 | `silver.market_observations` (4A.D) |
+| `feedback` | 0.10 | `gold.brief_items` (4A.I) |
+
+**The distribution is a claim, so it is written down.** `relevance` and `breadth` lead
+because "is this about something I care about" and "did independent outlets corroborate it"
+are the two questions a brief exists to answer. `recency` is deliberately no longer second:
+3.D found minutes-old EDGAR filings beating four-publisher stories four hours old, and said
+the fix was competition from components that measure importance rather than freshness. That
+is now assertable —
+`test_relevance_can_outrank_a_fresh_single_publisher_filing` is exactly 3.D's scenario.
+
+**Novelty stays out**, and `test_novelty_is_not_a_weighted_component` pins it. ADR-0009 put
+every embedding in 4B behind Ollama; a lexical stand-in would score near chance (0.500
+held-out recall vs 0.909, on a strictly easier question) while occupying a weight, and a
+hand-set weight over a near-chance component is worse than an absent one — the score is only
+explainable if every term in it means something.
+
+### Two carried-forward defects, fixed inside the components they gate
+
+**Salience vs. resolution** (3.E) is not a separate fix; it *is* how `relevance` and
+`market_corroboration` read their entity. Both score the highest-mention entity rather than
+any resolved mention, and `read_cluster_entities` already sorted by descending mentions — so
+a photo credit at `mentions=1` cannot make an Amazon story about Getty Images. A watchlist
+company mentioned in passing still scores 0.3 rather than 0: weak evidence is not absence of
+evidence.
+
+**Publisher-diversity inflation** (3.E) is `dedup.effective_publisher`. `transform.to_article`
+sets `publisher_domain` from the *submitted* URL, so three Show HN posts about one project —
+its site, its repo, a thread — counted as three independent outlets. They are one community's
+attention. The mapping is keyed on `source_id`, not on a domain denylist, because the
+property belongs to the source: anything whose documents are user submissions of other
+people's URLs has this shape.
+
+It is applied at ranking, not at parse: the submitted URL is a true fact about the document
+and `silver.articles` keeps it (SPEC §6.2). What changed is what counts as *independent
+corroboration*, which is a ranking question.
+
+### What velocity cost that the plan did not budget for
+
+`silver.articles` had no key back to the source's own id. `ParsedItem.external_id` has
+existed since 2.B — its docstring says "kept for traceability" — and `to_article` dropped it,
+so there was no way to join a cluster to the score snapshots taken of its Hacker News member.
+
+`article_id` could not stand in: it is derived from content, so it changes when a headline is
+edited, which is exactly when a story is developing and its velocity matters most.
+
+So `external_id` is now a column on `silver.articles`, appended last because
+`ALTER TABLE ADD COLUMN` appends and `MERGE ... INSERT *` is positional. **`ensure_tables`
+now calls `ensure_columns` for the articles table**, which it did not before —
+`CREATE TABLE IF NOT EXISTS` is a no-op against a live table, and 3.D found that the hard way
+with a deployed table two columns behind its own DDL.
+
+One near-miss worth recording: the column was first documented with a `--` SQL comment
+*inside* `ARTICLES_DDL`. `spark/tables.py::ddl_columns` parses those strings line-by-line and
+would have read `--` as a column name, breaking `ensure_columns` and `cluster.py`'s column
+derivation in a place neither names the DDL. Caught by reading the parser rather than by a
+test, which is the same lesson this phase keeps re-learning.
+
+### `gold.brief_items`, written through Athena
+
+SPEC §9's schema, and the row that makes the loop a loop: it records the ranking decision
+with `score_components` intact, it is what `signal brief feedback` updates, and it is what
+the next run's `feedback` component reads back.
+
+Written with `run_query`, not Spark. `build.py` and `read.py` stay JVM-free by design —
+their docstrings argue that starting Spark to render ten stories is a lot of machinery for a
+SELECT — and Athena v3 writes Iceberg directly, so the 07:00 path gains no JVM boot.
+
+**DELETE-then-INSERT rather than MERGE**, and the WHERE clause is the reason: `make brief`
+twice in one morning must not double the rows *and* must not discard a mark already left. So
+the delete removes only rows for that date with no feedback, and clusters already marked
+today are not re-inserted. MERGE expresses the first half and not the second, because a
+re-run legitimately changes `rank` and `score` for rows that should still be there.
+
+Only clusters that were *shown* are recorded. `rank` positions every cluster and cuts at
+`limit`; writing the tail would mean a table where almost every row describes a story nobody
+saw, and the feedback component would then read marks against positions that never appeared.
+
+### One generalization, one honest cost
+
+3.D's `_read_entities` — degrade to nothing if the table does not exist yet, but only for
+"no such table" — became `_optional_read`, because 4A added three more optional reads and
+three copies of that try/except would eventually disagree about which errors are survivable.
+
+The brief now runs **six queries instead of three**, and all six are charged to the footer.
+A component that quietly reads a table the reader is never told about is a cost SPEC §10.3
+would not see, so `test_run_writes_a_brief_...` asserts the summed figure.
+
 ## Then
 
 *(open — closed when the three-morning acceptance completes)*

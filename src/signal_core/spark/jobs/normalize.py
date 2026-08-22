@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING
 
 from signal_core.parse import get_parser
 from signal_core.spark.jobs.commit_bronze import BRONZE_TABLE
+from signal_core.spark.tables import ensure_columns
 from signal_core.timeutil import ensure_utc, utc_now
 from signal_core.transform import to_article
 
@@ -71,6 +72,7 @@ SILVER_COLUMNS = [
     "story_key",
     "parse_error",
     "ingest_id",
+    "external_id",
 ]
 
 SILVER_SCHEMA = """
@@ -78,7 +80,7 @@ SILVER_SCHEMA = """
     body_text string, published_at timestamp, fetched_at timestamp,
     event_date timestamp, lang string, publisher_domain string, authority_score double,
     simhash long, content_hash string, timestamp_flagged boolean, story_key string,
-    parse_error string, ingest_id string
+    parse_error string, ingest_id string, external_id string
 """
 
 
@@ -115,6 +117,9 @@ def _normalize_row(row: dict) -> list[dict]:
                 "story_key": None,
                 "parse_error": result.error,
                 "ingest_id": ingest_id,
+                # Explicit None rather than absent: `pd.DataFrame(rows, columns=...)` fills
+                # a missing key with NaN, which is not a string and fails the cast.
+                "external_id": None,
             }
         ]
     articles = []
@@ -214,6 +219,15 @@ _TBLPROPERTIES = """
 # against a live table — the same reason `health_snapshot` has to ALTER its added columns.
 _ADDED_PROPERTIES = (("write.merge.isolation-level", "serializable"),)
 
+# `external_id` (4A.H) is the source's own id for the document — an HN item id, an RSS guid.
+# It has existed on `ParsedItem` since 2.B ("kept for traceability", its docstring) and was
+# dropped at the transform boundary until SPEC §7.4's velocity component needed to join a
+# cluster back to the story whose score it is watching. It is **last** because
+# `ALTER TABLE ADD COLUMN` appends and `MERGE ... INSERT *` is positional, so an existing
+# deployed table and a freshly created one have to agree on order.
+#
+# No SQL comments inside these DDL strings: `spark/tables.py::ddl_columns` parses them
+# line-by-line and would read `--` as a column name.
 ARTICLES_DDL = """
     article_id string NOT NULL,
     source_id string NOT NULL,
@@ -230,7 +244,8 @@ ARTICLES_DDL = """
     content_hash string,
     timestamp_flagged boolean,
     story_key string,
-    parse_error string
+    parse_error string,
+    external_id string
 """
 
 # Matches `ARTICLES_DDL`'s column order exactly — used to strip `SILVER_COLUMNS`' extra
@@ -252,6 +267,7 @@ _ARTICLES_COLUMNS = [
     "timestamp_flagged",
     "story_key",
     "parse_error",
+    "external_id",
 ]
 
 # `story_id` is resolved by `_resolve_story_ids` below, walking `parent_id` up the
@@ -333,6 +349,13 @@ def ensure_tables(
     for table in (articles_table, comments_table, rejects_table, scores_table):
         for name, value in _ADDED_PROPERTIES:
             spark.sql(f"ALTER TABLE {table} SET TBLPROPERTIES ('{name}' = '{value}')")
+
+    # `CREATE TABLE IF NOT EXISTS` is a no-op against a live table, so a column added to the
+    # DDL never reaches a deployed one without this. 3.D found that the hard way — a table
+    # two columns behind its own DDL, discovered only when the brief failed reading them —
+    # which is why `spark/tables.py::ensure_columns` exists and why it is called here now
+    # rather than only from `cluster_window`.
+    ensure_columns(spark, articles_table, ARTICLES_DDL)
 
 
 def _bronze_window(

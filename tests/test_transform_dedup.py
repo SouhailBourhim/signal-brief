@@ -160,6 +160,63 @@ def test_group_stories_collapses_syndication(polled):
     assert acq["publisher_domain"] in {"arstechnica.com", "techcrunch.com", "theverge.com"}
 
 
+def _hn_article(article_id: str, url: str, title: str) -> dict:
+    """A minimal silver row shaped like an HN submission — `publisher_domain` is the
+    *submitted* URL's domain, which is exactly where the inflation comes from."""
+    from signal_core.transform import publisher_domain as domain_of
+
+    now = datetime.now(UTC)
+    return {
+        "article_id": article_id,
+        "source_id": "hackernews",
+        "url_canonical": url,
+        "title": title,
+        "body_text": "",
+        "published_at": now,
+        "fetched_at": now,
+        "publisher_domain": domain_of(url),
+        "timestamp_flagged": False,
+        "story_key": None,
+        "parse_error": None,
+    }
+
+
+def test_one_aggregators_submissions_are_one_publisher():
+    """3.E's publisher-diversity inflation, which SPEC §12 carried into 4A gating `breadth`.
+
+    Three Show HN posts about one project — its site, its repo, a thread — carry three
+    different `publisher_domain`s and used to score as three independent outlets. SPEC §7.4
+    defines breadth as *independent* publishers, and this is one community's attention, not
+    three newsrooms."""
+    from signal_core.dedup import effective_publisher, group_stories
+
+    members = [
+        _hn_article("a", "https://fx.sh/post", "Show HN: Fx, a terminal JSON viewer"),
+        _hn_article("b", "https://github.com/x/fx", "Show HN: Fx, a terminal JSON viewer"),
+        _hn_article("c", "https://twitter.com/x/1", "Show HN: Fx, a terminal JSON viewer"),
+    ]
+    assert len({m["publisher_domain"] for m in members}) == 3, "three raw domains, as stored"
+
+    (cluster,) = group_stories(members).clusters
+    assert cluster["article_count"] == 3
+    assert cluster["distinct_publisher_count"] == 1, "one aggregator, one voice"
+    assert cluster["publishers"] == ["news.ycombinator.com"]
+
+    # The stored fact is untouched — this is a ranking question, answered where ranking
+    # reads, not by rewriting `silver.articles` (SPEC §6.2).
+    assert members[0]["publisher_domain"] == "fx.sh"
+    assert effective_publisher(members[0]) == "news.ycombinator.com"
+
+
+def test_a_real_newsroom_keeps_its_own_domain():
+    """The fix must not collapse genuine syndication, which is the signal breadth exists
+    to detect."""
+    from signal_core.dedup import effective_publisher
+
+    article = {"source_id": "rss_tech", "publisher_domain": "techcrunch.com"}
+    assert effective_publisher(article) == "techcrunch.com"
+
+
 def test_no_article_is_lost_to_clustering(polled):
     documents, _ = polled
     articles = _polled_articles(documents)

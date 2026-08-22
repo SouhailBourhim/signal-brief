@@ -406,6 +406,40 @@ def authority(domain: str) -> float:
     return _AUTHORITY.get(domain, DEFAULT_AUTHORITY)
 
 
+# Where an aggregator's submissions actually come from. SPEC §7.4 defines `breadth` as the
+# count of **independent** publishers, and an aggregator breaks that definition in a specific
+# way: `transform.to_article` sets `publisher_domain` from the submitted URL, so three Hacker
+# News posts about one project — its site, its GitHub repo, a thread about it — arrive as
+# three distinct domains and score as three independent outlets corroborating a story.
+#
+# They are one community's attention, not three newsrooms. 3.E recorded it as
+# "publisher-diversity inflation" and SPEC §12 carried it into 4A, gating `breadth` and the
+# brief's top ten.
+#
+# Keyed on `source_id` rather than on a domain list because the property belongs to the
+# *source*: anything whose documents are user submissions of other people's URLs has this
+# shape, and a future aggregator source would need adding here, not to a denylist of domains.
+AGGREGATOR_PUBLISHERS: dict[str, str] = {
+    "hackernews": "news.ycombinator.com",
+}
+
+
+def effective_publisher(article: dict[str, Any]) -> str:
+    """The publisher a cluster should count for `breadth`.
+
+    Identity for ordinary sources — a TechCrunch article's publisher is TechCrunch. For an
+    aggregator it is the aggregator itself, collapsing its submissions to one voice however
+    many outbound domains they point at. See `AGGREGATOR_PUBLISHERS`.
+
+    Deliberately not applied to `publisher_domain` at parse time: the submitted URL is a true
+    fact about the document and `silver.articles` should keep it. This is a *ranking*
+    question — what counts as independent corroboration — so it is answered where ranking
+    reads, not by rewriting the record (SPEC §6.2).
+    """
+    aggregated = AGGREGATOR_PUBLISHERS.get(article.get("source_id") or "")
+    return aggregated or (article.get("publisher_domain") or "")
+
+
 def blocking_keys(tokens: frozenset[str], frequency: dict[str, int], threshold: float) -> list[str]:
     """The tokens an article must be indexed under for a Jaccard join to be **exact**.
 
@@ -544,11 +578,14 @@ def group_edges(articles: list[dict[str, Any]], edges: Iterable[tuple[str, str]]
     for members in components:
         # Canonical = most authoritative, earliest-seen. The rest become
         # distinct_publisher_count, which feeds ranking instead of being discarded.
+        #
+        # `effective_publisher`, not `publisher_domain`: see its docstring. Three Show HN
+        # posts about one project are one publisher, not three.
         head = min(
             members,
             key=lambda a: (-authority(a["publisher_domain"]), a["fetched_at"], a["article_id"]),
         )
-        publishers = {m["publisher_domain"] for m in members}
+        publishers = {effective_publisher(m) for m in members}
         # Both ends, because they answer different questions and a brief needs the second.
         # The canonical head is by construction the *earliest* article (most authoritative,
         # then earliest seen), so timestamping a cluster by its head measured when the story

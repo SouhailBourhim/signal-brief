@@ -77,6 +77,12 @@ def to_article(parsed: ParsedItem, bronze_row: dict[str, Any]) -> dict[str, Any]
         "timestamp_flagged": True,
         "story_key": parsed.extra.get("story_key"),
         "parse_error": parsed.parse_error,
+        # The source's own id, carried through rather than dropped here. SPEC §7.4's
+        # velocity component joins a cluster's Hacker News member back to the score
+        # snapshots taken of it, and an id the source assigned is the only stable key for
+        # that — `article_id` is derived from content, so it changes when a headline is
+        # edited, which is exactly when a story is still developing.
+        "external_id": parsed.external_id or None,
     }
 
     if parsed.parse_error:

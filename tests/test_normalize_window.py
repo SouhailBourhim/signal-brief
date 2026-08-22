@@ -393,6 +393,20 @@ def test_hn_comments_window_unresolvable_ancestor_keeps_best_known_id(spark, sta
     assert row.story_id == "800"
 
 
+def test_external_id_is_carried_into_silver_articles(spark, staging):
+    """4A.H. `article_id` is derived from content, so it changes when a headline is edited
+    — exactly when a story is still developing. The source's own id is the stable key
+    velocity needs to join a cluster to the score snapshots taken of it."""
+    from signal_core.spark.jobs.normalize import normalize_window
+
+    now = utc_now()
+    _commit(spark, staging, [_hn_doc(1, "story.json", fetched_at=now)])
+    normalize_window(spark, *_window(now))
+
+    row = spark.table(ARTICLES_TABLE).collect()[0]
+    assert row.external_id == "49350858", "the HN item id, as the source assigned it"
+
+
 # --- normalize_hn_scores_window: a measurement, not a document ------------------------
 
 

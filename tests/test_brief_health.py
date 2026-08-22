@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from signal_core.brief.ranker import rank, score_cluster
+from signal_core.brief.ranker import WEIGHTS, rank, score_cluster
 from signal_core.brief.render import render_brief
 from signal_core.ops.health import RunHealth, assess_source
 
@@ -39,7 +39,9 @@ def test_breadth_beats_a_lone_report():
 def test_score_components_are_retained_for_explainability():
     """SPEC §7.4: a scalar score cannot be explained after the fact."""
     scored = score_cluster(_cluster())
-    assert set(scored["score_components"]) == {"breadth", "recency"}
+    assert set(scored["score_components"]) == set(WEIGHTS), (
+        "every weighted component must explain itself, or the score is partly unexplained"
+    )
 
 
 def test_flagged_timestamp_falls_back_to_fetched_at():
