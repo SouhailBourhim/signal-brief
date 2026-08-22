@@ -430,6 +430,36 @@ it buys is a sweep that runs.
 Verified on the real table after the fix: `gold.brief_items` compacted **3 files → 2**, error
 `None`, with `remove_orphan_files` skipped for 4A's documented S3 reason.
 
+### `resolve` could never have found its dictionary
+
+Found by pre-flighting a DAG *before* triggering it, having learned the lesson twice already
+in one session.
+
+`entities/dictionary.py::DEFAULT_PATH` was `Path("warehouse/entities/dictionary.json.gz")` —
+**relative**, so it resolves against the process's cwd. Airflow tasks run with
+`cwd=/opt/airflow`, so inside the containers it pointed at `/opt/airflow/warehouse/...`. And
+`./warehouse` was not in `docker-compose.yml`'s `volumes:` at all, so no path would have
+worked.
+
+`resolve_dag` would have raised `FileNotFoundError` on its very first run. It never did,
+because it had been paused since 3.C — and Phase 3 ran the resolver locally from the repo
+root, where the relative path is correct.
+
+**`docker-compose.yml` already knew about this class of bug.** It sets `SIGNAL_DATA_ROOT`,
+`SIGNAL_OUT_ROOT` and `SIGNAL_CACHE_ROOT` absolutely, under a comment that says exactly why:
+*"Airflow tasks run with cwd=/opt/airflow and the defaults in config.py are relative."* The
+dictionary path was the one relative path with no setting behind it to override, so it was
+invisible to that fix.
+
+Now `Settings.entity_dictionary_path`, overridden in compose like its three siblings, with
+`./warehouse` mounted read-only. Verified inside the container: the path resolves absolutely
+and the snapshot loads, **11,835 entities**.
+
+`tests/test_compose_paths.py` pins the whole class rather than this instance: every relative
+path setting must be overridden absolutely in compose, the dictionary must exist, and
+`make clean`'s `MOUNTED_PATHS` must cover every bind-mounted directory it could delete. It
+asserts the defaults are still relative too, so it cannot quietly become vacuous.
+
 ## Acceptance
 
 SPEC §12's 4B gate, item by item. **Not met** — two external gates and a calendar one.

@@ -60,6 +60,7 @@ x-airflow-common: &airflow-common
     SIGNAL_DATA_ROOT: /opt/signal/data
     SIGNAL_OUT_ROOT: /opt/signal/out
     SIGNAL_CACHE_ROOT: /opt/signal/.cache
+    SIGNAL_ENTITY_DICTIONARY_PATH: /opt/signal/warehouse/entities/dictionary.json.gz
     SIGNAL_CONTACT_EMAIL: ${SIGNAL_CONTACT_EMAIL:-you@example.com}
 
     # Phase 1 targets. Terraform prints all three as outputs.
@@ -72,6 +73,10 @@ x-airflow-common: &airflow-common
     - ./src:/opt/signal/src
     - ./data:/opt/signal/data
     - ./out:/opt/signal/out
+    # The committed entity dictionary the resolver reads (SPEC §7.2). Read-only: it is a
+    # build artifact of `signal dictionary`, checked into the repo, and nothing at runtime
+    # writes to it. Without this mount the `resolve` DAG cannot find its dictionary at all.
+    - ./warehouse:/opt/signal/warehouse:ro
     # The read-once staging cache. A bind mount rather than a named volume so the host
     # and the containers share one cache: a staged object downloaded by a local
     # `uv run` job is a byte the DAG then does not re-pay for, which is the whole point

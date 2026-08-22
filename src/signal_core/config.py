@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     data_root: Path = Path("./data")
     out_root: Path = Path("./out")
     cache_root: Path = Path("./.cache")
+    # The committed SEC + Wikidata snapshot the resolver reads (SPEC §7.2). A setting rather
+    # than a module constant because the default is *relative*, and a relative path resolves
+    # against the process's cwd — which is `/opt/airflow` inside the containers, not the repo
+    # root. See `entities/dictionary.py::DEFAULT_PATH`.
+    entity_dictionary_path: Path = Path("warehouse/entities/dictionary.json.gz")
     ollama_url: str = "http://localhost:11434"
 
     # Pinned, not floating. SPEC §7.3: swapping a model is a measurement, not a vibe.

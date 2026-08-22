@@ -53,6 +53,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from signal_core.config import Settings
+
 # Legal-form suffixes, dropped from a name before it becomes an alias. Everything from the
 # first one onward goes, which is what reduces `JS VENTURE FUND LLC SERIES` to `js venture
 # fund` rather than leaving the trailing `series` on it.
@@ -290,7 +292,16 @@ def from_json(text: str) -> Dictionary:
 # `built_at` and the entity counts in `sources` — which `signal report` prints and a diff of
 # 8 MB of JSON does not. It also keeps the snapshot inside the repo's 512 KB large-file
 # guard rather than requiring that guard to be loosened for one generated artifact.
-DEFAULT_PATH = Path("warehouse/entities/dictionary.json.gz")
+# Overridable through `SIGNAL_ENTITY_DICTIONARY_PATH`, and the reason is not configurability.
+#
+# **A relative default silently depends on where the process started.** Airflow tasks run with
+# `cwd=/opt/airflow`, so this resolved to `/opt/airflow/warehouse/...` inside the containers
+# and the `resolve` DAG could never have found it — which nobody noticed, because that DAG had
+# been paused since it was written and Phase 3 ran the resolver locally from the repo root
+# (docs/runbooks/phase-4b.md). `docker-compose.yml` already sets `SIGNAL_DATA_ROOT`,
+# `SIGNAL_OUT_ROOT` and `SIGNAL_CACHE_ROOT` absolutely for exactly this reason; this is the one
+# path that had no setting behind it to point somewhere real.
+DEFAULT_PATH = Settings().entity_dictionary_path
 
 
 def write(dictionary: Dictionary, path: Path) -> None:
