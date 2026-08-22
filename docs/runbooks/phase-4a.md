@@ -512,6 +512,75 @@ at 05:00 and the 07:00 brief. `assets.py` already anticipated this hook.
 against the jobs' own table constants, because a table missing from a sweep degrades
 quietly — slower queries and a growing bill, with no failure anywhere.
 
+## Built, and what remains
+
+SPEC §12's 4A row, item by item:
+
+| Asked for | Where it is |
+|---|---|
+| Ranker over real clusters | `brief/ranker.py` — five of §7.4's six components (4A.H) |
+| HTML brief with §11's health footer | `brief/render.py`, unchanged; the footer already printed fetch **and** content staleness (4A.A) |
+| Emailed at 07:00 | `brief/mailer.py` + `airflow/dags/brief_dag.py`, SES from the local side (4A.J) |
+| Maintenance DAG | `spark/jobs/maintain.py` + `airflow/dags/maintenance_dag.py` (4A.F) |
+| Stale-but-successful feed detection | Already done in 1.E; the row was stale, not the code (4A.A) |
+| HN score-velocity poller | `sources/hn_scores.py`, source #7 (4A.B) |
+| `project` cost-allocation tag | `ops/costs.py` — the tag existed; nothing read it (4A.E) |
+| Salience vs. resolution | Folded into `relevance` and `market_corroboration` (4A.H) |
+| Publisher-diversity inflation | `dedup.effective_publisher` (4A.H) |
+| EDGAR shaping | `dedup.accessions` + the positive rule ahead of the veto (4A.G) |
+
+Everything green from a clean tree: `make test` (all suites incl. `-m spark`), `make lint`,
+`make eval` (unchanged — dedup 0.962/0.568, entities 0.868/0.611), `make skeleton` and
+`make skeleton-nospark` (both 11 articles -> 7 clusters, agreeing exactly, which is the claim
+CLAUDE.md makes for them), `make lambda-package` (11 MB), `make tf-validate`.
+
+**The acceptance test itself is not done, and cannot be rushed.** It asks for three mornings
+read with marks recorded, plus a measured compaction delta. That is calendar time:
+
+- [ ] Apply Terraform, then **verify the SES identity by hand** —
+      `aws sesv2 get-email-identity --email-identity <address> --query VerifiedForSendingStatus`.
+      Nothing sends until this returns `true`, and Terraform cannot tell the difference.
+- [ ] Run `maintenance` once against the real lake and record the before/after file counts
+      here. This satisfies "compaction delta measured" independently of the three-day clock,
+      so it can happen first.
+- [ ] Three consecutive mornings: confirm the 07:00 mail arrived, run
+      `signal feedback <cluster_id> up|down` on at least one item, and log what the read
+      surfaced in the daily-read table below — the format `phase-3.md` used, because that
+      table is what SPEC §1's behavioural claim actually rests on.
+
+### The daily read
+
+| Date | Read | What it showed |
+|---|---|---|
+| *(pending)* | | |
+
+### One environment papercut found while verifying
+
+`make clean` now fails: `airflow/dags/__pycache__/` is owned by uid **50000** — the Airflow
+container's user — so the host cannot delete the `.pyc` files it contains. Pre-existing
+(the directory dates from 2026-08-21, before this phase) and it does not affect the pipeline,
+but it makes `make clean` exit non-zero, which a fresh reader will hit. It is the same family
+as 2.E's finding about deleting `.cache/` while containers are running: **the Compose
+containers write into the repo as a different uid.** Left as-is rather than fixed blind —
+the right fix is probably `AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION`-adjacent Compose
+config or a `sudo`-free ignore in the clean target, and that is a decision worth making with
+the containers running rather than from the outside.
+
 ## Then
 
-*(open — closed when the three-morning acceptance completes)*
+Phase 4A closes when the three mornings are read. Then **Phase 4B**, which ADR-0008 kept as
+its own phase precisely so it could not be crowded out: the Ollama enrichment stage with its
+content-hash cache, Pydantic validation and 100-example eval set (SPEC §7.3, gated by
+ADR-0003's model pin — still `UNPINNED`), and the ALFRED bitemporal macro store (SPEC §8,
+the README's lead differentiator). Its acceptance is the 30-day reproducibility backfill.
+
+4B also inherits ADR-0009's two deferred items — the embedding branch behind `dedup.decide`,
+and `?itemDescription` plus a wider candidate set for the resolver — and one this phase adds:
+
+| Item | Recorded in | Gates |
+|---|---|---|
+| **Novelty is still absent from `WEIGHTS`** — it needs embedding distance over 30 days of cluster heads, and ADR-0009 put every embedding in 4B | 4A.H | §7.4's sixth component; the ranker is five-sixths of its spec |
+
+Worth stating plainly rather than leaving implied: **4A ships a ranker that is missing a
+component by design**, and the reason is on the record in two places rather than in anyone's
+memory.

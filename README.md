@@ -7,14 +7,21 @@ immutably; collapses syndicated coverage into ranked story clusters; and publish
 at 07:00 Africa/Casablanca with lineage, replay, cost controls, and locally run LLM
 enrichment built in.
 
-**Status: Phase 3, done.** Six pollers — Hacker News, SEC EDGAR + Form D,
-and three RSS/Atom feeds — run as scheduled Lambdas and land raw payloads in S3; local Spark
+**Status: Phase 3 done; Phase 4A built, awaiting its three-morning acceptance.** Eight
+pollers — Hacker News (items and top-story scores), SEC EDGAR + Form D, three RSS/Atom feeds,
+and daily market bars — run as scheduled Lambdas and land raw payloads in S3; local Spark
 jobs commit them to `bronze.raw_documents` on Iceberg, normalize that into `silver.articles`
 and `silver.hn_comments`, collapse it into story clusters, and resolve company mentions
 against a pinned SEC + Wikidata dictionary. **Both labeled eval sets are committed and
 scored** — 252 article pairs and 300 entity mentions — and a real brief has been read every
 morning since 3.0, which is what Phase 3's acceptance actually asks for. The infrastructure
 is Terraform, and applied. No LLM yet.
+
+**Phase 4A** adds the ranker over those clusters — five of SPEC §7.4's six components, with
+novelty deferred to 4B on the record rather than by omission — plus email at 07:00, a nightly
+Iceberg maintenance job, a feedback CLI, and the five items SPEC §12 carried forward. Its
+acceptance is behavioural and takes calendar time: three mornings read with marks recorded.
+See [`docs/runbooks/phase-4a.md`](docs/runbooks/phase-4a.md).
 
 **[ADR-0009](docs/decisions/ADR-0009-embeddings-for-same-story-and-entities.md) closed the
 phase with two verdicts, measured rather than argued.** Sentence embeddings beat the lexical

@@ -26,3 +26,34 @@ def test_handler_import_chain_stays_light():
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True
     )
     assert result.stdout.strip() == "[]", f"handler pulled in {result.stdout.strip()}"
+
+
+def test_the_watchlist_ships_beside_the_code_that_reads_it():
+    """4A.D's market poller resolves its ticker list from `watchlist.toml` **at fetch time**,
+    so the file is a runtime dependency of the deployed function, not just a dev convenience.
+
+    Data files are exactly what a packaging step forgets: the code imports fine, the tests
+    pass, and the Lambda raises `FileNotFoundError` on its first real invocation — which is
+    the same "breaks only there" failure class this module was written for.
+    """
+    from signal_core.watchlist import WATCHLIST_PATH
+
+    assert WATCHLIST_PATH.exists()
+    # Inside the package directory, which is what `cp -r src/signal_core` and hatchling's
+    # `packages = ["src/signal_core"]` both carry. A watchlist parked at the repo root would
+    # satisfy every test and ship in neither.
+    assert WATCHLIST_PATH.parent.name == "signal_core"
+
+
+def test_the_poller_can_resolve_its_tickers_without_the_heavy_stack():
+    """The market poller's whole reason for existing over yfinance (ADR-0010). Reading the
+    watchlist must not be what drags pandas back in."""
+    probe = (
+        "import sys; from signal_core.sources.market import poll; "
+        "from signal_core.watchlist import load; assert load().tickers(); "
+        f"print([m for m in {FORBIDDEN!r} if m in sys.modules])"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+    )
+    assert result.stdout.strip() == "[]", f"market poller pulled in {result.stdout.strip()}"
