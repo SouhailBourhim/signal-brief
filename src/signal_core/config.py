@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from signal_core.contracts import BackfillHorizon, PayloadFormat, SourceConfig
@@ -44,6 +44,26 @@ class Settings(BaseSettings):
     # scanned cutoff — win regardless of what a client requests.
     athena_workgroup: str = "signal"
     athena_database: str = "silver"
+
+    # Phase 4A delivery (infra/terraform/main/mail.tf). Both default to `contact_email`
+    # because the brief has one reader who is also its sender — the SES identity stays in
+    # the sandbox for exactly that reason (ADR-0010).
+    mail_from: str = ""
+    mail_to: str = ""
+
+    @model_validator(mode="after")
+    def _default_mail_addresses(self) -> Settings:
+        """`mail_from`/`mail_to` fall back to `contact_email` unless set explicitly.
+
+        A validator rather than two properties, because these are overridable from the
+        environment (`SIGNAL_MAIL_TO`) and a property could not be. The fallback is what
+        makes the SES sandbox the right default: one address, sending to itself.
+        """
+        if not self.mail_from:
+            object.__setattr__(self, "mail_from", self.contact_email)
+        if not self.mail_to:
+            object.__setattr__(self, "mail_to", self.contact_email)
+        return self
 
     @property
     def user_agent(self) -> str:

@@ -366,6 +366,77 @@ The brief now runs **six queries instead of three**, and all six are charged to 
 A component that quietly reads a table the reader is never told about is a cost SPEC §10.3
 would not see, so `test_run_writes_a_brief_...` asserts the summed figure.
 
+## 4A.I — The feedback loop's recording half *(done 2026-08-22)*
+
+`signal feedback <cluster_id> up|down`, plus `--list` and `clear`.
+
+A CLI verb rather than a form: there is no web server anywhere in this architecture and
+SPEC §4's diagram has no serving layer past Athena, so collecting two bits a day through one
+would mean a component SPEC §14 would then have to justify.
+
+**It reads before it writes, and reads back after.** Athena's `UPDATE` reports no
+affected-row count, so a typo'd cluster id would otherwise exit 0 and leave the reader
+believing a mark was recorded that never was —
+`test_an_unknown_cluster_fails_loudly_rather_than_succeeding_silently` pins that it refuses
+instead. The read-back is the same "verified, not assumed" habit this project already applies
+to SNS subscriptions and, in 4A.J below, to the SES identity.
+
+`--list` exists because cluster ids are content hashes. Nobody reads one off a page and types
+it from memory, so the verb that needs one has to be able to show them.
+
+## 4A.J — Email at 07:00 *(done 2026-08-22)*
+
+- [x] `brief/mailer.py` — SES via boto3, lazily imported like `ops/athena.py`'s client
+- [x] `infra/terraform/main/mail.tf` — identity, least-privilege role, verification check
+- [x] `airflow/dags/brief_dag.py` — cron `0 7 * * *` Africa/Casablanca, build then mail
+- [x] `mail_from`/`mail_to` on `Settings`, defaulting to `contact_email`
+
+**Local, not a ninth Lambda.** ADR-0002's boundary decides it: the renderer runs locally and
+holds the finished HTML in memory, so a Lambda mailer would exist only to re-read from S3
+what the process that called it just produced, and would put the daily send behind a
+deployment cycle. SPEC §13's layout says the same thing — `brief/ # ranker, renderer, mailer`.
+
+**Cron, not asset-triggered**, and this is the phase's one genuinely arguable schedule.
+`assets.py` anticipates the brief consuming `CLUSTERS_COMMITTED` and the dependency is real,
+but SPEC §12's acceptance says "emailed at **07:00**" — a clock time, not "whenever
+clustering last finished". Asset-triggering would also risk a second send if either upstream
+table were rebuilt later the same morning by a manual trigger or a backfill, and a duplicate
+brief in the inbox is worse than a late one. The assets are declared as inlets for graph
+visibility, exactly as `cluster_dag` already does.
+
+**Two tasks, because they fail differently.** A build failure is a data or query problem; a
+send failure is almost always the SES identity not being verified. Only the second is worth
+retrying, so only it has retries — and splitting them means the rendered file survives a send
+failure, so `make brief-open` still works and the morning is not lost.
+
+### The manual step, and why it cannot be automated
+
+`aws_ses_email_identity` makes AWS email a confirmation link. Terraform cannot click it and
+**cannot tell a pending identity from a verified one** — the identical blind spot
+`monitoring.tf` documents for its SNS subscription, with the identical consequence: applying
+cleanly proves nothing. `mail.tf` outputs the check:
+
+    aws sesv2 get-email-identity --email-identity <address> --query VerifiedForSendingStatus
+
+Until that returns `true`, `send_brief` fails with SES's own error, which names the address
+and is more useful than anything the module could add.
+
+**The account stays in the SES sandbox deliberately.** Leaving it means asking AWS for
+production access, which grants the ability to mail strangers — a capability this system has
+no use for. In the sandbox both ends of a send must be verified identities, which for a
+self-addressed daily brief is exactly one, and that is also why `mail_from` and `mail_to`
+both default to `contact_email`.
+
+The IAM role is worth one note of honesty: the admin user already holds `AdministratorAccess`
+and could send today with no Terraform at all. The role exists for the reason `query.tf`
+gives for `signal-analyst` — *"'I query with an admin key' undoes least-privilege even when
+the identity behind it is trustworthy"* — and the argument is stronger here, because unlike a
+query, sending mail has an outward-facing side effect.
+
+`moto`'s `mock_aws` covers `ses.send_email` with no dependency change. Checked against the
+installed environment rather than assumed, since "it needs no new credential" was the whole
+argument for SES over Gmail SMTP.
+
 ## Then
 
 *(open — closed when the three-morning acceptance completes)*
