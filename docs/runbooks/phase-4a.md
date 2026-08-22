@@ -75,6 +75,61 @@ drift.
       can explain itself in `score_components` (§7.4's actual requirement).
 - [x] `macro_series` recorded and inert until 4B.
 
+## 4A.B — The HN score-velocity poller *(done 2026-08-22)*
+
+Carried since Phase 2, where it was found and recorded as structurally unavailable: the
+existing HN poller walks item ids forward from a watermark and fetches each exactly once, so
+**every story is captured at the moment it is created, when its score is 1.** One point per
+story is not a slope. SPEC §12 carried it into 4A because the fix is a source change.
+
+- [x] `sources/hn_scores.py` — reads `topstories.json` and re-fetches the ranked ids every
+      poll. Re-reading an id already seen is the entire point, so this poller consults
+      neither `State.seen` nor `State.watermark`. It is a separate source rather than a mode
+      of `hackernews` because folding both in would leave `State` meaning two different
+      things depending on which caller was reading it.
+- [x] `parse/hn_scores.py` + `ParsedScoreSnapshot`. The parser test deliberately reuses
+      `tests/fixtures/bronze/hackernews/story.json` — one endpoint, two readings, and
+      reusing the fixture is what keeps that claim honest if the shapes ever diverge.
+- [x] `silver.hn_score_snapshots`, third normalize pass, third `process` DAG task.
+- [x] `TOP_N = 60`. The full list is ~500 ids; sampling all of them every 15 minutes is
+      48,000 requests a day to watch the tail of a ranking that will never lead a brief.
+
+### Three things this turned up that the plan did not anticipate
+
+**1. The concurrency limit the sources map warned about.** Its own comment said six pollers
+fit under a new account's limit of 10 *"and source #7 is where it stops fitting"*, because
+all six collide at :00/:15/:30/:45. Source #7 is this one. Rather than requesting Service
+Quota L-B99A9384, `hn_scores` is the first schedule in the map expressed as **cron** —
+`cron(7,22,37,52 * * * ? *)` misses the pileup and misses every multiple of 5, which is where
+`hackernews` lands. Peak concurrency is unchanged. The property, not the expression, is
+asserted in `test_the_seventh_poller_does_not_collide_with_the_other_six`.
+
+`test_freshness_sla_is_longer_than_the_poll_cadence` had to learn to read cron for this; its
+cadence is now the longest gap between fires, which is the interval an SLA actually has to
+survive.
+
+**2. The articles pass would have reported a permanent parser failure.** `normalize_window`
+reads every source partition, and an `hn_scores` row parses to zero articles — harmless,
+except that it is still counted in `NormalizeResult.bronze_rows`. At ~240 documents an hour
+that is a bronze count climbing against a flat article count, forever, which is precisely
+the shape of a broken parser in a metric SPEC §11 expects someone to read. `NON_ARTICLE_SOURCES`
+excludes it from the pass rather than parsing it to nothing.
+
+**3. Rank-at-snapshot was dropped on purpose.** It is a real velocity signal and observable
+only at fetch time — HN's item endpoint reports a score but not where the story currently
+sits. Carrying it would mean a new column on `RawDocument`, whose docstring records that
+fetch metadata is first-class fields *"rather than a loose dict"*, and whose table is the
+immutable record every other stage replays from. SPEC §7.4 asks for "HN score slope", and
+score is in the payload. Widening the bronze schema for a signal the spec did not ask for is
+not a trade this phase needed to make.
+
+The snapshots table also breaks its siblings' MERGE convention, and the reason is worth
+stating: `silver.articles` and `silver.hn_comments` dedupe on the document's own id, because
+a document exists once. **A snapshot is a measurement**, so the same story an hour later is a
+new row, not a duplicate — deduping on `item_id` would keep one score per story and delete
+the very slope the table exists to provide. The key is `ingest_id`, unique per fetch, which
+keeps replay deterministic (SPEC §6.3).
+
 ## 4A.G — EDGAR shaping: one Form 4, indexed twice *(done 2026-08-22)*
 
 3.E recorded "one Form 4 clusters twice, once per CIK" and gated the brief's top ten on it.

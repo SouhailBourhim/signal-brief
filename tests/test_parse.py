@@ -26,6 +26,7 @@ from signal_core.parse.feedparse import (
     parse_xml,
 )
 from signal_core.parse.hackernews import parse as parse_hackernews
+from signal_core.parse.hn_scores import parse as parse_hn_scores
 from signal_core.parse.rss import parse_rss_ars, parse_rss_tech, parse_rss_verge
 
 FIXTURES = Path(__file__).parent / "fixtures" / "bronze"
@@ -259,6 +260,47 @@ def test_hackernews_unhandled_type_is_flagged_not_silently_absorbed():
     assert not result.items and not result.comments
     assert result.error is None
     assert "unhandled_hn_type" in result.warnings[0]
+
+
+# --- hn_scores: the same bytes, a different record ------------------------------------
+
+
+def test_hn_scores_reads_the_same_payload_as_hackernews_and_keeps_the_score():
+    """Deliberately the *same* fixture the article parser uses. The two sources hit one
+    endpoint and the payloads are identical; what differs is which field is the record.
+    Reusing the fixture is what keeps that claim honest — if the shapes ever diverge, this
+    fails rather than a hand-written fixture agreeing with a stale assumption."""
+    result = parse_hn_scores(_fixture("hackernews", "story.json"))
+    assert not result.items, "a score snapshot is not an article"
+    assert not result.comments
+    (snapshot,) = result.score_snapshots
+    assert snapshot.item_id == "49350858"
+    assert snapshot.score == 1
+    assert snapshot.descendants == 0
+    assert snapshot.title == "AI Is Upending One of Finance's Cushiest Jobs"
+
+
+def test_hn_scores_ignores_comments_rather_than_scoring_them():
+    result = parse_hn_scores(_fixture("hackernews", "comment.json"))
+    assert not result.score_snapshots
+    assert result.warnings and "unhandled_hn_type" in result.warnings[0]
+
+
+def test_hn_scores_empty_payload_parses_to_nothing():
+    assert parse_hn_scores(_fixture("hackernews", "empty.json")).score_snapshots == []
+
+
+def test_a_story_with_no_score_contributes_no_snapshot():
+    """Not a zero. A zero is a real observation and would drag a slope down; a story whose
+    shape this parser does not understand should contribute nothing and say so."""
+    result = parse_hn_scores(b'{"id": 1, "type": "story", "title": "t"}')
+    assert result.score_snapshots == []
+    assert result.error is None, "the row's bytes are fine; only this entry is unreadable"
+    assert result.warnings and "missing_score" in result.warnings[0]
+
+
+def test_hn_scores_rejects_a_non_json_payload():
+    assert parse_hn_scores(b"<html>nope").error is not None
 
 
 # --- fake: Phase 0 shape, now just another registry entry -----------------------------

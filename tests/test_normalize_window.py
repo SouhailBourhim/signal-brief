@@ -26,6 +26,7 @@ BRONZE_TABLE = "bronze.raw_documents"
 ARTICLES_TABLE = "silver.articles"
 COMMENTS_TABLE = "silver.hn_comments"
 REJECTS_TABLE = "silver.parse_rejects"
+SCORES_TABLE = "silver.hn_score_snapshots"
 
 FIXTURES = Path(__file__).parent / "fixtures" / "bronze"
 
@@ -54,7 +55,7 @@ def staging(tmp_path):
 def clean_tables(spark):
     """Each test starts from empty tables — the module-scoped session is shared, the
     data is not."""
-    for table in (BRONZE_TABLE, ARTICLES_TABLE, COMMENTS_TABLE, REJECTS_TABLE):
+    for table in (BRONZE_TABLE, ARTICLES_TABLE, COMMENTS_TABLE, REJECTS_TABLE, SCORES_TABLE):
         spark.sql(f"DROP TABLE IF EXISTS {table} PURGE")
     yield
 
@@ -390,6 +391,106 @@ def test_hn_comments_window_unresolvable_ancestor_keeps_best_known_id(spark, sta
     normalize_hn_comments_window(spark, *_window(now))
     row = spark.table(COMMENTS_TABLE).collect()[0]
     assert row.story_id == "800"
+
+
+# --- normalize_hn_scores_window: a measurement, not a document ------------------------
+
+
+def _scores_doc(index: int, name: str = "story.json", **kwargs) -> RawDocument:
+    """Same fixture bytes as `_hn_doc`, a different `source_id` — which is exactly the
+    real relationship between the two sources: one endpoint, two readings."""
+    return _doc(
+        index,
+        source_id="hn_scores",
+        payload=_fixture("hackernews", name),
+        payload_format=PayloadFormat.JSON,
+        **kwargs,
+    )
+
+
+def test_hn_scores_window_extracts_snapshots_and_no_articles(spark, staging):
+    now = utc_now()
+    _commit(spark, staging, [_scores_doc(1, fetched_at=now)])
+
+    from signal_core.spark.jobs.normalize import normalize_hn_scores_window, normalize_window
+
+    scores_result = normalize_hn_scores_window(spark, *_window(now))
+    articles_result = normalize_window(spark, *_window(now))
+
+    assert scores_result.hn_scores_rows == 1
+    assert scores_result.snapshots_committed == 1
+    assert articles_result.articles_committed == 0, "a snapshot must never become an article"
+
+    row = spark.table(SCORES_TABLE).collect()[0]
+    assert row.item_id == "49350858"
+    assert row.score == 1
+    assert row.observed_at is not None
+
+
+def test_the_articles_pass_does_not_count_hn_scores_rows(spark, staging):
+    """`NON_ARTICLE_SOURCES`. `hn_scores` commits ~240 documents an hour and none of them
+    is ever an article, so counting them in `bronze_rows` would show a rising bronze count
+    against a flat article count forever — indistinguishable from a broken parser."""
+    now = utc_now()
+    _commit(
+        spark,
+        staging,
+        [
+            _scores_doc(1, fetched_at=now),
+            _doc(2, payload=_fixture("rss_tech", "feed.xml"), fetched_at=now),
+        ],
+    )
+
+    from signal_core.spark.jobs.normalize import normalize_window
+
+    result = normalize_window(spark, *_window(now))
+    assert result.bronze_rows == 1, "the hn_scores row should not be counted here at all"
+    assert result.articles_committed > 0
+
+
+def test_the_same_story_snapshotted_twice_is_two_rows(spark, staging):
+    """The whole point of the table, and the one place its MERGE key differs from its
+    siblings'. Deduping on `item_id` would keep one score per story and delete the slope."""
+    from signal_core.spark.jobs.normalize import normalize_hn_scores_window
+
+    now = utc_now()
+    later = now + timedelta(minutes=15)
+    _commit(spark, staging, [_scores_doc(1, fetched_at=now)])
+    _commit(spark, staging, [_scores_doc(2, fetched_at=later)])
+
+    normalize_hn_scores_window(spark, *_window(now))
+    normalize_hn_scores_window(spark, *_window(later))
+
+    rows = spark.table(SCORES_TABLE).collect()
+    assert len(rows) == 2, "two observations of one story are two rows"
+    assert {r.item_id for r in rows} == {"49350858"}
+    assert len({r.observed_at for r in rows}) == 2
+
+
+def test_hn_scores_window_replay_commits_nothing_new(spark, staging):
+    """SPEC §6.3: replay is deterministic. MERGE on `ingest_id`, which is unique per fetch."""
+    now = utc_now()
+    _commit(spark, staging, [_scores_doc(1, fetched_at=now)])
+    from signal_core.spark.jobs.normalize import normalize_hn_scores_window
+
+    first = normalize_hn_scores_window(spark, *_window(now))
+    replay = normalize_hn_scores_window(spark, *_window(now))
+    assert first.snapshots_committed == 1
+    assert replay.snapshots_committed == 0
+
+
+def test_a_comment_in_the_hn_scores_partition_yields_no_snapshot(spark, staging):
+    """Defensive: the top-stories list should never contain a comment, and if HN changes
+    what that list means, the parser warns and contributes nothing rather than recording
+    a scoreless row."""
+    now = utc_now()
+    _commit(spark, staging, [_scores_doc(1, "comment.json", fetched_at=now)])
+
+    from signal_core.spark.jobs.normalize import normalize_hn_scores_window
+
+    result = normalize_hn_scores_window(spark, *_window(now))
+    assert result.hn_scores_rows == 1
+    assert result.snapshots_committed == 0
 
 
 def test_article_id_stays_unique_across_reruns(spark, staging):

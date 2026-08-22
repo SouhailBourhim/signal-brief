@@ -6,11 +6,15 @@ Triggered by `BRONZE_COMMITTED` (`assets.py`), the Asset `ingest_monitor`'s
 3's Asset scheduling means a run of this DAG starts right after bronze actually changes,
 whether that is on the hour like `ingest_monitor`'s own schedule or not.
 
-Two independent tasks, not one: `spark/jobs/normalize.py`'s "two Spark passes, one
-schema each" decision (docs/runbooks/phase-2.md) means an article-parsing bug and a
-comment-parsing bug can't take each other down, and both read only the bronze
-partitions they need (`normalize_hn_comments_window` narrows to `source_id='hackernews'`
-before either task opens a Spark session).
+Three independent tasks, not one: `spark/jobs/normalize.py`'s "one Spark pass, one schema
+each" decision (docs/runbooks/phase-2.md) means an article-parsing bug, a comment-parsing
+bug and a score-parsing bug can't take each other down, and each reads only the bronze
+partitions it needs (`normalize_hn_comments_window` narrows to `source_id='hackernews'`,
+`normalize_hn_scores_window` to `'hn_scores'`) before opening a Spark session.
+
+The third arrived in Phase 4A with SPEC §7.4's velocity component. Note that the articles
+pass now *excludes* `hn_scores` rather than parsing them to nothing — see
+`normalize.NON_ARTICLE_SOURCES`.
 """
 
 from __future__ import annotations
@@ -74,8 +78,33 @@ def process_dag():
         finally:
             spark.stop()
 
+    @task
+    def normalize_hn_scores() -> dict[str, int]:
+        """bronze.raw_documents (hn_scores partitions only) -> silver.hn_score_snapshots.
+
+        Phase 4A, SPEC §7.4's velocity component. Third independent task for the same
+        reason there are two: one output schema per pass, and a failure here cannot take
+        the articles down. Same `window_bounds()` call as its siblings."""
+        from signal_core.ops.monitor import window_bounds
+        from signal_core.spark.jobs.normalize import normalize_hn_scores_window
+        from signal_core.spark.session import build_iceberg_session
+
+        window_start, window_end = window_bounds()
+        spark = build_iceberg_session("signal-normalize-hn-scores")
+        try:
+            result = normalize_hn_scores_window(spark, window_start, window_end)
+            return {
+                "hn_scores_rows": result.hn_scores_rows,
+                "snapshots_extracted": result.snapshots_extracted,
+                "snapshots_committed": result.snapshots_committed,
+                "table_rows": result.table_rows,
+            }
+        finally:
+            spark.stop()
+
     normalize_articles()
     normalize_hn_comments()
+    normalize_hn_scores()
 
 
 process_dag()

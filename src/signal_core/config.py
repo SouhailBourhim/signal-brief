@@ -229,6 +229,29 @@ SOURCES: dict[str, SourceConfig] = {
         rate_limit_per_sec=1.0,
         user_agent=settings.user_agent,
     ),
+    # Phase 4A — SPEC §7.4's velocity component. See sources/hn_scores.py for why this is a
+    # separate source rather than a mode of `hackernews`.
+    "hn_scores": SourceConfig(
+        source_id="hn_scores",
+        url="https://hacker-news.firebaseio.com/v0",
+        payload_format=PayloadFormat.JSON,
+        # WINDOW, not COMPLETE — the opposite of `hackernews`, from the same API. That
+        # source's horizon is COMPLETE because item ids are addressable forever; this one
+        # samples *the ranking*, which is a set that reshuffles and is gone once it has.
+        # A missed poll is a missing point on a slope and no later fetch recovers it.
+        backfill_horizon=BackfillHorizon.WINDOW,
+        freshness_sla_seconds=2700,  # 3x rate(15 minutes)
+        # One poll emits TOP_N documents, every poll, unconditionally — this source has no
+        # 304 and no "nothing new" state. Four polls an hour at TOP_N=60 is 240; a floor
+        # well under that catches a partially failing poll, not just a dead one.
+        min_docs_per_window=180,
+        # The ranked id list going static for an hour is a dead API. HN's front page turns
+        # over continuously — this is the same reasoning as `hackernews`'s 3600.
+        content_staleness_sla_seconds=3600,
+        rate_limit_per_sec=5.0,
+        timeout_seconds=5.0,
+        user_agent=settings.user_agent,
+    ),
 }
 
 # The deployed sources: everything with a Lambda, a schedule, and a state item. `fake` is

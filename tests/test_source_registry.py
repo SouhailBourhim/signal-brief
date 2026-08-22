@@ -15,6 +15,7 @@ be made in the README without a caveat.
 
 from __future__ import annotations
 
+import itertools
 import re
 from pathlib import Path
 
@@ -60,6 +61,28 @@ def _terraform_sources() -> dict[str, str]:
     return out
 
 
+def _cadence_seconds(expression: str) -> int | None:
+    """The longest gap between two consecutive fires, in seconds, or None if unparsed.
+
+    `rate(N minutes)` is the whole story for the Phase 1-2 sources. 4A's `hn_scores` is
+    scheduled with cron instead, because `rate(...)` gives no control over *phase* and that
+    source exists to not collide with the others (see the map's own comment). The longest
+    gap is the right reading for both: it is the interval an SLA has to survive, and for a
+    minute list it is what wraps across the hour boundary rather than what sits inside it.
+    """
+    minutes = re.fullmatch(r"rate\((\d+) minutes?\)", expression)
+    if minutes:
+        return int(minutes.group(1)) * 60
+
+    cron = re.fullmatch(r"cron\(([\d,]+) \*.*\)", expression)
+    if cron:
+        fires = sorted(int(m) for m in cron.group(1).split(","))
+        gaps = [b - a for a, b in itertools.pairwise(fires)]
+        gaps.append(fires[0] + 60 - fires[-1])  # wrapping into the next hour
+        return max(gaps) * 60
+    return None
+
+
 def test_every_configured_source_has_a_poller():
     """A source in SOURCES without a REGISTRY entry fails only when its Lambda runs."""
     assert set(SOURCES) == set(REGISTRY)
@@ -87,10 +110,48 @@ def test_fake_is_not_deployed():
     assert "fake" not in _terraform_sources()
 
 
-def test_phase_2_reaches_six_deployed_sources():
-    """SPEC §3: three in Phase 1, and Phase 2 takes it to six — the sixth being the one
-    §3's "adding source #6 must be a 30-minute job" is measured against."""
-    assert len(DEPLOYED_SOURCE_IDS) == 6
+def test_the_deployed_source_count_is_what_the_phases_claim():
+    """SPEC §3: three in Phase 1, six by Phase 2 — the sixth being the one §3's "adding
+    source #6 must be a 30-minute job" is measured against. Phase 4A adds `hn_scores` for
+    §7.4's velocity component, which SPEC §12 carried forward from Phase 2.
+
+    A literal, deliberately: this is the only assertion that notices a source being added
+    or dropped without anyone deciding to, and comparing the config against itself would
+    notice nothing."""
+    assert len(DEPLOYED_SOURCE_IDS) == 7
+
+
+def test_the_seventh_poller_does_not_collide_with_the_other_six():
+    """Why `hn_scores` is scheduled with cron. SPEC §3's map comment records that six
+    pollers fit under a new account's total concurrency limit of 10 only because they fit,
+    and that "source #7 is where it stops fitting". Source #7 exists now.
+
+    It fits by never firing at the same minute as anything else. `rate(N minutes)` cannot
+    express that — it has no phase — so this asserts the property the cron expression was
+    chosen for, rather than the expression itself, which is free to change as long as the
+    property holds."""
+    schedules = _terraform_sources()
+
+    def fires_in_hour(expression: str) -> set[int]:
+        rate = re.fullmatch(r"rate\((\d+) minutes?\)", expression)
+        if rate:
+            step = int(rate.group(1))
+            # `rate` has no guaranteed phase, so the conservative reading is that it can
+            # land on any multiple of its step — including 0.
+            return set(range(0, 60, step))
+        cron = re.fullmatch(r"cron\(([\d,]+) \*.*\)", expression)
+        assert cron, f"unhandled schedule expression {expression!r}"
+        return {int(m) for m in cron.group(1).split(",")}
+
+    hn_scores = fires_in_hour(schedules["hn_scores"])
+    for source_id, expression in schedules.items():
+        if source_id == "hn_scores":
+            continue
+        overlap = hn_scores & fires_in_hour(expression)
+        assert not overlap, (
+            f"hn_scores fires at the same minute as {source_id} ({sorted(overlap)}), "
+            "putting peak concurrency back to 7 — see the sources map comment"
+        )
 
 
 @pytest.mark.parametrize("source_id", sorted(DEPLOYED_SOURCE_IDS))
@@ -104,10 +165,9 @@ def test_freshness_sla_is_longer_than_the_poll_cadence(source_id: str):
     change. Phase 1's runbook records why this is a real mistake and not a theoretical one.
     """
     expression = _terraform_sources()[source_id]
-    minutes = re.fullmatch(r"rate\((\d+) minutes?\)", expression)
-    assert minutes, f"{source_id}: unhandled schedule expression {expression!r}"
+    cadence_seconds = _cadence_seconds(expression)
+    assert cadence_seconds, f"{source_id}: unhandled schedule expression {expression!r}"
 
-    cadence_seconds = int(minutes.group(1)) * 60
     assert SOURCES[source_id].freshness_sla_seconds >= 2 * cadence_seconds, (
         f"{source_id}: SLA {SOURCES[source_id].freshness_sla_seconds}s is too tight for a "
         f"{cadence_seconds}s cadence — it would report a healthy source as stale"

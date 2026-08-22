@@ -180,6 +180,15 @@ def normalize(spark: SparkSession, bronze_root: Path) -> DataFrame:
 ARTICLES_TABLE = "silver.articles"
 HN_COMMENTS_TABLE = "silver.hn_comments"
 PARSE_REJECTS_TABLE = "silver.parse_rejects"
+HN_SCORES_TABLE = "silver.hn_score_snapshots"
+
+# Sources whose documents are not articles and never become any. Excluded from the articles
+# pass rather than parsed and discarded: `_normalize_row` would return zero rows for each of
+# them anyway, but they would still be counted in `NormalizeResult.bronze_rows`, which is
+# reported. `hn_scores` alone commits ~240 documents an hour, so leaving it in would show a
+# rising bronze count against a flat article count — the exact shape of a broken parser,
+# permanently, in a metric SPEC §11 expects someone to read.
+NON_ARTICLE_SOURCES: tuple[str, ...] = ("hn_scores",)
 
 # Same properties as `commit_bronze.py`'s bronze table, for the same reason: payloads
 # and article bodies are whole documents, not tiny rows, so small-file fragmentation is
@@ -262,6 +271,24 @@ HN_COMMENTS_DDL = """
     deleted boolean
 """
 
+# One row per (story, observation). SPEC §7.4's velocity component needs a slope, and a
+# slope needs the same id measured more than once — which is the whole reason `hn_scores`
+# exists as a separate source (see sources/hn_scores.py).
+#
+# `observed_at` is the bronze row's `fetched_at`, not anything in the payload. HN's `time`
+# field is the *submission* time and never moves, so keying on it would give every snapshot
+# of a story an identical timestamp and a slope over a zero interval. The parser cannot see
+# `fetched_at`, so this pass supplies it — the one field here that comes from the envelope
+# rather than the document.
+HN_SCORES_DDL = """
+    item_id string NOT NULL,
+    score int NOT NULL,
+    descendants int,
+    title string,
+    observed_at timestamp NOT NULL,
+    ingest_id string NOT NULL
+"""
+
 # No payload column: bronze already has it, and copying it here would double storage of
 # the thing most likely to be large, for a table that exists to hold a reason string.
 PARSE_REJECTS_DDL = """
@@ -279,8 +306,9 @@ def ensure_tables(
     articles_table: str = ARTICLES_TABLE,
     comments_table: str = HN_COMMENTS_TABLE,
     rejects_table: str = PARSE_REJECTS_TABLE,
+    scores_table: str = HN_SCORES_TABLE,
 ) -> None:
-    """Create `silver`'s three tables if they aren't there yet."""
+    """Create `silver`'s four tables if they aren't there yet."""
     namespace = articles_table.rsplit(".", 1)[0]
     spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {namespace}")
     spark.sql(
@@ -295,7 +323,14 @@ def ensure_tables(
         f"CREATE TABLE IF NOT EXISTS {rejects_table} ({PARSE_REJECTS_DDL}) "
         f"USING iceberg {_TBLPROPERTIES}"
     )
-    for table in (articles_table, comments_table, rejects_table):
+    # Partitioned on observation time, not submission time: this table is read as "the last
+    # N hours of snapshots" by the ranker, and a story submitted last week still produces
+    # rows today.
+    spark.sql(
+        f"CREATE TABLE IF NOT EXISTS {scores_table} ({HN_SCORES_DDL}) "
+        f"USING iceberg PARTITIONED BY (days(observed_at)) {_TBLPROPERTIES}"
+    )
+    for table in (articles_table, comments_table, rejects_table, scores_table):
         for name, value in _ADDED_PROPERTIES:
             spark.sql(f"ALTER TABLE {table} SET TBLPROPERTIES ('{name}' = '{value}')")
 
@@ -307,6 +342,7 @@ def _bronze_window(
     *,
     table: str,
     source_id: str | None = None,
+    exclude_source_ids: tuple[str, ...] = (),
 ) -> DataFrame:
     """A window of bronze, filtered on **both** `ingest_date` and `fetched_at`.
 
@@ -326,6 +362,8 @@ def _bronze_window(
     )
     if source_id is not None:
         query = query.where(F.col("source_id") == source_id)
+    if exclude_source_ids:
+        query = query.where(~F.col("source_id").isin(list(exclude_source_ids)))
     return query
 
 
@@ -377,7 +415,9 @@ def normalize_window(
 
     ensure_tables(spark, articles_table=articles_table, rejects_table=rejects_table)
 
-    windowed = _bronze_window(spark, since, until, table=bronze_table)
+    windowed = _bronze_window(
+        spark, since, until, table=bronze_table, exclude_source_ids=NON_ARTICLE_SOURCES
+    )
     counts = _outcome_counts(windowed)
     bronze_rows = counts.get("ok", 0)
     skipped_rows = sum(n for outcome, n in counts.items() if outcome != "ok")
@@ -601,5 +641,103 @@ def normalize_hn_comments_window(
         hackernews_rows=hackernews_rows,
         comments_extracted=comments_extracted,
         comments_committed=after - before,
+        table_rows=after,
+    )
+
+
+# --------------------------------------------------------------------------------------
+# Third pass: `hn_scores` bronze partitions -> `silver.hn_score_snapshots`. SPEC §7.4.
+# --------------------------------------------------------------------------------------
+
+HN_SCORES_COLUMNS = ["item_id", "score", "descendants", "title", "observed_at", "ingest_id"]
+
+HN_SCORES_ROW_SCHEMA = """
+    item_id string, score int, descendants int, title string,
+    observed_at timestamp, ingest_id string
+"""
+
+
+def _extract_scores_row(row: dict) -> list[dict]:
+    result = get_parser("hn_scores")(row["payload"])
+    return [
+        {
+            "item_id": s.item_id,
+            "score": s.score,
+            "descendants": s.descendants,
+            "title": s.title,
+            # The envelope's timestamp, not the payload's. See `HN_SCORES_DDL`.
+            "observed_at": row["fetched_at"],
+            "ingest_id": row.get("ingest_id", ""),
+        }
+        for s in result.score_snapshots
+    ]
+
+
+def _extract_scores_partitions(iterator):
+    import pandas as pd
+
+    for pdf in iterator:
+        rows = [row for record in pdf.to_dict("records") for row in _extract_scores_row(record)]
+        yield pd.DataFrame(rows, columns=HN_SCORES_COLUMNS)
+
+
+@dataclass(frozen=True)
+class HnScoresResult:
+    hn_scores_rows: int
+    snapshots_extracted: int
+    snapshots_committed: int
+    table_rows: int
+
+
+def normalize_hn_scores_window(
+    spark: SparkSession,
+    since: datetime,
+    until: datetime,
+    *,
+    bronze_table: str = BRONZE_TABLE,
+    scores_table: str = HN_SCORES_TABLE,
+) -> HnScoresResult:
+    """Bronze window, `hn_scores` partitions only -> `silver.hn_score_snapshots`, MERGEd.
+
+    A third pass, for the same reason the comments pass is a second one: bronze partitions
+    by `source_id`, so this reads only what it needs and keeps one output schema.
+
+    **MERGEd on `ingest_id`, not on `item_id`.** The other two passes dedupe on the
+    document's own id because a document is a thing that exists once. A snapshot is a
+    *measurement*, and the same story measured an hour later is a new row, not a duplicate
+    of the old one — deduping on `item_id` here would keep exactly one score per story and
+    delete the slope this table exists to provide. `ingest_id` is unique per fetch, so
+    replaying a committed window still inserts nothing (SPEC §6.3).
+    """
+    from pyspark.sql import functions as F
+
+    ensure_tables(spark, scores_table=scores_table)
+
+    windowed = _bronze_window(spark, since, until, table=bronze_table, source_id="hn_scores")
+    hn_scores_rows = _outcome_counts(windowed).get("ok", 0)
+
+    extracted = windowed.where(F.col("outcome") == "ok").mapInPandas(
+        _extract_scores_partitions, schema=HN_SCORES_ROW_SCHEMA
+    )
+    extracted = extracted.dropDuplicates(["ingest_id"])
+    snapshots_extracted = extracted.count()
+
+    extracted = extracted.select(*HN_SCORES_COLUMNS)
+    extracted.createOrReplaceTempView("_new_score_snapshots")
+    before = spark.table(scores_table).count()
+    spark.sql(
+        f"""
+        MERGE INTO {scores_table} AS target
+        USING _new_score_snapshots AS source
+        ON target.ingest_id = source.ingest_id
+        WHEN NOT MATCHED THEN INSERT *
+        """
+    )
+    after = spark.table(scores_table).count()
+
+    return HnScoresResult(
+        hn_scores_rows=hn_scores_rows,
+        snapshots_extracted=snapshots_extracted,
+        snapshots_committed=after - before,
         table_rows=after,
     )
