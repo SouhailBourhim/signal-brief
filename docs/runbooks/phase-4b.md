@@ -221,3 +221,83 @@ is the whole reason §12 words that clause differently from the other two.
 
 Each stage replays into a **shadow table** under the `repro` namespace. Re-running into the
 live tables would make the test pass by overwriting the thing it was meant to check.
+
+## What broke on first real use
+
+### `make clean` silently stopped ingestion for ten hours
+
+Found 2026-08-23 while checking a failing DAG, not by any alarm — which is the part that
+matters.
+
+**Symptom.** `ingest_monitor` succeeded at 14:05 UTC on 2026-08-22 and failed on every run
+after it. `commit_staged` died in ~4 seconds with:
+
+    FileNotFoundError: [Errno 2] No such file or directory: '/opt/signal/.cache/staging'
+
+from `staging.sync_staging`, inside a `Path.mkdir(parents=True)` that was recursing all the
+way up and still failing.
+
+**Cause.** `make clean` deletes `.cache`, and `.cache` is bind-mounted into all three Airflow
+containers (`docker-compose.yml`). Deleting the host directory while the containers are up
+breaks the mount **at the inode level**: the container's view survives as a directory with
+**link count 0**, and every `mkdir` inside it fails with ENOENT.
+
+    # inside the container, after `make clean` on the host
+    drwxr-xr-x 0 default 1000 0 Aug 22 15:50 /opt/signal/.cache
+    #          ^ link count 0 — the inode is gone
+
+Recreating the directory on the host does **not** fix a running container. The mount has to be
+re-established, which means recreating the containers.
+
+**The Makefile already knew.** The `clean` target carried a comment saying exactly this,
+including the recovery command, from 2.E. A comment is not a guard, and the failure it
+describes is invisible: nothing alerts on a local Airflow DAG failing, so ten consecutive
+failures produced no signal anywhere.
+
+**Fixed properly rather than re-documented.** `make clean` now checks whether the Airflow
+containers are running and skips `.cache` if they are, saying why; `make clean-cache` does the
+destructive version and recreates the containers so the mount survives.
+
+**What it cost, and what it did not.** Ingestion itself never stopped — the pollers are Lambdas
+on EventBridge and kept staging to S3 throughout. What stopped was the *commit* into
+`bronze.raw_documents`, so 1,738 staged objects (22.3 MB) accumulated and were merged in one
+catch-up run. **No data was lost**, which is Phase 1's replay guarantee doing exactly its job:
+staging is a queue, the MERGE is on `ingest_id`, and re-reading an already-committed interval
+inserts nothing. The only real cost was re-downloading 22 MB of staged objects (~$0.002),
+because `make clean` had also wiped the local read-once cache that normally makes a re-sync
+free.
+
+### The same command left a directory nobody could delete
+
+`airflow/dags/__pycache__` was owned by uid **50000** — the airflow image's default user —
+with group root and mode 775. The host user (uid 1000) could neither write to it nor delete
+what was inside, so `make clean` exited non-zero on every single run. 4A's runbook noted this
+as a papercut and left it.
+
+The cause is that the DAGs folder is a bind mount, so bytecode written by the container lands
+in the repo owned by a uid the host does not control. Fixed at the source:
+`PYTHONDONTWRITEBYTECODE: "1"` in the shared Airflow environment, so the directory is never
+created. The Lambda package has set this for its own reasons since Phase 1.
+
+### Four DAGs had never run, because Airflow pauses new DAGs by default
+
+The larger finding, and it is not a 4B one — it is about 4A.
+
+| DAG | Added | State | Runs |
+|---|---|---|---|
+| `brief` | 4A | **paused** | **none** |
+| `market` | 4A | **paused** | **none** |
+| `maintenance` | 4A | **paused** | **none** |
+| `resolve` | 3.C | **paused** | **none** |
+| `ingest_monitor`, `process`, `cluster` | 1-3 | active | running |
+
+Airflow pauses a newly-discovered DAG unless `AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION` says
+otherwise, and this stack does not set it. So **4A's local half was built, merged, deployed and
+never executed.** The AWS half — nine Lambdas on EventBridge — has been running the whole time,
+which is exactly why nothing looked wrong: bronze kept filling, the brief kept being
+buildable by hand, and the one thing SPEC §12's 4A acceptance actually turns on (a mail at
+07:00) had never happened once.
+
+**This is why the acceptance is a behavioural test rather than a green build.** Every unit test
+passes, `make skeleton` passes, the Terraform applied cleanly, and the phase was still not
+running. Only asking "has it sent a brief yet" finds that.

@@ -19,6 +19,21 @@ x-airflow-common: &airflow-common
   environment: &airflow-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    # Airflow pauses a newly-discovered DAG by default, and that default cost 4A its entire
+    # acceptance: `brief`, `market` and `maintenance` were built, merged, deployed and never
+    # ran once, because nobody unpaused them. Nothing surfaced it — the AWS half kept
+    # ingesting, bronze kept filling, and the one thing SPEC §12's 4A gate turns on (a mail
+    # at 07:00) had simply never happened. See docs/runbooks/phase-4b.md.
+    #
+    # The trade is real and it goes the other way for a half-written DAG: the dag-processor
+    # picks up file changes within seconds, so a DAG now starts running as soon as it is
+    # saved. That is the lesser failure — a run that fails loudly beats a phase that quietly
+    # was never running, and `catchup=False` on every DAG here bounds what a premature start
+    # can do to one interval.
+    #
+    # Note this only affects DAGs discovered *after* it is set. Anything already in the
+    # metadata DB keeps whatever paused state it has.
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
     # Airflow 3 runs tasks against the Task Execution API rather than in-process, and the
@@ -30,6 +45,12 @@ x-airflow-common: &airflow-common
     # invents its own and the workers are rejected. Local-only stack, hence a default.
     AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-signal-local-dev}
     PYTHONPATH: /opt/signal/src
+    # The DAGs folder is a bind mount from the host, so bytecode written there is written
+    # into the repo — by a container uid the host user does not own. `airflow/dags/__pycache__`
+    # ended up owned by uid 50000, which made `make clean` exit non-zero on every run and
+    # left a directory nobody could delete without root. The Lambda package already sets
+    # this for its own reasons; the DAGs folder needs it for this one.
+    PYTHONDONTWRITEBYTECODE: "1"
     # Ollama is on the host, not in this network.
     SIGNAL_OLLAMA_URL: ${SIGNAL_OLLAMA_URL:-http://host.docker.internal:11434}
 
