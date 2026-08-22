@@ -42,10 +42,20 @@ def maintenance_dag():
             result = maintain(spark)
             for table in result.tables:
                 note = f" ERROR {table.error}" if table.error else ""
+                if table.skipped:
+                    note += f" SKIPPED {table.skipped}"
                 print(
                     f"{table.table}: {table.files_before} -> {table.files_after} files "
                     f"(delta {table.delta}, {table.rewritten_bytes:,} bytes rewritten){note}"
                 )
+
+            if result.skipped:
+                # Printed, never raised. Orphan removal is unavailable against the deployed
+                # S3 warehouse by a documented decision (`maintain._NO_HADOOP_FS`), so
+                # failing here would mean a red DAG every night for a known limitation —
+                # and a task that is always red is one nobody reads. It stays visible in
+                # `ops.maintenance_runs` and in this line.
+                print(f"skipped on {len(result.skipped)} tables: {result.tables[0].skipped}")
 
             if result.failed:
                 # Loud rather than logged. A maintenance job that quietly stops working

@@ -161,6 +161,33 @@ def test_rerunning_the_same_run_id_updates_rather_than_duplicating(spark):
     assert spark.table(RECORD_TABLE).count() == 1
 
 
+def test_a_record_table_created_before_a_column_existed_gains_it(spark):
+    """3.D's defect, caught here on this table's own second real run.
+
+    `CREATE TABLE IF NOT EXISTS` is a no-op against a live table, so a column added to the
+    DDL never reaches a deployed one. The first sweep against the real lake created
+    `ops.maintenance_runs` with eleven columns; `skipped` was added afterwards; reading it
+    back failed against the deployed table while every test still passed — because the tests
+    always created the table fresh, from the current DDL.
+
+    This one does not: it creates the *old* shape first, the way a deployed table already
+    exists, and asserts `ensure_table` migrates it.
+    """
+    from signal_core.spark.jobs.maintain import MAINTENANCE_DDL, ensure_table
+
+    older_ddl = "\n".join(
+        line for line in MAINTENANCE_DDL.strip().splitlines() if "skipped" not in line
+    ).rstrip(",")
+    spark.sql("CREATE NAMESPACE IF NOT EXISTS ops")
+    spark.sql(f"CREATE TABLE {RECORD_TABLE} ({older_ddl}) USING iceberg")
+    assert "skipped" not in {f.name for f in spark.table(RECORD_TABLE).schema.fields}
+
+    added = ensure_table(spark)
+
+    assert added == ["skipped"], "the missing column should be added and reported"
+    assert "skipped" in {f.name for f in spark.table(RECORD_TABLE).schema.fields}
+
+
 def test_every_maintained_table_is_one_the_pipeline_actually_writes(spark):
     """A hardcoded list is the thing a reviewer can check; this asserts it has not drifted
     from the DDL constants the jobs use."""

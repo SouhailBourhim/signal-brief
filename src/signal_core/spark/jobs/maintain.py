@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
+from signal_core.spark.tables import ensure_columns
 from signal_core.timeutil import utc_now
 
 if TYPE_CHECKING:
@@ -72,13 +73,14 @@ MAINTENANCE_DDL = """
     rewritten_bytes bigint,
     deleted_manifests int,
     orphans_removed int,
-    error string
+    error string,
+    skipped string
 """
 
 MAINTENANCE_SCHEMA = """
     run_id string, table_name string, run_date date, files_before int, files_after int,
     rewritten_files int, added_files int, rewritten_bytes bigint, deleted_manifests int,
-    orphans_removed int, error string
+    orphans_removed int, error string, skipped string
 """
 
 # How much history to keep. Seven days of snapshots is enough to answer "what did this table
@@ -89,6 +91,31 @@ SNAPSHOT_RETENTION_DAYS = 7
 ORPHAN_RETENTION_DAYS = 7
 # Iceberg's default. Below this, compaction is not worth the rewrite.
 MIN_INPUT_FILES = 5
+
+# `remove_orphan_files` is the one procedure here that does not go through Iceberg's own
+# `S3FileIO`. Finding files no snapshot references means *listing the table's directory*, and
+# that goes through Hadoop's `FileSystem` API — which has no handler for `s3://` (only
+# `s3a://`), and in this session has no S3 handler at all: `spark/session.py` ships
+# `iceberg-aws-bundle`, which is Iceberg's AWS integration, not Hadoop's `hadoop-aws`.
+# Verified against the deployed warehouse on 2026-08-22: `S3AFileSystem` is absent from the
+# classpath, and every table failed with
+# `UnsupportedFileSystemException: No FileSystem for scheme "s3"`.
+#
+# **Adding `hadoop-aws` is not obviously the right trade.** It pulls an AWS SDK that has to
+# agree with the one in `iceberg-aws-bundle`, which is exactly the jar-version class of
+# failure ADR-0006 exists to prevent — and it would buy the reclamation of files left by
+# interrupted writes on a lake whose storage sits inside the free tier. Compaction and
+# snapshot expiry, the two operations that actually govern query cost and storage growth,
+# both work.
+#
+# So this is recorded as a **skip**, not an error: the nightly DAG stays green on a known
+# and documented limitation rather than failing every night, while `ops.maintenance_runs`
+# still carries the reason per table. If `hadoop-aws` ever lands for another reason, this
+# starts working with no change here — the detection is on the behaviour, not on the config.
+_NO_HADOOP_FS = (
+    "No FileSystem for scheme",
+    "UnsupportedFileSystemException",
+)
 
 
 @dataclass(frozen=True)
@@ -102,6 +129,7 @@ class TableMaintenance:
     deleted_manifests: int = 0
     orphans_removed: int = 0
     error: str | None = None
+    skipped: str | None = None
 
     @property
     def delta(self) -> int:
@@ -129,8 +157,28 @@ class MaintenanceResult:
     def failed(self) -> list[str]:
         return [t.table for t in self.tables if t.error]
 
+    @property
+    def skipped(self) -> list[str]:
+        """Operations that could not run for a known, recorded reason — distinct from
+        `failed`, which is a fault. Reported so a permanent skip stays visible rather than
+        becoming invisible by being green (SPEC §11)."""
+        return [t.table for t in self.tables if t.skipped]
 
-def ensure_table(spark: SparkSession, table: str = MAINTENANCE_TABLE) -> None:
+
+def ensure_table(spark: SparkSession, table: str = MAINTENANCE_TABLE) -> list[str]:
+    """Create the record table, and add any column it is missing. Returns what was added.
+
+    The `ensure_columns` call is not decoration. `CREATE TABLE IF NOT EXISTS` is a no-op
+    against a live table, so a column added to `MAINTENANCE_DDL` never reaches a deployed
+    one — and this table caught that on its own second run: the first real sweep created it
+    with eleven columns, `skipped` was added an hour later, and reading the new column back
+    failed against the deployed table while every test passed.
+
+    That is 3.D's finding exactly (*a deployed table two columns behind its own DDL,
+    discovered only when the brief failed reading them*), recurring in the table written to
+    record maintenance. Returned rather than logged for the reason `spark/tables.py` gives:
+    a schema that just changed under a running pipeline is something a person should see.
+    """
     namespace = table.rsplit(".", 1)[0]
     spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {namespace}")
     spark.sql(
@@ -141,6 +189,7 @@ def ensure_table(spark: SparkSession, table: str = MAINTENANCE_TABLE) -> None:
         TBLPROPERTIES ('format-version' = '2')
         """
     )
+    return ensure_columns(spark, table, MAINTENANCE_DDL)
 
 
 def _catalog_of(spark: SparkSession) -> str:
@@ -192,7 +241,11 @@ def maintain_table(
 
     rewritten = added = rewritten_bytes = deleted_manifests = orphans = 0
     error: str | None = None
+    skipped: str | None = None
 
+    # Three separate attempts, not one block. They are independent operations and the third
+    # is known-unavailable on the deployed warehouse (see `_NO_HADOOP_FS`), so sharing a
+    # `try` would let a documented limitation discard two successful results.
     try:
         row = spark.sql(
             f"CALL {catalog}.system.rewrite_data_files("
@@ -202,7 +255,10 @@ def maintain_table(
         rewritten = row["rewritten_data_files_count"]
         added = row["added_data_files_count"]
         rewritten_bytes = row["rewritten_bytes_count"]
+    except Exception as exc:
+        error = f"rewrite_data_files: {type(exc).__name__}: {exc}"[:500]
 
+    try:
         expire_before = (now - timedelta(days=SNAPSHOT_RETENTION_DAYS)).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
@@ -213,7 +269,10 @@ def maintain_table(
             f"retain_last => 5)"
         ).collect()[0]
         deleted_manifests = expired["deleted_manifest_lists_count"]
+    except Exception as exc:
+        error = error or f"expire_snapshots: {type(exc).__name__}: {exc}"[:500]
 
+    try:
         orphan_before = (now - timedelta(days=ORPHAN_RETENTION_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
         orphan_rows = spark.sql(
             f"CALL {catalog}.system.remove_orphan_files("
@@ -222,7 +281,12 @@ def maintain_table(
         ).collect()
         orphans = len(orphan_rows)
     except Exception as exc:
-        error = f"{type(exc).__name__}: {exc}"[:500]
+        message = str(exc)
+        if any(marker in message for marker in _NO_HADOOP_FS):
+            # Recorded as a skip, not a failure. See `_NO_HADOOP_FS`.
+            skipped = "remove_orphan_files: no Hadoop filesystem for the warehouse scheme"
+        else:
+            error = error or f"remove_orphan_files: {type(exc).__name__}: {exc}"[:500]
 
     try:
         after = _file_count(spark, table)
@@ -240,6 +304,7 @@ def maintain_table(
         deleted_manifests=deleted_manifests,
         orphans_removed=orphans,
         error=error,
+        skipped=skipped,
     )
 
 
@@ -280,6 +345,7 @@ def maintain(
                 r.deleted_manifests,
                 r.orphans_removed,
                 r.error,
+                r.skipped,
             )
             for r in results
         ]

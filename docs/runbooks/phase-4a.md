@@ -537,22 +537,92 @@ CLAUDE.md makes for them), `make lambda-package` (11 MB), `make tf-validate`.
 **The acceptance test itself is not done, and cannot be rushed.** It asks for three mornings
 read with marks recorded, plus a measured compaction delta. That is calendar time:
 
-- [ ] Apply Terraform, then **verify the SES identity by hand** —
-      `aws sesv2 get-email-identity --email-identity <address> --query VerifiedForSendingStatus`.
-      Nothing sends until this returns `true`, and Terraform cannot tell the difference.
-- [ ] Run `maintenance` once against the real lake and record the before/after file counts
-      here. This satisfies "compaction delta measured" independently of the three-day clock,
-      so it can happen first.
+- [x] **Applied 2026-08-22.** 15 added, 7 changed, 0 destroyed — the seven changes being the
+      six existing pollers picking up the new artifact (they ship from one zip) plus the
+      scheduler role gaining invoke rights on the two new functions.
+- [x] **SES identity verified**, `VerifiedForSendingStatus: true`, and a real brief sent
+      end-to-end through `send_brief_file` (MessageId `010001a02a3ea271-…`).
+- [x] **Both new pollers invoked live against their real endpoints** — the check that caught
+      EDGAR's 403 in Phase 1 and Stooq's browser challenge in 4A.D:
+      `hn_scores` returned 60 documents (`TOP_N` exactly), `market` returned 18 — which is
+      the count of *uppercase* watchlist entries, `openai` and `anthropic` correctly not
+      fetched. Zero errors on both.
+- [x] **Compaction delta measured** — see below.
 - [ ] Three consecutive mornings: confirm the 07:00 mail arrived, run
       `signal feedback <cluster_id> up|down` on at least one item, and log what the read
       surfaced in the daily-read table below — the format `phase-3.md` used, because that
       table is what SPEC §1's behavioural claim actually rests on.
 
+### The compaction delta, measured 2026-08-22
+
+SPEC §12's 4A acceptance asks for a number from a real run. First sweep against the deployed
+lake:
+
+| Table | Files before | after | delta |
+|---|---|---|---|
+| `bronze.raw_documents` | 140 | 43 | **97** |
+| `ops.pipeline_costs` | 33 | 1 | 32 |
+| `silver.dim_entities` | 32 | 1 | 31 |
+| `ops.source_health` | 32 | 1 | 31 |
+| `silver.articles` | 25 | 10 | 15 |
+| `silver.parse_rejects` | 18 | 1 | 17 |
+| `silver.hn_comments` | 20 | 12 | 8 |
+| others (clusters, mentions) | 10 | 10 | 0 |
+| **total** | **310** | **79** | **231** |
+
+**231 files removed, 74% of them.** ~13.4 MB rewritten. The shape is what the writers
+predict: `ops.pipeline_costs` and `ops.source_health` commit one tiny row per DAG run and
+compacted 32:1, while the cluster tables — written with `overwritePartitions` — were already
+compact and moved 0.
+
+The second sweep moved nothing, which is the better proof: compaction is idempotent, so the
+nightly job converges rather than churning.
+
+### What broke on first real use
+
+Two, and both only against the deployed warehouse.
+
+**1. `remove_orphan_files` cannot run on S3, and every table reported it as a failure.**
+The first sweep errored on all eleven tables with
+`UnsupportedFileSystemException: No FileSystem for scheme "s3"` — *after* compaction had
+already succeeded, so the delta above is real and the errors were about a later step.
+
+The cause is that this is the one procedure that does not go through Iceberg's `S3FileIO`.
+Finding unreferenced files means listing the table's directory, which goes through Hadoop's
+`FileSystem` API — and `spark/session.py` ships `iceberg-aws-bundle` (Iceberg's AWS
+integration), not `hadoop-aws`. Checked rather than assumed:
+`Class.forName("org.apache.hadoop.fs.s3a.S3AFileSystem")` throws. There is no Hadoop S3
+filesystem on the classpath at all.
+
+**Adding `hadoop-aws` was rejected.** It brings an AWS SDK that has to agree with the one in
+`iceberg-aws-bundle` — precisely the jar-version failure class ADR-0006 exists to prevent —
+and it would buy the reclamation of files left by interrupted writes, on a lake whose storage
+is inside the free tier. Compaction and snapshot expiry, which are what actually govern query
+cost and storage growth, both work.
+
+So it is recorded as a **skip**, not an error, per table in `ops.maintenance_runs`. A nightly
+DAG that goes red for a known and documented limitation is one nobody reads (SPEC §11). The
+detection is on the behaviour rather than on the warehouse URI, so if `hadoop-aws` ever lands
+for another reason this starts working with no change.
+
+**2. 3.D's defect recurred, in the table written to record maintenance.** The first sweep
+created `ops.maintenance_runs` with eleven columns. `skipped` was added an hour later while
+fixing finding 1. Reading it back against the deployed table then failed —
+**while every test passed**, because the tests always created the table fresh from the
+current DDL.
+
+This is exactly 3.D's *"a deployed table two columns behind its own DDL, discovered only when
+the brief failed reading them"*, and the irony is that 4A.H had already added `ensure_columns`
+to `normalize.ensure_tables` for this reason and I did not apply it to the new table.
+`maintain.ensure_table` now calls it and returns what it added, and
+`test_a_record_table_created_before_a_column_existed_gains_it` creates the *old* shape first
+rather than the current one — which is the only way a test can see this class of bug at all.
+
 ### The daily read
 
 | Date | Read | What it showed |
 |---|---|---|
-| *(pending)* | | |
+| *(pending — starts with the first 07:00 send)* | | |
 
 ### One environment papercut found while verifying
 
