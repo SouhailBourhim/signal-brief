@@ -33,7 +33,7 @@ from datetime import datetime
 from typing import Any
 
 from signal_core.config import Settings
-from signal_core.ops.athena import run_query, sql_string
+from signal_core.ops.athena import create_iceberg_table, run_query, sql_string
 from signal_core.timeutil import brief_date, utc_now
 
 settings = Settings()
@@ -42,15 +42,26 @@ BRIEF_ITEMS_TABLE = "gold.brief_items"
 
 # `score_components` is a map so the explanation survives a weight change: storing the
 # weighted total per component would bake today's `WEIGHTS` into a row that outlives them.
+#
+# **`map<varchar, double>`, with angle brackets, not `map(varchar, double)`.** Athena's
+# `CREATE TABLE` takes Hive-style type syntax; the parenthesised form is Trino's *expression*
+# type syntax and is only valid in a `SELECT`/`INSERT`. Athena rejects the wrong one with
+# `no viable alternative at input`, which names neither the column nor the reason.
+#
+# This shipped broken in 4A and was found on 2026-08-23 by running the brief against the real
+# account. Nothing caught it: the tests inject a fake Athena client that records SQL without
+# parsing it, and the `brief` DAG that would have executed it had been paused since it was
+# written. `gold.brief_items` therefore never existed, and 4A's feedback loop — the thing its
+# acceptance turns on — had never once worked.
 BRIEF_ITEMS_DDL = """
     brief_date date,
-    rank integer,
-    cluster_id varchar,
-    title varchar,
+    rank int,
+    cluster_id string,
+    title string,
     score double,
-    score_components map(varchar, double),
+    score_components map<string, double>,
     included boolean,
-    user_feedback varchar,
+    user_feedback string,
     created_at timestamp
 """
 
@@ -73,16 +84,10 @@ def ensure_table(
     """Idempotent, and run on every build — the same posture `spark/jobs`' `ensure_table`
     functions take, for the same reason: the first brief in a fresh environment should not
     need a separate setup step."""
-    namespace = table.rsplit(".", 1)[0]
-    run_query(
-        f"CREATE SCHEMA IF NOT EXISTS {namespace}",
-        database=database or settings.athena_database,
-        workgroup=workgroup or settings.athena_workgroup,
-        client=client,
-    )
-    run_query(
-        f"CREATE TABLE IF NOT EXISTS {table} ({BRIEF_ITEMS_DDL}) "
-        "WITH (table_type = 'ICEBERG', format = 'PARQUET')",
+    create_iceberg_table(
+        table,
+        BRIEF_ITEMS_DDL,
+        warehouse=settings.iceberg_warehouse,
         database=database or settings.athena_database,
         workgroup=workgroup or settings.athena_workgroup,
         client=client,

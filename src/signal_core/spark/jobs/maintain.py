@@ -224,6 +224,40 @@ def _table_exists(spark: SparkSession, table: str) -> bool:
         return False
 
 
+# Athena and Spark disagree about this property, and the disagreement is fatal to compaction.
+#
+# Athena stamps every Iceberg table it creates with `write.object-storage.enabled=true` and
+# `write.object-storage.path=...`. The Iceberg runtime this project pins (ADR-0006) has
+# deprecated the second name in favour of `write.data.path` and **raises** on it rather than
+# warning: `rewrite_data_files` dies with
+# `IllegalArgumentException: Property 'write.object-storage.path' has been deprecated`.
+#
+# It cannot be fixed where it is created. Athena rejects the key in `CREATE TABLE`
+# (`Unsupported table property key`) *and* in `ALTER TABLE ... UNSET`
+# (`not supported by Athena`) — both verified against the deployed account on 2026-08-23. So
+# the only side that can fix it is the side that trips on it.
+#
+# Dropping it costs nothing here: object-storage layout exists to spread S3 keys across
+# prefixes and avoid request-rate hotspots on very large tables, and these are gold marts with
+# tens of rows. What it buys is a nightly sweep that does not go permanently red.
+_DEPRECATED_LAYOUT_PROPERTIES = ("write.object-storage.path", "write.object-storage.enabled")
+
+
+def _drop_deprecated_object_storage(spark: SparkSession, table: str) -> bool:
+    """Remove Athena's object-storage properties if present. Returns whether it changed
+    anything. Never raises — a table this cannot be applied to will fail loudly at the
+    rewrite instead, which is a more informative place for it to surface."""
+    try:
+        properties = {row[0] for row in spark.sql(f"SHOW TBLPROPERTIES {table}").collect()}
+        if not properties & set(_DEPRECATED_LAYOUT_PROPERTIES):
+            return False
+        names = ", ".join(f"'{p}'" for p in _DEPRECATED_LAYOUT_PROPERTIES)
+        spark.sql(f"ALTER TABLE {table} UNSET TBLPROPERTIES ({names})")
+        return True
+    except Exception:
+        return False
+
+
 def maintain_table(
     spark: SparkSession,
     table: str,
@@ -248,6 +282,8 @@ def maintain_table(
         before = _file_count(spark, table)
     except Exception as exc:
         return TableMaintenance(table=table, error=f"unreadable: {exc}"[:500])
+
+    _drop_deprecated_object_storage(spark, table)
 
     rewritten = added = rewritten_bytes = deleted_manifests = orphans = 0
     error: str | None = None

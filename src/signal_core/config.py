@@ -341,9 +341,27 @@ SOURCES: dict[str, SourceConfig] = {
     ),
 }
 
+# Registered in code, with a Terraform entry, but **not yet applied to the account**. A
+# source lands here for the window between the commit that adds it and the `terraform apply`
+# that creates its Lambda.
+#
+# This is not hypothetical: adding `macro` to `SOURCES` immediately made `ingest_monitor`
+# assess it, and it failed the DAG every hour with `never_succeeded` for a function that did
+# not exist yet (docs/runbooks/phase-4b.md). That is the monitor telling the truth — a
+# configured source producing nothing *is* the failure `never_succeeded` exists to catch —
+# but an hourly red run for a known, deliberate, not-yet-deployed state is the
+# alarm-nobody-reads failure SPEC §11 keeps warning about, and it would mask a real outage
+# in one of the other eight.
+#
+# **Remove an entry here in the same change that applies its Terraform.**
+# `test_a_pending_source_is_really_pending` stops this becoming a place things rot.
+NOT_YET_DEPLOYED: frozenset[str] = frozenset({"macro"})
+
 # The deployed sources: everything with a Lambda, a schedule, and a state item. `fake` is
 # the Phase 0 fixture source and has none of those, so assessing it would report a
-# permanent outage for something that was never running. Derived rather than listed,
-# because a hardcoded copy in the DAG is exactly how SPEC §3's 30-minute claim quietly
-# stops being true.
-DEPLOYED_SOURCE_IDS: tuple[str, ...] = tuple(s for s in SOURCES if s != "fake")
+# permanent outage for something that was never running — the same reason `NOT_YET_DEPLOYED`
+# exists. Derived rather than listed, because a hardcoded copy in the DAG is exactly how
+# SPEC §3's 30-minute claim quietly stops being true.
+DEPLOYED_SOURCE_IDS: tuple[str, ...] = tuple(
+    s for s in SOURCES if s != "fake" and s not in NOT_YET_DEPLOYED
+)

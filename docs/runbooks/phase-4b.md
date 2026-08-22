@@ -301,3 +301,167 @@ buildable by hand, and the one thing SPEC §12's 4A acceptance actually turns on
 **This is why the acceptance is a behavioural test rather than a green build.** Every unit test
 passes, `make skeleton` passes, the Terraform applied cleanly, and the phase was still not
 running. Only asking "has it sent a brief yet" finds that.
+
+### Registering source #9 turned the ingestion DAG red, correctly
+
+Caught minutes after fixing the mount, by re-running the DAG rather than assuming the fix was
+the whole story.
+
+`commit_staged` succeeded — 1,738 staged objects merged, the ten-hour gap closed. Then
+`raise_on_degraded` failed with exactly one degraded source:
+
+    degraded sources: [{'docs': 0, 'status': 'never_succeeded', 'source_id': 'macro', ...}]
+
+**The monitor was right.** `DEPLOYED_SOURCE_IDS` is derived from `config.SOURCES`, so adding
+`macro` immediately made `ingest_monitor` assess a source whose Lambda does not exist yet —
+`terraform apply` has not been run for it. A configured source producing nothing *is* the
+failure `never_succeeded` exists to catch.
+
+But an hourly red run for a known, deliberate, not-yet-deployed state is the
+alarm-nobody-reads failure §11 keeps warning about, and worse: it would mask a real outage in
+any of the other eight, since `raise_on_degraded` fails on the aggregate.
+
+So there is now a `NOT_YET_DEPLOYED` set in `config.py` for the window between the commit that
+adds a source and the apply that creates it. `fake` was already excluded by name for precisely
+this reason — "assessing it would report a permanent outage for something that was never
+running" — so this generalizes an argument the config already made.
+
+Two tests keep it from rotting, in both directions:
+
+- `test_a_pending_source_is_really_pending` — every entry must be a real source with a real
+  Terraform entry, or the set is a typo silently excluding something from monitoring.
+- `test_nothing_deployed_is_silently_unmonitored` — every source with a Terraform entry is
+  either monitored or explicitly pending. Anything else is a deployed source nothing watches.
+
+**Remove `macro` from `NOT_YET_DEPLOYED` in the same change that applies its Terraform.**
+
+### `gold.brief_items` had never existed, and 4A's acceptance turned on it
+
+The sharpest finding of the session, and it is 4A's, not 4B's. Found by running
+`signal brief` against the real account for the first time — which nothing had done, because
+the `brief` DAG was paused.
+
+`information_schema` said it plainly: **the `gold` schema held zero tables.** The feedback
+loop SPEC §12's 4A acceptance is built on — "you read it three mornings running and the
+feedback loop records your marks" — had never once worked.
+
+The DDL was wrong in three independent ways, each of which Athena rejects with a message that
+names neither the column nor the table:
+
+| Wrong | Right | Athena's complaint |
+|---|---|---|
+| `WITH (table_type = 'ICEBERG', format = 'PARQUET')` | `LOCATION '...' TBLPROPERTIES ('table_type' = 'ICEBERG', 'format' = 'parquet')` | `no viable alternative at input` |
+| `map(varchar, double)` | `map<string, double>` | `no viable alternative at input` |
+| `rank integer`, `cluster_id varchar` | `rank int`, `cluster_id string` | `type expected at the position 0 of 'integer'` |
+
+All three are valid **Trino** — in a `SELECT` or an `INSERT`. Athena's `CREATE TABLE` takes
+Hive-style DDL, and `LOCATION` is required for Iceberg rather than defaulting from the Glue
+database. The two dialects meet inside one module, which is why `MAP(ARRAY[...], ARRAY[...])`
+in the same file is correct and `map(varchar, double)` twelve lines above it is not.
+
+**Why every test passed.** `tests/test_brief_items.py` injects a fake Athena client that
+records SQL and never parses it — which is exactly what makes it good for asserting on the
+DELETE's WHERE clause, and exactly why it cannot see a syntax error. One assertion was
+actively pinning the bug: it checked for `table_type = 'ICEBERG'`, the unquoted form only the
+broken `WITH` syntax produces.
+
+**Now fixed, verified against the real account, and guarded.** `create_iceberg_table` in
+`ops/athena.py` is the single place both gold writers go through, and it carries the dialect
+notes. Three static tests close the half of the gap a fake client can: every declared type
+must be in Athena's documented Iceberg type set, the statement must use
+`LOCATION`/`TBLPROPERTIES` rather than `WITH`, and the table must land at
+`<warehouse>/<namespace>.db/<table>` where Spark already puts everything else.
+
+The brief now builds end to end against the real lake — 2,979 clusters, 1,031 company links,
+**8 sources 0 not ok**, both 4B tables degrading loudly rather than failing — and writes ten
+rows. `signal feedback --list` and `signal feedback <id> up` both work. **That is 4A's
+acceptance mechanism functioning for the first time.**
+
+**The lesson is the one this project keeps relearning, in its sharpest form yet.** Every unit
+test passed, `make eval` passed, `make skeleton` passed, CI was green, the Terraform applied,
+and the PR merged — against a table that did not exist, through a DAG that had never run, for
+a phase whose acceptance depended on both. Only running it found any of it.
+
+### Athena and Spark disagree about one table property, fatally
+
+Found immediately after the above, by asking whether the 02:00 maintenance sweep would
+survive a table Athena had created — the first one it would ever reach, since
+`gold.brief_items` had not existed until that day.
+
+Spark **reads** it fine (10 rows). `rewrite_data_files` then dies:
+
+    IllegalArgumentException: Property 'write.object-storage.path' has been deprecated
+    and will be removed in 2.0.0, use 'write.data.path' instead
+
+Athena stamps every Iceberg table it creates with `write.object-storage.enabled=true` and
+`write.object-storage.path=...`. The Iceberg runtime this project pins (ADR-0006) has
+deprecated the second name and **raises** on it rather than warning. So a nightly sweep that
+includes any Athena-created table goes red forever — and `MAINTAINED_TABLES` gained three of
+them in 4B plus 4A's `gold.brief_items`.
+
+**It cannot be fixed where the table is created.** Verified against the deployed account, both
+directions:
+
+    CREATE TABLE ... TBLPROPERTIES ('write.object-storage.enabled'='false')
+      -> Unsupported table property key: write.object-storage.enabled
+    ALTER TABLE ... UNSET TBLPROPERTIES ('write.object-storage.enabled')
+      -> Table property write.object-storage.enabled is not supported by Athena
+
+Athena will neither set nor unset the property it sets itself. So the side that trips on it is
+the side that clears it: `maintain_table` drops both properties before compacting, and only
+when they are present, so Spark-created tables take no extra metadata commit.
+
+Dropping it costs nothing measurable. Object-storage layout spreads S3 keys across prefixes to
+avoid request-rate hotspots on very large tables; these are gold marts with tens of rows. What
+it buys is a sweep that runs.
+
+Verified on the real table after the fix: `gold.brief_items` compacted **3 files → 2**, error
+`None`, with `remove_orphan_files` skipped for 4A's documented S3 reason.
+
+## Acceptance
+
+SPEC §12's 4B gate, item by item. **Not met** — two external gates and a calendar one.
+
+| Asked for | Where it is | State |
+|---|---|---|
+| Ollama stage with content-hash cache | `enrich/` — client, prompt, schema, store, run | Built |
+| Pydantic validation, quarantine | `enrich/schema.py`, `gold.enrichment_rejects` | Built |
+| Eval harness, 100 examples | `score_enrichment`, `sample_enrichment.py`, `enrichment_predict.py` | Harness built; **examples blocked on Ollama** |
+| ALFRED bitemporal macro store | `sources/macro.py`, `spark/jobs/macro.py`, `gold.macro_observations` | Built |
+| Revisions in the brief | `read_macro_revisions` + the template's revision block | Built |
+| 30-day reproducibility backfill | `ops/reproduce.py`, `signal reproduce` | Harness built; **window closes 2026-09-17** |
+
+### What is left, and who clears it
+
+| Blocked on | Command |
+|---|---|
+| **Ollama running on the host** — then verify the digest against ADR-0003 and pin it | `signal enrich --check-model` |
+| **A free FRED key** in the SSM parameter Terraform creates | `aws ssm put-parameter --name /signal/fred-api-key --type SecureString --value <key> --overwrite` |
+| **`terraform apply`** for `macro.tf` and source #9 | `terraform -chdir=infra/terraform/main apply` |
+| **30 days of bronze** — 2026-09-17 at the earliest | `signal reproduce --days 30` |
+
+Neither gate blocks construction: every module here is tested against `respx` and `moto`, and
+`make test`, `make lint`, `make eval`, `make skeleton`, `make lambda-package` and
+`make tf-validate` are all green.
+
+The rehearsal on five days is the next thing to run once the first two clear.
+
+## Then
+
+**Phase 5**, per SPEC §12: dbt migration of silver→gold, and Kafka **if and only if** §14's
+criteria are met. Its acceptance is 14 consecutive daily briefs — which cannot start counting
+until 4A's does, and 4A's did not start until 2026-08-23, for the reason recorded above.
+
+4B carries forward everything it deliberately declined, plus what it found:
+
+| Item | Recorded in | Gates |
+|---|---|---|
+| **ADR-0009's embedding branch behind `dedup.decide`** | ADR-0009, 4B decisions | Dedup recall's 0.500 ceiling |
+| **§7.4's novelty component** — still absent from `WEIGHTS` | 4A.H, ADR-0009 | The ranker is five-sixths of its spec |
+| **The resolver's `?itemDescription` fix and wider candidate set** | ADR-0009 | Entity recall |
+| **The 100 enrichment examples and the `[enrichment]` floors** | 4B.G | `make eval` gating enrichment at all |
+| **Nothing alerts on a local DAG failing** | 4B "what broke" | Ten hours of dead ingestion produced no signal; SPEC §11's monitoring covers the AWS half only |
+
+That last one is new and is the sharpest of them. §11's whole argument is that silence is the
+failure mode, and the monitoring built for it watches Lambdas — which were fine. The half that
+broke was the local half, and it broke silently for ten hours behind a green AWS console.

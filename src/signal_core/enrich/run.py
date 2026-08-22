@@ -54,6 +54,10 @@ from signal_core.timeutil import utc_now
 # margin against ranking drift between this run and the 07:00 send.
 ENRICH_TOP_N = 40
 
+# What `Settings.ollama_model_digest` ships as until someone verifies it against the running
+# box. Matched here so `run` can refuse rather than write cache rows keyed on it.
+UNPINNED = "UNPINNED"
+
 
 def cluster_input(cluster: dict[str, Any]) -> str:
     """The exact text one cluster is enriched from.
@@ -249,8 +253,21 @@ def run(
     now: datetime | None = None,
     client: Any | None = None,
 ) -> EnrichmentRun:
-    """Select the ranked head of the window and enrich it. What the enrich DAG calls."""
+    """Select the ranked head of the window and enrich it. What the enrich DAG calls.
+
+    **Refuses to run against an unpinned digest** (ADR-0003). The check lives here rather
+    than only in `cli_enrich`, because the DAG calls this function directly — and a guard
+    that only one of two entry points enforces is not a guard. Every row written under
+    `UNPINNED` would be a cache entry keyed on a string that does not name a model, so it
+    could never legitimately be served and `read_cached` would keep missing on it forever,
+    quietly re-inferring the same heads every morning while reporting a hit rate of zero.
+    """
     settings = settings or Settings()
+    if settings.ollama_model_digest == UNPINNED:
+        raise RuntimeError(
+            "refusing to enrich with an unpinned model digest (ADR-0003) — "
+            "run `signal enrich --check-model` to read the installed digest and pin it"
+        )
     now = now or utc_now()
     window = ranked_window(limit=limit, window_hours=window_hours, now=now, client=client)
     return enrich_clusters(window.clusters, settings=settings, now=now, client=client)

@@ -427,3 +427,30 @@ def test_a_cluster_missing_a_field_still_renders_an_input(missing: str):
     cluster = _cluster()
     cluster[missing] = None
     assert "None" not in cluster_input(cluster)
+
+
+def test_run_refuses_an_unpinned_digest():
+    """ADR-0003's gate, enforced in the library rather than only in the CLI — the enrich DAG
+    calls `run` directly, and a guard only one of two entry points enforces is not a guard.
+
+    Every row written under `UNPINNED` would be keyed on a string that does not name a model,
+    so it could never legitimately be served: `read_cached` would miss on it forever, quietly
+    re-inferring the same heads every morning while reporting a hit rate of zero.
+    """
+    from signal_core.enrich.run import run
+
+    unpinned = SETTINGS.model_copy(update={"ollama_model_digest": "UNPINNED"})
+    with pytest.raises(RuntimeError, match="unpinned"):
+        run(settings=unpinned, client=_FakeAthena())
+
+
+def test_the_gold_enrichment_ddl_uses_types_athena_accepts():
+    """Same guard as `test_brief_items.py`'s, for the two tables 4B adds. The fake Athena
+    client records SQL without parsing it, so a type Athena rejects looks identical to one it
+    accepts until the first real run — which is how `gold.brief_items` shipped in 4A without
+    ever existing."""
+    from tests.test_brief_items import ATHENA_ICEBERG_TYPES, _declared_types
+
+    for ddl in (store.CLUSTER_ENRICHMENT_DDL, store.ENRICHMENT_REJECTS_DDL):
+        for declared in _declared_types(ddl):
+            assert declared in ATHENA_ICEBERG_TYPES, f"{declared!r} is not an Athena Iceberg type"

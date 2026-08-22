@@ -622,19 +622,47 @@ rather than the current one — which is the only way a test can see this class 
 
 | Date | Read | What it showed |
 |---|---|---|
-| *(pending — starts with the first 07:00 send)* | | |
+| *(pending — the clock starts 2026-08-23; see below)* | | |
 
-### One environment papercut found while verifying
+**The clock did not start when this phase merged, and the reason is worth recording.**
 
-`make clean` now fails: `airflow/dags/__pycache__/` is owned by uid **50000** — the Airflow
-container's user — so the host cannot delete the `.pyc` files it contains. Pre-existing
-(the directory dates from 2026-08-21, before this phase) and it does not affect the pipeline,
-but it makes `make clean` exit non-zero, which a fresh reader will hit. It is the same family
-as 2.E's finding about deleting `.cache/` while containers are running: **the Compose
-containers write into the repo as a different uid.** Left as-is rather than fixed blind —
-the right fix is probably `AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION`-adjacent Compose
-config or a `sudo`-free ignore in the clean target, and that is a decision worth making with
-the containers running rather than from the outside.
+4A merged on 2026-08-22 with every test green, CI green, and Terraform applied — and its
+local half never ran once. Two independent faults, both found on 2026-08-23 (written up in
+[`phase-4b.md`](phase-4b.md)):
+
+1. **The `brief` DAG was paused.** Airflow pauses a newly-discovered DAG by default, and
+   nothing here overrode that. So did `market` and `maintenance`. The 07:00 send — the one
+   thing this acceptance actually turns on — had never fired.
+2. **`gold.brief_items` did not exist.** Its `CREATE TABLE` was written in Trino's dialect
+   rather than Athena's and fails on three separate points. Nothing caught it because the
+   tests inject a fake Athena client that records SQL without parsing it, and the only code
+   path that would have executed it was inside the paused DAG.
+
+So the feedback loop this acceptance is built on had never worked, behind a green build and a
+green AWS console. Both are fixed and verified against the real account: the brief builds
+end to end (2,979 clusters, 1,031 company links, 8 sources 0 not ok, 10 items recorded) and
+`signal feedback <id> up` records a mark and reads it back.
+
+**The papercut below turned out to be the same root cause**, and it is no longer a papercut.
+
+### The environment papercut was not a papercut
+
+`make clean` was failing because `airflow/dags/__pycache__/` is owned by uid **50000** — the
+Airflow container's user — so the host cannot delete the `.pyc` files inside it. This was
+recorded here as cosmetic and left alone, on the reasoning that it "does not affect the
+pipeline".
+
+**It was one symptom of two faults that had stopped the pipeline.** The same sentence written
+here — *the Compose containers write into the repo as a different uid* — is also why deleting
+`.cache` breaks the bind mount, which is what silently killed `ingest_monitor` for ten hours
+on 2026-08-22. And the fix guessed at above, "`DAGS_ARE_PAUSED_AT_CREATION`-adjacent Compose
+config", turned out to be the literal fix for a *different* and larger problem: that setting
+is exactly why this phase's DAGs had never run.
+
+Both are fixed (`PYTHONDONTWRITEBYTECODE` in the Airflow environment, a guard in `make clean`,
+and `DAGS_ARE_PAUSED_AT_CREATION=false`). The lesson is about the triage, not the fix:
+**"does not affect the pipeline" was an inference, and checking it would have cost one
+command.**
 
 ## Then
 

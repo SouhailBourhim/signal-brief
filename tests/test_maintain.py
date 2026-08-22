@@ -228,3 +228,42 @@ def test_every_maintained_table_is_one_the_pipeline_actually_writes(spark):
         MACRO_TABLE,
     ):
         assert table in MAINTAINED_TABLES, f"{table} is written but never maintained"
+
+
+def test_athenas_object_storage_properties_are_dropped_before_compaction(spark):
+    """Athena stamps every Iceberg table it creates with `write.object-storage.path`, which
+    the pinned Iceberg runtime has deprecated and **raises** on — `rewrite_data_files` dies
+    with `IllegalArgumentException` rather than warning.
+
+    It cannot be fixed where the table is created: Athena rejects the key in `CREATE TABLE`
+    and in `ALTER TABLE ... UNSET` alike (both verified against the deployed account,
+    2026-08-23). So the side that trips on it is the side that clears it.
+
+    Found on the real `gold.brief_items` — the first Athena-created table this sweep ever
+    reached, because `gold.brief_items` had never existed until the same day.
+    """
+    from signal_core.spark.jobs.maintain import _drop_deprecated_object_storage, maintain_table
+
+    _fragment(spark, commits=6)
+    spark.sql(
+        f"ALTER TABLE {TABLE} SET TBLPROPERTIES "
+        "('write.object-storage.enabled' = 'true', 'write.object-storage.path' = 's3://x/y')"
+    )
+    assert _drop_deprecated_object_storage(spark, TABLE) is True
+
+    properties = {row[0] for row in spark.sql(f"SHOW TBLPROPERTIES {TABLE}").collect()}
+    assert "write.object-storage.path" not in properties
+    assert "write.object-storage.enabled" not in properties
+
+    result = maintain_table(spark, TABLE, min_input_files=2)
+    assert result.error is None
+    assert result.delta > 0
+
+
+def test_a_table_without_those_properties_is_left_alone(spark):
+    """Spark-created tables never carry them, and rewriting properties on every table in the
+    sweep would be a metadata commit per table per night for nothing."""
+    from signal_core.spark.jobs.maintain import _drop_deprecated_object_storage
+
+    _fragment(spark, commits=2)
+    assert _drop_deprecated_object_storage(spark, TABLE) is False

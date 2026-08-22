@@ -28,6 +28,57 @@ def athena_cost_usd(bytes_scanned: int) -> float:
     return billed_bytes / (1024**4) * ATHENA_USD_PER_TB
 
 
+def iceberg_table_location(table: str, warehouse: str) -> str:
+    """Where Athena should put an Iceberg table, matching the layout Spark already uses.
+
+    `<warehouse>/<namespace>.db/<table>` — verified against the deployed warehouse, which
+    holds `bronze.db/`, `silver.db/` and `ops.db/` under the same root. Getting this wrong
+    does not fail loudly; it scatters a second copy of the lake somewhere else in the bucket.
+    """
+    namespace, name = table.rsplit(".", 1)
+    return f"{warehouse.rstrip('/')}/{namespace}.db/{name}"
+
+
+def create_iceberg_table(
+    table: str,
+    ddl: str,
+    *,
+    warehouse: str,
+    database: str,
+    workgroup: str,
+    client: Any | None = None,
+) -> None:
+    """`CREATE TABLE IF NOT EXISTS` for an Iceberg table, in the dialect Athena actually takes.
+
+    Two things about this differ from what a Trino reference will tell you, and both shipped
+    wrong in 4A because the tests inject a fake client that records SQL without parsing it:
+
+    - **`LOCATION` + `TBLPROPERTIES`, not `WITH (...)`.** `WITH` is Trino's CTAS property
+      syntax; Athena's `CREATE TABLE` wants Hive-style clauses, and `LOCATION` is *required*
+      for Iceberg rather than defaulting from the Glue database.
+    - **Hive type syntax in the column list** — `map<varchar, double>`, not
+      `map(varchar, double)`. The parenthesised form is valid only in an expression.
+
+    Athena rejects either mistake with `no viable alternative at input`, which names neither
+    the column nor the reason, so both are worth stating here rather than rediscovering.
+    """
+    namespace = table.rsplit(".", 1)[0]
+    run_query(
+        f"CREATE SCHEMA IF NOT EXISTS {namespace}",
+        database=database,
+        workgroup=workgroup,
+        client=client,
+    )
+    run_query(
+        f"CREATE TABLE IF NOT EXISTS {table} ({ddl}) "
+        f"LOCATION '{iceberg_table_location(table, warehouse)}' "
+        "TBLPROPERTIES ('table_type' = 'ICEBERG', 'format' = 'parquet')",
+        database=database,
+        workgroup=workgroup,
+        client=client,
+    )
+
+
 def sql_string(value: str | None) -> str:
     """A Trino string literal, or `NULL`. Single quotes double to escape.
 

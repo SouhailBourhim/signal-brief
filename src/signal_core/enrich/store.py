@@ -39,7 +39,12 @@ from typing import Any
 
 from signal_core.config import Settings
 from signal_core.enrich.schema import Enrichment
-from signal_core.ops.athena import QueryResult, run_query, sql_string
+from signal_core.ops.athena import (
+    QueryResult,
+    create_iceberg_table,
+    run_query,
+    sql_string,
+)
 from signal_core.timeutil import utc_now
 
 settings = Settings()
@@ -56,29 +61,29 @@ ENRICHMENT_REJECTS_TABLE = "gold.enrichment_rejects"
 # struct column would turn every schema revision into an Iceberg migration. The typed
 # guarantee lives in `schema.Enrichment`, which is what validates before anything is written.
 CLUSTER_ENRICHMENT_DDL = """
-    cluster_id varchar,
-    model_name varchar,
-    model_digest varchar,
-    prompt_version varchar,
-    summary varchar,
-    topic varchar,
-    extracted_json varchar,
+    cluster_id string,
+    model_name string,
+    model_digest string,
+    prompt_version string,
+    summary string,
+    topic string,
+    extracted_json string,
     generated_at timestamp,
-    input_hash varchar,
+    input_hash string,
     cache_hit boolean
 """
 
 # SPEC §9 again. `attempts` is not in the spec's list and is added deliberately: §7.3 says
 # failures are "never retried indefinitely", and a bound needs somewhere to count against.
 ENRICHMENT_REJECTS_DDL = """
-    cluster_id varchar,
-    input_hash varchar,
-    raw_output varchar,
-    validation_error varchar,
-    model_digest varchar,
-    prompt_version varchar,
+    cluster_id string,
+    input_hash string,
+    raw_output string,
+    validation_error string,
+    model_digest string,
+    prompt_version string,
     rejected_at timestamp,
-    attempts integer
+    attempts int
 """
 
 # How many times one (cluster, input_hash) may be re-attempted across runs before the stage
@@ -141,16 +146,10 @@ def _ensure_one_table(
     table: str, ddl: str, *, database: str, workgroup: str, client: Any | None
 ) -> list[str]:
     """Create the table if absent, add any column the DDL has gained. Returns what was added."""
-    namespace = table.rsplit(".", 1)[0]
-    run_query(
-        f"CREATE SCHEMA IF NOT EXISTS {namespace}",
-        database=database,
-        workgroup=workgroup,
-        client=client,
-    )
-    run_query(
-        f"CREATE TABLE IF NOT EXISTS {table} ({ddl}) "
-        "WITH (table_type = 'ICEBERG', format = 'PARQUET')",
+    create_iceberg_table(
+        table,
+        ddl,
+        warehouse=settings.iceberg_warehouse,
         database=database,
         workgroup=workgroup,
         client=client,

@@ -124,8 +124,18 @@ def test_every_configured_source_has_a_parser():
 
 
 def test_every_deployed_source_is_scheduled_in_terraform():
-    """...and one missing from Terraform is never polled, which looks like a quiet source."""
-    assert set(DEPLOYED_SOURCE_IDS) == set(_terraform_sources())
+    """...and one missing from Terraform is never polled, which looks like a quiet source.
+
+    A union rather than an equality since 4B. `NOT_YET_DEPLOYED` holds sources that have a
+    Terraform entry but no applied Lambda yet, and the invariant that matters is unchanged:
+    **every scheduled source is accounted for, and nothing is monitored that is not
+    scheduled.** Asserting plain equality would force a source to be monitored the moment it
+    was written, hours before the apply that makes it real.
+    """
+    from signal_core.config import NOT_YET_DEPLOYED
+
+    assert set(DEPLOYED_SOURCE_IDS) | NOT_YET_DEPLOYED == set(_terraform_sources())
+    assert not (set(DEPLOYED_SOURCE_IDS) & NOT_YET_DEPLOYED), "a source cannot be both"
 
 
 def test_fake_is_not_deployed():
@@ -142,12 +152,15 @@ def test_the_deployed_source_count_is_what_the_phases_claim():
     §7.4's velocity component, which SPEC §12 carried forward from Phase 2, and `market`
     for its market-corroboration component.
 
-    Phase 4B adds `macro` for SPEC §8's bitemporal store.
+    Phase 4B adds `macro` for SPEC §8's bitemporal store — but it is **not counted here**,
+    because it is in `NOT_YET_DEPLOYED` until its Terraform is applied. `DEPLOYED_SOURCE_IDS`
+    means "has a Lambda in the account", and counting a source whose function does not exist
+    yet would fail `ingest_monitor` every hour for a deliberate state.
 
     A literal, deliberately: this is the only assertion that notices a source being added
     or dropped without anyone deciding to, and comparing the config against itself would
     notice nothing."""
-    assert len(DEPLOYED_SOURCE_IDS) == 9
+    assert len(DEPLOYED_SOURCE_IDS) == 8
 
 
 @pytest.mark.parametrize("source_id", ["hn_scores", "market", "macro"])
@@ -190,3 +203,36 @@ def test_freshness_sla_is_longer_than_the_poll_cadence(source_id: str):
         f"{source_id}: SLA {SOURCES[source_id].freshness_sla_seconds}s is too tight for a "
         f"{cadence_seconds}s cadence — it would report a healthy source as stale"
     )
+
+
+def test_a_pending_source_is_really_pending():
+    """`NOT_YET_DEPLOYED` is a window, not a parking space.
+
+    Every entry must be a real source with a real Terraform entry — otherwise it is a typo
+    silently excluding something from monitoring, which is the worst possible way for this
+    list to be wrong. And an entry that stays after its `terraform apply` means a deployed
+    source nothing is watching, which is the second worst.
+    """
+    from signal_core.config import NOT_YET_DEPLOYED, SOURCES
+
+    terraform = _terraform_sources()
+    for source_id in NOT_YET_DEPLOYED:
+        assert source_id in SOURCES, f"{source_id} is excluded from monitoring but not a source"
+        assert source_id in terraform, (
+            f"{source_id} is excluded from monitoring but has no Terraform entry — "
+            "it can never become deployed, so the exclusion is permanent by accident"
+        )
+        assert source_id not in DEPLOYED_SOURCE_IDS
+
+
+def test_nothing_deployed_is_silently_unmonitored():
+    """The inverse, and the one with teeth: every source with a Terraform entry is either
+    monitored or explicitly listed as pending. A source that is neither is one the DAG will
+    never assess and nobody will notice — SPEC §11's silence-is-the-failure-mode, arrived at
+    through a config gap rather than a code one."""
+    from signal_core.config import NOT_YET_DEPLOYED
+
+    for source_id in _terraform_sources():
+        assert source_id in DEPLOYED_SOURCE_IDS or source_id in NOT_YET_DEPLOYED, (
+            f"{source_id} has a Lambda but is neither monitored nor marked pending"
+        )

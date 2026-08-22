@@ -14,8 +14,7 @@ key look trustworthy while keying on a fiction, which is worse than `UNPINNED`, 
 from __future__ import annotations
 
 from signal_core.config import Settings
-
-UNPINNED = "UNPINNED"
+from signal_core.enrich.run import UNPINNED
 
 
 def run_check_model(settings: Settings | None = None) -> int:
