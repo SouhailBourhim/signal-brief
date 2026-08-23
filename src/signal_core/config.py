@@ -31,7 +31,6 @@ class Settings(BaseSettings):
     # Pinned, not floating. SPEC §7.3: swapping a model is a measurement, not a vibe.
     ollama_model: str = "llama3.1:8b"
     ollama_model_digest: str = "UNPINNED"
-    prompt_version: str = "v0"
 
     aws_region: str = Field(default="us-east-1", alias="AWS_REGION")
 

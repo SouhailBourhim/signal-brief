@@ -84,3 +84,40 @@ def test_make_clean_protects_every_bind_mounted_path_it_could_delete():
         name = host_path.removeprefix("./")
         if name in removable:
             assert name in protected, f"{name} is bind-mounted and deletable but unprotected"
+
+
+# `KEY: ${KEY:-default}` — the shape that silently imports the local value.
+_SELF_INTERPOLATED = re.compile(r"^\s*(SIGNAL_\w+):\s*\$\{\1:-", re.MULTILINE)
+
+# Settings whose correct value genuinely *differs* between the host and a container, because
+# they name a location rather than a resource. A container that inherits the host's answer
+# for one of these points at itself.
+HOST_SPECIFIC = frozenset(
+    {
+        "SIGNAL_OLLAMA_URL",
+        "SIGNAL_DATA_ROOT",
+        "SIGNAL_OUT_ROOT",
+        "SIGNAL_CACHE_ROOT",
+        "SIGNAL_ENTITY_DICTIONARY_PATH",
+    }
+)
+
+
+def test_no_host_specific_setting_is_interpolated_from_the_local_env():
+    """Compose expands `${VAR}` from the project `.env` *before* the container starts, so
+    `KEY: ${KEY:-default}` silently imports whatever the local shell uses — and for a setting
+    that names a location, the local answer is the wrong one inside a container.
+
+    `SIGNAL_OLLAMA_URL=http://localhost:11434` is correct for `uv run signal enrich` and
+    resolves to the container itself in Airflow. It overrode the `host.docker.internal`
+    default, so every enrichment task would have failed with `OllamaUnavailable` against a URL
+    nobody set on purpose.
+
+    Resource names (`SIGNAL_BRONZE_BUCKET`, `AWS_REGION`) are deliberately not covered: those
+    mean the same thing on both sides and inheriting them is the point.
+    """
+    leaked = set(_SELF_INTERPOLATED.findall(COMPOSE)) & HOST_SPECIFIC
+    assert not leaked, (
+        f"{sorted(leaked)} interpolate the local value into the container. "
+        "Hardcode them, or use a differently-named override variable."
+    )

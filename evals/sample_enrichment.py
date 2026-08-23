@@ -38,6 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from signal_core.config import Settings
+from signal_core.enrich.prompt import PROMPT_VERSION
 from signal_core.enrich.run import cluster_input
 from signal_core.hashing import enrichment_cache_key
 from signal_core.ops.athena import run_query
@@ -122,14 +123,14 @@ def main(argv: list[str] | None = None) -> int:
                         "input_hash": enrichment_cache_key(
                             cluster_input(cluster),
                             settings.ollama_model_digest,
-                            settings.prompt_version,
+                            PROMPT_VERSION,
                         ),
                         "cluster_id": cluster["cluster_id"],
                         "stratum": stratum,
                         "title": cluster["title"],
                         "publisher_domain": cluster["publisher_domain"],
                         "body": cluster["snippet"],
-                        "prompt_version": settings.prompt_version,
+                        "prompt_version": PROMPT_VERSION,
                         "seed": args.seed,
                     },
                     ensure_ascii=False,

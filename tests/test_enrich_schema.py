@@ -146,3 +146,25 @@ def test_changing_the_model_digest_invalidates_the_cache_key():
     assert enrichment_cache_key(text, "sha256:aaa", "v1") != enrichment_cache_key(
         text, "sha256:bbb", "v1"
     )
+
+
+def test_the_prompt_version_has_exactly_one_source():
+    """`Settings` used to carry its own `prompt_version`, defaulting to `"v0"`, while
+    `prompt.PROMPT_VERSION` said `"v1"`. The cache key and every stored row took the
+    *setting*, so 40 real enrichments were written stamped `v0` by the v1 prompt.
+
+    That is not a cosmetic mislabel. §7.3's whole governance claim is "accuracy tracked per
+    model and prompt version" — a stamp that does not name the prompt that produced the row
+    makes a model or prompt comparison meaningless, and the cache would serve v1 output to a
+    v2 reader without a miss.
+
+    The prompt module owns the version because the prompt is the thing that changes. It is
+    deliberately *not* a setting: an operator able to override it could serve output under a
+    stamp that never described it, which is precisely the lie the three-part key prevents.
+    """
+    from signal_core.config import Settings
+
+    assert not hasattr(Settings(), "prompt_version"), (
+        "prompt_version is back in Settings — it can now drift from prompt.PROMPT_VERSION"
+    )
+    assert prompt_module.PROMPT_VERSION

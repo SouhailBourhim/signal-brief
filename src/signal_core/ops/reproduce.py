@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from signal_core.enrich.prompt import PROMPT_VERSION
 from signal_core.timeutil import ensure_utc
 
 if TYPE_CHECKING:
@@ -389,7 +390,7 @@ def check_enrichment_cache(
         matched=len(found),
         notes=(
             f"served from cache under {settings.ollama_model_digest[:19]}… / "
-            f"{settings.prompt_version}; the model is not reproducible, the cache is"
+            f"{PROMPT_VERSION}; the model is not reproducible, the cache is"
         ),
     )
 
