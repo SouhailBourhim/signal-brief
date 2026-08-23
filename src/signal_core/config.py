@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     data_root: Path = Path("./data")
     out_root: Path = Path("./out")
     cache_root: Path = Path("./.cache")
+    # The committed SEC + Wikidata snapshot the resolver reads (SPEC §7.2). A setting rather
+    # than a module constant because the default is *relative*, and a relative path resolves
+    # against the process's cwd — which is `/opt/airflow` inside the containers, not the repo
+    # root. See `entities/dictionary.py::DEFAULT_PATH`.
+    entity_dictionary_path: Path = Path("warehouse/entities/dictionary.json.gz")
     ollama_url: str = "http://localhost:11434"
 
     # Pinned, not floating. SPEC §7.3: swapping a model is a measurement, not a vibe.
@@ -306,11 +311,62 @@ SOURCES: dict[str, SourceConfig] = {
         timeout_seconds=15.0,
         user_agent=settings.user_agent,
     ),
+    # Phase 4B — SPEC §8's bitemporal macro store. The one source that needs a secret; the
+    # key is read from SSM at fetch time, never from the environment (see sources/macro.py
+    # and infra/terraform/main/macro.tf).
+    "macro": SourceConfig(
+        source_id="macro",
+        url="https://api.stlouisfed.org",
+        payload_format=PayloadFormat.JSON,
+        # ALFRED serves every vintage a series has ever had, so any historical value is
+        # re-fetchable from a standing start — which is precisely what SPEC §8 means by
+        # "backfillable from a standing start" and exactly what COMPLETE promises.
+        backfill_horizon=BackfillHorizon.COMPLETE,
+        # 48 h, matching `market` and for the same reason: two consecutive missed runs on a
+        # daily schedule is the first unambiguous signal, where one miss is indistinguishable
+        # from a run that started late.
+        freshness_sla_seconds=172800,
+        # Zero, like `market`: health is assessed over the closed prior hour and a daily
+        # source is legitimately silent in 23 of them.
+        min_docs_per_window=0,
+        # 45 days, and this one is genuinely different in kind from every other source here.
+        # These series *release monthly* — PAYEMS on the first Friday, CPI mid-month, GDP
+        # quarterly — so a fortnight of no new vintage is an ordinary fortnight, not a fault.
+        # An SLA sized like a feed's would fire for most of every month, which is the
+        # alarm-nobody-reads failure SPEC §11 is built to avoid. 45 days clears the longest
+        # ordinary gap (a quarterly series between releases still sees its monthly siblings
+        # move, and the hash is over all six combined).
+        content_staleness_sla_seconds=3888000,
+        rate_limit_per_sec=2.0,
+        timeout_seconds=60.0,
+        user_agent=settings.user_agent,
+        # Terraform creates this parameter and owns its existence, never its value. The
+        # poller resolves it lazily and caches per container — see `sources/macro.py`.
+        options={"api_key_parameter": "/signal/fred-api-key"},
+    ),
 }
+
+# Registered in code, with a Terraform entry, but **not yet applied to the account**. A
+# source lands here for the window between the commit that adds it and the `terraform apply`
+# that creates its Lambda.
+#
+# This is not hypothetical: adding `macro` to `SOURCES` immediately made `ingest_monitor`
+# assess it, and it failed the DAG every hour with `never_succeeded` for a function that did
+# not exist yet (docs/runbooks/phase-4b.md). That is the monitor telling the truth — a
+# configured source producing nothing *is* the failure `never_succeeded` exists to catch —
+# but an hourly red run for a known, deliberate, not-yet-deployed state is the
+# alarm-nobody-reads failure SPEC §11 keeps warning about, and it would mask a real outage
+# in one of the other eight.
+#
+# **Remove an entry here in the same change that applies its Terraform.**
+# `test_a_pending_source_is_really_pending` stops this becoming a place things rot.
+NOT_YET_DEPLOYED: frozenset[str] = frozenset({"macro"})
 
 # The deployed sources: everything with a Lambda, a schedule, and a state item. `fake` is
 # the Phase 0 fixture source and has none of those, so assessing it would report a
-# permanent outage for something that was never running. Derived rather than listed,
-# because a hardcoded copy in the DAG is exactly how SPEC §3's 30-minute claim quietly
-# stops being true.
-DEPLOYED_SOURCE_IDS: tuple[str, ...] = tuple(s for s in SOURCES if s != "fake")
+# permanent outage for something that was never running — the same reason `NOT_YET_DEPLOYED`
+# exists. Derived rather than listed, because a hardcoded copy in the DAG is exactly how
+# SPEC §3's 30-minute claim quietly stops being true.
+DEPLOYED_SOURCE_IDS: tuple[str, ...] = tuple(
+    s for s in SOURCES if s != "fake" and s not in NOT_YET_DEPLOYED
+)

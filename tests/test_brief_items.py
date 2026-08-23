@@ -155,7 +155,10 @@ def test_the_table_is_created_on_first_use():
     client = _FakeAthena()
     write_brief_items([_ranked()], date="2026-08-22", now=NOW, client=client)
     assert "CREATE TABLE IF NOT EXISTS gold.brief_items" in client.sql_containing("CREATE TABLE")
-    assert "table_type = 'ICEBERG'" in client.sql_containing("CREATE TABLE")
+    # Quoted key: `TBLPROPERTIES ('table_type' = 'ICEBERG')`. This assertion used to check
+    # the unquoted `WITH (table_type = ...)` form, which Athena rejects — it was pinning the
+    # bug rather than the behaviour, because the fake client never parses what it is given.
+    assert "'table_type' = 'ICEBERG'" in client.sql_containing("CREATE TABLE")
 
 
 @pytest.mark.parametrize("mark", ["up", "down"])
@@ -166,3 +169,85 @@ def test_feedback_reads_back_the_marks_it_wrote(mark):
 
     assert mark in _FEEDBACK_SCORES
     assert _FEEDBACK_SCORES[mark] in (1.0, -1.0)
+
+
+# --- the dialect ---------------------------------------------------------------------------
+#
+# These exist because 4A's DDL was wrong in three separate ways and shipped anyway. The fake
+# Athena client above records SQL without parsing it — which is what makes it useful for
+# asserting on statements, and exactly why it cannot catch a syntax error. A static check
+# against Athena's documented Iceberg type set is the cheap half of the gap.
+
+
+# What Athena accepts in a `CREATE TABLE` for an Iceberg table. Notably absent: `varchar`,
+# `integer`, `bigint` — all valid Trino *expression* types, none valid here.
+ATHENA_ICEBERG_TYPES = frozenset(
+    {
+        "boolean",
+        "int",
+        "long",
+        "float",
+        "double",
+        "decimal",
+        "string",
+        "uuid",
+        "binary",
+        "date",
+        "timestamp",
+        "array",
+        "map",
+        "struct",
+    }
+)
+
+
+def _declared_types(ddl: str) -> list[str]:
+    return [
+        line.strip().rstrip(",").split(" ", 1)[1].strip().split("<")[0].split("(")[0].lower()
+        for line in ddl.strip().splitlines()
+        if line.strip()
+    ]
+
+
+@pytest.mark.parametrize("ddl_name", ["BRIEF_ITEMS_DDL"])
+def test_every_column_type_is_one_athena_accepts(ddl_name: str):
+    """`rank integer` and `cluster_id varchar` both parse fine in a SELECT and both are
+    rejected by `CREATE TABLE`, with `type expected at the position 0 of 'integer'` — a
+    message that names the type but not the column or the table."""
+    from signal_core.brief import items
+
+    for declared in _declared_types(getattr(items, ddl_name)):
+        assert declared in ATHENA_ICEBERG_TYPES, f"{declared!r} is not an Athena Iceberg type"
+
+
+def test_the_create_uses_location_and_tblproperties_not_with():
+    """`WITH (table_type = 'ICEBERG')` is Trino's CTAS property syntax and Athena rejects it
+    with `no viable alternative at input`. `LOCATION` is required rather than defaulted from
+    the Glue database, which is the part most likely to be dropped as redundant."""
+
+    athena = _FakeAthena()
+    from signal_core.brief.items import ensure_table
+
+    ensure_table(client=athena)
+    create = athena.sql_containing("CREATE TABLE")
+
+    assert "TBLPROPERTIES" in create
+    assert "'table_type' = 'ICEBERG'" in create
+    assert "WITH (" not in create
+    assert "LOCATION '" in create
+
+
+def test_the_table_lands_where_spark_would_have_put_it():
+    """`<warehouse>/<namespace>.db/<table>`, matching the layout `bronze.db/`, `silver.db/`
+    and `ops.db/` already use. Getting this wrong does not fail — it quietly scatters a
+    second copy of the lake elsewhere in the bucket."""
+    from signal_core.ops.athena import iceberg_table_location
+
+    assert (
+        iceberg_table_location("gold.brief_items", "s3://bucket/warehouse")
+        == "s3://bucket/warehouse/gold.db/brief_items"
+    )
+    assert (
+        iceberg_table_location("gold.brief_items", "s3://bucket/warehouse/")
+        == "s3://bucket/warehouse/gold.db/brief_items"
+    )

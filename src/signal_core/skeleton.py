@@ -106,7 +106,7 @@ def run(settings: Settings | None = None, use_spark: bool = True, limit: int = 1
         articles_in=len(articles),
         clusters_out=len(clusters),
         exact_duplicates_removed=exact_removed,
-        cache_hit_rate=0.0,
+        enrichment_coverage=0.0,
         runtime_seconds=time.monotonic() - started,
     )
     path = write_brief(ranked, health, settings.out_root)

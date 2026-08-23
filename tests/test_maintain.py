@@ -190,10 +190,19 @@ def test_a_record_table_created_before_a_column_existed_gains_it(spark):
 
 def test_every_maintained_table_is_one_the_pipeline_actually_writes(spark):
     """A hardcoded list is the thing a reviewer can check; this asserts it has not drifted
-    from the DDL constants the jobs use."""
+    from the DDL constants the jobs use.
+
+    **Extended in 4B to the gold marts.** It used to walk `spark/jobs/` only, so a table
+    written through Athena instead of Spark could never fail it — which is how
+    `gold.brief_items` shipped in 4A and went unswept until 4B noticed. The three Athena-
+    written tables are named here explicitly for that reason.
+    """
+    from signal_core.brief.items import BRIEF_ITEMS_TABLE
+    from signal_core.enrich.store import CLUSTER_ENRICHMENT_TABLE, ENRICHMENT_REJECTS_TABLE
     from signal_core.spark.jobs.cluster import ARTICLE_CLUSTERS_TABLE, CLUSTERS_TABLE
     from signal_core.spark.jobs.commit_bronze import BRONZE_TABLE
     from signal_core.spark.jobs.cost_snapshot import COSTS_TABLE
+    from signal_core.spark.jobs.macro import MACRO_TABLE
     from signal_core.spark.jobs.maintain import MAINTAINED_TABLES
     from signal_core.spark.jobs.market import MARKET_TABLE
     from signal_core.spark.jobs.normalize import (
@@ -213,5 +222,48 @@ def test_every_maintained_table_is_one_the_pipeline_actually_writes(spark):
         CLUSTERS_TABLE,
         ARTICLE_CLUSTERS_TABLE,
         COSTS_TABLE,
+        BRIEF_ITEMS_TABLE,
+        CLUSTER_ENRICHMENT_TABLE,
+        ENRICHMENT_REJECTS_TABLE,
+        MACRO_TABLE,
     ):
         assert table in MAINTAINED_TABLES, f"{table} is written but never maintained"
+
+
+def test_athenas_object_storage_properties_are_dropped_before_compaction(spark):
+    """Athena stamps every Iceberg table it creates with `write.object-storage.path`, which
+    the pinned Iceberg runtime has deprecated and **raises** on — `rewrite_data_files` dies
+    with `IllegalArgumentException` rather than warning.
+
+    It cannot be fixed where the table is created: Athena rejects the key in `CREATE TABLE`
+    and in `ALTER TABLE ... UNSET` alike (both verified against the deployed account,
+    2026-08-23). So the side that trips on it is the side that clears it.
+
+    Found on the real `gold.brief_items` — the first Athena-created table this sweep ever
+    reached, because `gold.brief_items` had never existed until the same day.
+    """
+    from signal_core.spark.jobs.maintain import _drop_deprecated_object_storage, maintain_table
+
+    _fragment(spark, commits=6)
+    spark.sql(
+        f"ALTER TABLE {TABLE} SET TBLPROPERTIES "
+        "('write.object-storage.enabled' = 'true', 'write.object-storage.path' = 's3://x/y')"
+    )
+    assert _drop_deprecated_object_storage(spark, TABLE) is True
+
+    properties = {row[0] for row in spark.sql(f"SHOW TBLPROPERTIES {TABLE}").collect()}
+    assert "write.object-storage.path" not in properties
+    assert "write.object-storage.enabled" not in properties
+
+    result = maintain_table(spark, TABLE, min_input_files=2)
+    assert result.error is None
+    assert result.delta > 0
+
+
+def test_a_table_without_those_properties_is_left_alone(spark):
+    """Spark-created tables never carry them, and rewriting properties on every table in the
+    sweep would be a metadata commit per table per night for nothing."""
+    from signal_core.spark.jobs.maintain import _drop_deprecated_object_storage
+
+    _fragment(spark, commits=2)
+    assert _drop_deprecated_object_storage(spark, TABLE) is False

@@ -98,6 +98,30 @@ class ParsedMarketObservation:
 
 
 @dataclass(frozen=True)
+class ParsedMacroObservation:
+    """One value of one macro series, as of one vintage. SPEC §8's two time axes.
+
+    `period` is **valid time** — the month or day the number describes. `vintage_date` is
+    **known time** — the day that value became the published figure. The pair is what makes
+    "what was knowable on 2026-03-14" a query.
+
+    `superseded_at` is ALFRED's `realtime_end`, carried rather than collapsed to a boolean:
+    a `None` here means "still the current value", and the date it stopped being current is a
+    fact the bitemporal load would otherwise have to re-derive from the next vintage's start.
+
+    `revision_delta` is deliberately **not** a field. It is derived in
+    `spark/jobs/macro.py` with a window over each series and period, because it is a
+    relationship between two vintages and a parser only ever sees one at a time.
+    """
+
+    series_id: str
+    period: date
+    value: float | None
+    vintage_date: date
+    superseded_at: date | None = None
+
+
+@dataclass(frozen=True)
 class ParseResult:
     """What one bronze row parses into.
 
@@ -107,7 +131,7 @@ class ParseResult:
     single entry within an otherwise-good feed is missing a field; that entry still
     comes back in `items`, carrying its own `parse_error`.
 
-    The four collections are parallel sinks, not alternatives: a parser fills exactly the
+    The five collections are parallel sinks, not alternatives: a parser fills exactly the
     one its source produces. Adding a shape here rather than overloading `items` is what
     keeps `dedup_ratio` an honest number (docs/runbooks/phase-2.md's comments finding).
     """
@@ -116,5 +140,6 @@ class ParseResult:
     comments: list[ParsedComment] = field(default_factory=list)
     score_snapshots: list[ParsedScoreSnapshot] = field(default_factory=list)
     market_observations: list[ParsedMarketObservation] = field(default_factory=list)
+    macro_observations: list[ParsedMacroObservation] = field(default_factory=list)
     error: str | None = None
     warnings: tuple[str, ...] = ()

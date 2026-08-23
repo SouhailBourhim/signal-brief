@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import tomllib
 from dataclasses import dataclass
@@ -195,9 +196,116 @@ def score_entities() -> Score:
     return score
 
 
+ENRICHMENT_FIELDS = ("company", "amount_usd", "round_type", "headcount_delta", "filing_type")
+
+
+def _numbers(text: str) -> set[str]:
+    """Digit runs, for the invented-figure check. Punctuation and separators are stripped so
+    `$2.1 billion` and `2.1` compare, and `46,000` and `46000` do not read as different."""
+    return {n.replace(",", "") for n in re.findall(r"\d[\d,]*(?:\.\d+)?", text or "")}
+
+
 def score_enrichment() -> Score:
-    """LLM output accuracy against labeled examples. SPEC §7.3 — Phase 4."""
-    return Score("enrichment")
+    """LLM output accuracy against labeled examples. SPEC §7.3.
+
+    ## Why this scores recorded predictions rather than calling the model
+
+    Every other scorer here calls the pipeline's own decision function — `is_same_story`,
+    `resolve` — because those are deterministic and dependency-free, so CI can run them. This
+    one cannot: it would need a GPU, a running Ollama, and ~40 seconds, none of which a CI
+    runner has, and `make eval` gates every PR.
+
+    So the model's answers are **recorded** by `evals/enrichment_predict.py` into
+    `predictions.jsonl`, stamped with the `model_digest` and `prompt_version` that produced
+    them, and this scores what was recorded. That is not a workaround — it is what §7.3's
+    "accuracy tracked per model and prompt version" actually requires. Predictions stamped
+    with a digest other than the one in `Settings` are **not scored**, and `main` says so:
+    swapping the model invalidates the measurement rather than silently re-using it.
+
+    ## Why the confusion matrix is over field decisions, not examples
+
+    An example is seven decisions — one topic, five extraction fields, one summary — and they
+    fail in different ways. Counting one example as one prediction would let a model that
+    gets the topic right and every field wrong score the same as one that gets everything
+    right but the topic.
+
+    **Abstention is a first-class answer**, exactly as in `score_entities`: most extraction
+    fields are correctly null (a story about a Go release has no round type), so a correct
+    null is a true negative. Without that, an extractor that fills nothing looks perfect and
+    so does one that fills everything, depending which half you forgot to count.
+
+    **A wrong non-null value counts twice** — once as a false positive, once as a false
+    negative. It is two errors: a value that should not be there, and one that should have
+    been. Counting it once would make a model that confidently invents figures score better
+    than one that abstains, which inverts the preference §7.3's whole typed-schema argument
+    expresses.
+
+    ## The summary rule
+
+    `evals/enrichment/README.md`: "A fluent summary containing a number that appears nowhere
+    in the source is a failure, not a near miss." That is mechanically checkable and it is
+    checked here. Entailment in general is not, so the labeled `summary_ok` carries the human
+    judgement and the invented-figure check runs on top of it — a summary can fail either
+    way, and both count as the two-error case, because an invented figure is simultaneously a
+    claim that should not exist and a correct summary that is missing.
+
+    Schema-invalid output is **not** scored here. It is counted separately as the
+    schema-failure rate (`gold.enrichment_rejects`), per the README.
+    """
+    settings_digest, settings_version = _enrichment_config()
+    labels = {row["input_hash"]: row for row in _load(EVALS / "enrichment" / "examples.jsonl")}
+    predictions = {
+        row["input_hash"]: row
+        for row in _load(EVALS / "enrichment" / "predictions.jsonl")
+        if row.get("model_digest") == settings_digest
+        and row.get("prompt_version") == settings_version
+    }
+
+    score = Score("enrichment", examples=0)
+    for input_hash, label in labels.items():
+        prediction = predictions.get(input_hash)
+        if prediction is None:
+            # Unmeasured, not wrong. Scoring it as a failure would mean a fresh clone with no
+            # recorded predictions reported an accuracy of zero, which is a claim about a
+            # model nobody ran.
+            continue
+        score.examples = (score.examples or 0) + 1
+
+        if prediction.get("topic") == label.get("topic"):
+            score.tp += 1
+        else:
+            score.fp += 1
+            score.fn += 1
+
+        summary = prediction.get("summary") or ""
+        source = f"{label.get('title', '')} {label.get('body', '')}"
+        invented = _numbers(summary) - _numbers(source)
+        if label.get("summary_ok") and not invented:
+            score.tp += 1
+        else:
+            score.fp += 1
+            score.fn += 1
+
+        predicted_fields = prediction.get("extraction") or {}
+        actual_fields = label.get("extraction") or {}
+        for field_name in ENRICHMENT_FIELDS:
+            predicted = predicted_fields.get(field_name)
+            actual = actual_fields.get(field_name)
+            if predicted == actual:
+                score.tp += 1 if actual is not None else 0
+                score.tn += 1 if actual is None else 0
+            else:
+                score.fp += 1 if predicted is not None else 0
+                score.fn += 1 if actual is not None else 0
+    return score
+
+
+def _enrichment_config() -> tuple[str, str]:
+    """The digest and prompt version predictions must carry to be scored."""
+    from signal_core.config import Settings
+
+    settings = Settings()
+    return settings.ollama_model_digest, settings.prompt_version
 
 
 SCORERS = {
@@ -226,6 +334,19 @@ def main(argv: list[str] | None = None) -> int:
         limits = thresholds.get(name, {})
         if score.support == 0:
             labeled = len(_load(LABEL_FILES[name])) if name in LABEL_FILES else 0
+            if name == "enrichment" and labeled:
+                # A distinct message because the cause is distinct and actionable. Enrichment
+                # scores *recorded* predictions (see `score_enrichment`), so "labeled but
+                # unscored" here means nobody has run the model under the digest and prompt
+                # version currently configured — which is exactly the state a model swap
+                # should produce, rather than silently re-scoring the old model's answers.
+                digest, version = _enrichment_config()
+                recorded = len(_load(EVALS / "enrichment" / "predictions.jsonl"))
+                print(
+                    f"{name:12} {labeled} labeled, {recorded} predictions on file but none "
+                    f"under {digest[:19]}… / {version} — run `evals/enrichment_predict.py`"
+                )
+                continue
             reason = (
                 f"{labeled} labeled, awaiting a decision function to score against"
                 if labeled

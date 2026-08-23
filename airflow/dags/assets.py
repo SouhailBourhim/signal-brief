@@ -36,3 +36,14 @@ CLUSTERS_COMMITTED = Asset("iceberg://silver/story_clusters")
 # market-corroboration component is the eventual consumer — it needs the ticker, which is
 # what an entity id in the UPPERCASE namespace carries.
 MENTIONS_RESOLVED = Asset("iceberg://silver/entity_mentions")
+
+# Emitted by `enrich` (4B). The brief is its consumer, but consumes it as an *inlet* rather
+# than a trigger: SPEC §12's acceptance is a 07:00 clock time, so the brief stays on cron and
+# renders whatever the cache holds by then. A morning where this never fired produces a brief
+# without summaries, which is the degradation `brief/build.py` is built for.
+ENRICHMENT_READY = Asset("iceberg://gold/cluster_enrichment")
+
+# Emitted by `macro` (4B). SPEC §8's bitemporal store; the brief reads recent revisions out
+# of it. Declared for the same graph-visibility reason as the others — the brief's schedule
+# is a clock time, not a dependency.
+MACRO_COMMITTED = Asset("iceberg://gold/macro_observations")

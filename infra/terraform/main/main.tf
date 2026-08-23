@@ -187,6 +187,23 @@ variable "sources" {
       timeout_seconds     = 120 # one request per watchlist ticker, paced at 2/sec
       description         = "Daily OHLCV for watchlist tickers, §7.4 market corroboration."
     }
+    # Phase 4B — SPEC §8's bitemporal macro store. 02:26 UTC, clear of `market` at 02:11 and
+    # of every `rate(15 minutes)` tick (:00/:15/:30/:45), so peak concurrency is unchanged
+    # and Service Quota L-B99A9384 stays optional — the property
+    # `test_the_phase_4a_pollers_do_not_collide_with_the_phase_1_2_six` asserts.
+    #
+    # Daily is generous for data that releases monthly, and deliberately so: a release lands
+    # on a weekday morning US time and the revision it carries is what SPEC §8's brief line
+    # is about, so waiting a month to notice would make the feature pointless. Six requests a
+    # day against a free API is not a volume anyone will mind.
+    macro = {
+      schedule_expression = "cron(26 2 * * ? *)"
+      # Six sequential requests, each returning ~a decade of vintages. Well under the
+      # Lambda's ceiling, generously over what the requests actually take.
+      timeout_seconds = 180
+      memory_mb       = 512 # all-vintages responses are megabytes, not kilobytes
+      description     = "ALFRED macro vintages for the watchlist series, §8 bitemporal store."
+    }
   }
 }
 

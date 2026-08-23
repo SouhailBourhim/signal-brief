@@ -7,21 +7,33 @@ immutably; collapses syndicated coverage into ranked story clusters; and publish
 at 07:00 Africa/Casablanca with lineage, replay, cost controls, and locally run LLM
 enrichment built in.
 
-**Status: Phase 3 done; Phase 4A built, awaiting its three-morning acceptance.** Eight
-pollers — Hacker News (items and top-story scores), SEC EDGAR + Form D, three RSS/Atom feeds,
-and daily market bars — run as scheduled Lambdas and land raw payloads in S3; local Spark
-jobs commit them to `bronze.raw_documents` on Iceberg, normalize that into `silver.articles`
-and `silver.hn_comments`, collapse it into story clusters, and resolve company mentions
-against a pinned SEC + Wikidata dictionary. **Both labeled eval sets are committed and
+**Status: Phases 0-4A merged; Phase 4B built, both awaiting acceptance.** Eight pollers —
+Hacker News (items and top-story scores), SEC EDGAR + Form D, three RSS/Atom feeds, and daily
+market bars — run as scheduled Lambdas and land raw payloads in S3; local Spark jobs
+commit them to `bronze.raw_documents` on Iceberg, normalize that into
+`silver.articles` and `silver.hn_comments`, collapse it into story clusters, and resolve
+company mentions against a pinned SEC + Wikidata dictionary. **Both labeled eval sets
+are committed and
 scored** — 252 article pairs and 300 entity mentions — and a real brief has been read every
 morning since 3.0, which is what Phase 3's acceptance actually asks for. The infrastructure
-is Terraform, and applied. No LLM yet.
+is Terraform, and applied.
 
 **Phase 4A** adds the ranker over those clusters — five of SPEC §7.4's six components, with
 novelty deferred to 4B on the record rather than by omission — plus email at 07:00, a nightly
 Iceberg maintenance job, a feedback CLI, and the five items SPEC §12 carried forward. Its
 acceptance is behavioural and takes calendar time: three mornings read with marks recorded.
 See [`docs/runbooks/phase-4a.md`](docs/runbooks/phase-4a.md).
+
+**Phase 4B** adds the two things the README leads with: the governed local-LLM stage — one
+call per ranked cluster head, content-hash cached, Pydantic-validated, quarantined when it
+fails, scored per model digest and prompt version — and the ALFRED bitemporal macro store,
+which keeps every vintage so "what was knowable on 2026-03-14" is a query rather than an
+archaeology project. Both are **built and neither is running yet**: the enrichment stage
+refuses to start until ADR-0003's model digest is verified against a live Ollama rather than
+copied out of the ADR, the macro poller needs a FRED key in the SSM parameter Terraform
+creates, and its `terraform apply` has not been run. Its acceptance — a 30-day reproducibility
+backfill — cannot close before 2026-09-17, because ingestion started on 2026-08-18. See
+[`docs/runbooks/phase-4b.md`](docs/runbooks/phase-4b.md).
 
 **[ADR-0009](docs/decisions/ADR-0009-embeddings-for-same-story-and-entities.md) closed the
 phase with two verdicts, measured rather than argued.** Sentence embeddings beat the lexical
@@ -97,7 +109,7 @@ SPEC §15: never publish a metric the pipeline cannot recompute. Current numbers
 | Catch-up after the same outage | RSS lost 0.0 / 3.6 / 5.3 h of 24.2 h; HN lost nothing | `docs/runbooks/phase-1.md` 1.D, real AWS |
 | Embeddings vs. the lexical same-story rule | embedding **0.870 / 0.909** vs. lexical **1.000 / 0.500** held out; corpus false merges ~161/window vs. ~54 | `evals/experiments/embed_dedup.py`, ADR-0009 |
 | Embeddings vs. the lexical resolver | no gain at any threshold; ceiling **0.630** recall for any context-scoring rule over this dictionary | `evals/experiments/embed_entities.py`, ADR-0009 |
-| LLM eval accuracy, cache-hit rate | — | Phase 4B |
+| LLM eval accuracy, cache-hit rate | — | Phase 4B — the stage is built; the numbers need a local model running |
 | Cost per day (full pipeline) | — | Phase 4A — pieces above are real, a full day's total isn't assembled yet |
 | Consecutive daily briefs read | 2 days, 4 reads | SPEC §12's brief ladder; the count started 2026-08-20 |
 
