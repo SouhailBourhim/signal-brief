@@ -672,6 +672,32 @@ included, with real observation counts (26,349 and 16,865 respectively).
 `macro` is out of `NOT_YET_DEPLOYED`. `DEPLOYED_SOURCE_IDS` is 9; `ingest_monitor` now
 assesses it for real every hour, the way it has assessed the other eight since Phase 1-4A.
 
+### `test_run_query_times_out_rather_than_polling_forever` was a wall-clock race
+
+Found by an external review run against this runbook's own "everything is green" claim, not
+by a failure in this repo's own CI — worth recording for that reason as much as for the bug.
+
+The test gave the fake Athena client a finite `polls_before_terminal=10_000` and a 50 ms
+timeout budget, with `poll_interval_seconds=0`. The intent was "assert `TimeoutError` fires
+rather than polling forever." What it actually asserted was **whichever finishes first: 10,000
+tight-loop Python calls, or 50 ms of wall-clock time** — a race between the fake's call count
+and real elapsed time, decided by how fast the machine happens to be. On this machine, right
+now, it passed every time it was run. That is not the same claim as "this test is correct" —
+a faster interpreter, a loaded CI runner, or a slower one could flip the outcome either way,
+and a test whose result depends on the speed of the machine running it is not testing the
+thing its name says it tests.
+
+Fixed by removing the race rather than widening the budget to hide it: `polls_before_terminal`
+now accepts `float("inf")`, so the fake can never reach a terminal state and `TimeoutError` is
+the only way the loop can end, on any machine. Verified deterministic across five repeated
+runs rather than trusting one green result — the same standard this runbook's other findings
+were held to.
+
+**The claim below that `make test` was green is corrected, not just re-asserted.** It was true
+of the specific run that produced it, and it was still an unreliable thing to have claimed,
+because this test could have failed that same run on different hardware. Re-verified clean
+after the fix.
+
 ## Acceptance
 
 SPEC §12's 4B gate, item by item. **Not met** — two external gates and a calendar one.
