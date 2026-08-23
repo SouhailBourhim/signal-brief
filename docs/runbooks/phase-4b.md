@@ -460,6 +460,218 @@ path setting must be overridden absolutely in compose, the dictionary must exist
 `make clean`'s `MOUNTED_PATHS` must cover every bind-mounted directory it could delete. It
 asserts the defaults are still relative too, so it cannot quietly become vacuous.
 
+### The stage enriched 2,979 clusters instead of 40, and said nothing while doing it
+
+The first real run. Reported as *"takes too long and shows nothing"*, and both halves were
+real defects — neither in the setup, which was correct.
+
+**`rank` marks the cut; it does not apply it.** `ranker.rank` returns **every** scored cluster
+with only the top `limit` flagged `included`, and `run` passed `window.clusters` straight
+through. So a 2,979-cluster window sent 2,979 heads to the GPU rather than 40: **~70 minutes,
+spent mostly on exactly the routine SEC filings ADR-0011 exists to keep out.** The argument was
+written in this module's own docstring and the code did the opposite of it.
+
+Nothing would have caught it. Every counter in `EnrichmentRun` was internally consistent, every
+row it would have written was individually correct, and the only thing wrong was *how many*.
+`test_run_enriches_only_the_ranked_cut_not_the_whole_window` pins it now.
+
+**And it printed nothing for the entire batch.** `run` had no progress output and `cli_enrich`
+only reported after everything finished. This stage is legitimately slow — ADR-0003's ~22.5 s
+model load, then ~1.5 s per head — and a slow stage that is silent is indistinguishable from a
+hung one. That is what made a 70-minute bug look like a hang instead of a runaway. Fixed with a
+`progress` callback, defaulting to a no-op so the DAG and tests stay quiet.
+
+**A cached run was paying for a model load to infer nothing.** The structured-output probe is a
+real generation, so it was pulling 5.3 GB into VRAM before discovering there was nothing to do —
+16.5 s on the steady-state path the 06:15 DAG hits every morning after the first. A cache that
+still pays for a model load has given back most of what it saves. The probe is lazy now,
+resolved on the first head that actually needs the model.
+
+### What the first real batch measured
+
+| | |
+|---|---|
+| Heads | 40 |
+| Wall clock | **80.2 s** (~1.5 s each after load) |
+| Schema failures | **0 of 40** |
+| Second run | **100% cache, 0 inferred, 0 rows written, no model call** |
+
+ADR-0003 predicted ~1 minute for 40 heads and measured ~1.0 s per head on much shorter prompts.
+At 4,126 prompt characters the real figure is ~1.5 s, so the capacity bound
+(`CAPACITY_SECONDS_PER_HEAD = 8.0`) has roughly 5x headroom — comfortable, and now backed by a
+measurement rather than an extrapolation.
+
+**Zero schema failures on the first 40 is worth not over-reading.** Ollama's schema-constrained
+decoding is doing most of that work; it is a statement about constrained decoding, not about the
+model's judgement, and `gold.enrichment_rejects` exists for the cases where it stops holding.
+
+The topic enum survived contact with real data. All ten values were reachable, the distribution
+is plausible (`business-corporate` 8, `software-engineering` 8, `other` 6, `ai-ml` 5), and the
+one SEC filing that reached the top 40 was labeled `sec-filing` with `filing_type: "144"` — the
+corpus-fitted decision validated by output rather than by argument. **`other` at 6 of 40 is the
+number to watch**: an escape hatch carrying 15% is doing real work, but if it climbs the enum is
+missing a category.
+
+### One quality finding to carry into the labeling
+
+    "company": "Tesla, Uber, and Waymo"
+
+`Extraction.company` is documented as "the primary company named" and is a single value. The
+model comma-joined three of them rather than picking one or abstaining. The schema accepts it
+because it is a valid string, and field-level exact match will score it wrong — correctly — once
+the labeled set exists. Worth deciding deliberately when labeling: either the prompt says "the
+single primary company, or null if several are equally central", or the field becomes a list.
+Recorded rather than fixed, because changing the prompt bumps `PROMPT_VERSION` and invalidates
+every cached enrichment, which is not a thing to do casually at 01:00.
+
+### `.env` reached into the containers and pointed them at themselves
+
+Surfaced by unpausing the `enrich` DAG and asking whether it could actually reach Ollama —
+which, after the day this had been, seemed worth checking before 06:15 rather than after.
+
+`docker-compose.yml` had:
+
+    SIGNAL_OLLAMA_URL: ${SIGNAL_OLLAMA_URL:-http://host.docker.internal:11434}
+
+The default is right. **Compose never used it.** `${VAR}` is expanded from the project `.env`
+*before* the container starts, and `.env` carries `SIGNAL_OLLAMA_URL=http://localhost:11434` —
+correct for `uv run signal enrich`, and inside a container an address that resolves to the
+container itself. Every enrichment task would have failed with `OllamaUnavailable` against a
+URL nobody chose.
+
+Verified from inside the scheduler:
+
+| Address | Result |
+|---|---|
+| `localhost` (what `.env` supplied) | connection refused |
+| `host.docker.internal` (the ignored default) | **200** |
+| `gateway.docker.internal`, `172.18.240.1` | refused |
+
+**This is the third instance of one pattern in one day**, and the pattern is worth naming:
+*a setting that is correct on the host and wrong in a container, with nothing to say so.*
+`SIGNAL_DATA_ROOT`, `SIGNAL_OUT_ROOT` and `SIGNAL_CACHE_ROOT` were hardcoded absolute long ago
+for precisely this reason — the comment above them says so. The entity dictionary had no
+setting at all and defaulted to a relative path. And this one *had* the right default and was
+overridden by the mechanism meant to make it configurable.
+
+Fixed by moving the override to a differently-named variable (`COMPOSE_OLLAMA_URL`), so a
+local `.env` cannot collide with it. `test_no_host_specific_setting_is_interpolated_from_the_local_env`
+pins the class: any `SIGNAL_*` setting that names a *location* must not be self-interpolated in
+compose. Settings that name a *resource* — `SIGNAL_BRONZE_BUCKET`, `AWS_REGION` — are excluded
+deliberately, because those mean the same thing on both sides and inheriting them is the point.
+
+### The prompt version was stamped `v0` on output produced by the `v1` prompt
+
+The worst of the day's findings, because it was silent and it corrupted the record rather
+than stopping anything.
+
+`Settings.prompt_version` defaulted to `"v0"` — a Phase 0 placeholder, from before any prompt
+existed. `prompt.PROMPT_VERSION` said `"v1"`. **The cache key and every stored row took the
+setting.** So the first 40 real enrichments were written stamped `v0`, produced by the v1
+prompt, under an `input_hash` computed with `v0`.
+
+That is not cosmetic. §7.3's entire governance claim is *accuracy tracked per model and prompt
+version*, and a stamp that does not name the prompt that produced the row makes every model or
+prompt comparison meaningless. Worse for the cache: bump the prompt to v2 and those rows keep
+their v0 key, so nothing collides and nothing is invalidated — the mechanism designed to make
+a prompt change visible would have let it pass unnoticed.
+
+**Fixed by removing `prompt_version` from `Settings` entirely.** The prompt module owns the
+version because the prompt is the thing that changes, and it is deliberately *not* a setting:
+an operator able to override it could serve output under a stamp that never described it,
+which is exactly the lie the three-part key exists to prevent.
+
+The 40 mislabeled rows were deleted rather than re-stamped. They were keyed under a version
+that never described them, so they were unreachable under the corrected key anyway — dead rows
+asserting something false. 80 seconds of GPU to regenerate.
+
+Found only because the first `enrich` DAG run failed for an unrelated reason and the container's
+settings were printed side by side with the host's.
+
+### The DAG failed on its first run, correctly, against a config gap
+
+`RuntimeError: refusing to enrich with an unpinned model digest (ADR-0003)`.
+
+The guard added hours earlier, doing precisely its job. `SIGNAL_OLLAMA_MODEL_DIGEST` lives in
+`.env`, `.env` is not mounted into the containers, and `docker-compose.yml` did not pass it
+through — so the container saw `UNPINNED` while the identical code from a shell had the pin.
+
+Note the asymmetry with the URL finding directly above: the digest and model tag **should** be
+inherited from `.env`, because they name a *resource* that means the same thing on both sides.
+The URL must **not** be, because it names a *location* that does not. Both are now explicit,
+and `test_no_host_specific_setting_is_interpolated_from_the_local_env` encodes which is which.
+
+Worth saying plainly: this failure was the good kind. It refused to write rows keyed on a
+string that does not name a model, which is what the guard was for.
+
+### `DFF` and `DGS10` failed every real invocation: FRED's real cap is vintage dates, not bytes
+
+Found by invoking the deployed Lambda for real, immediately after confirming the key and
+`terraform apply` — checking the thing rather than the proxy for it.
+
+    {"source_id": "macro", "documents": 6, "outcomes": {"ok": 4, "error": 2}}
+
+Both failures were HTTP 400 from FRED itself:
+
+    Bad Request.  There are 2885 vintage dates in the specified real-time period:
+    2015-01-01 to 9999-12-31.  This exceeds the maximum number of vintage dates
+    allowed for this file type (2000).
+
+**The constraint this module's own docstring cited was the wrong one.** It reasoned about a
+100,000-*observation* ceiling and sized `REALTIME_START` against that. The limit that actually
+bites is a **2,000-*vintage-date*** cap, and it has nothing to do with size: a monthly series
+like `PAYEMS` accumulates one or two vintages per period and is nowhere near it after a decade,
+while a **daily** series — `DFF`, the effective fed funds rate; `DGS10`, the 10-year constant
+maturity — racks a new vintage roughly every business day whether or not the value was ever
+"revised" in the sense §8 cares about. Only 2 of 6 watchlist series are daily, which is why 4
+of 6 succeeding looked like partial success rather than a systemic bound.
+
+**Measured the actual boundary before picking a fix**, by bisection against the live API:
+
+| Years back | `DFF` | `DGS10` |
+|---:|---|---|
+| 11 (the shipped bound) | 2730 vintages — FAILS | 2719 — FAILS |
+| 9 | 2239 — FAILS | 2228 — FAILS |
+| 8 | succeeds | succeeds |
+| 5 | succeeds, ~1245 vintages | succeeds |
+
+Eight years technically clears the cap — at **99.6% of it**. That is not a bound with margin,
+it is a boundary hugged, and a fixed calendar anchor only ages toward it: the same 11-year
+window that failed today was presumably fine when this was designed against "2015 to some
+earlier now." A bound stated as a fixed date decays; the fix is the one this project has
+already used once, for backfill horizons — measure **backward from now**, not from a fixed
+point.
+
+`REALTIME_START` is now `VINTAGE_WINDOW_YEARS = 5`, resolved at poll time. Threaded through
+`_fetch_series` and `_document` rather than left as a module constant, so the record stored in
+bronze — `source_url` — names the window actually requested rather than a stale one (SPEC
+§6.1: the record must not describe a fetch that did not happen). 5 years holds `DFF` to ~60%
+of the cap, comfortable margin, and is drastically more history than §8's own worked payoff
+needs ("payrolls revised down 46k across the prior two months" is about recent revisions).
+
+**Rebuilt, re-planned, not yet re-deployed as of this writing.** `terraform plan` after
+`make lambda-package` shows **9 to change, 0 to destroy** — every poller's code hash moves,
+because all nine ship from one zip; nothing else drifts. `NOT_YET_DEPLOYED` keeps `"macro"`
+until the live Lambda's `CodeSha256` actually matches the fixed build, confirmed by direct
+invocation, not by `terraform apply` having exited zero — the same distinction the September
+2026 finding above draws between "applied" and "actually reachable."
+
+### `macro` deployed for real, verified, and unmarked as pending
+
+Confirmed the deploy the right way — by the live `CodeSha256` matching the fixed build and a
+real invocation, not by `terraform apply` exiting zero.
+
+    deployed CodeSha256: Dck9nSZR7lBAY5VQp2YCX9YJDoRj9w87npJQj8sLJhU=
+    fixed build hash   : Dck9nSZR7lBAY5VQp2YCX9YJDoRj9w87npJQj8sLJhU=   — match
+
+    {"source_id": "macro", "documents": 6, "outcomes": {"ok": 6}}
+
+All six series, all `ok`, all sharing the corrected 5-year window — `DFF` and `DGS10`
+included, with real observation counts (26,349 and 16,865 respectively).
+
+`macro` is out of `NOT_YET_DEPLOYED`. `DEPLOYED_SOURCE_IDS` is 9; `ingest_monitor` now
+assesses it for real every hour, the way it has assessed the other eight since Phase 1-4A.
+
 ### `test_run_query_times_out_rather_than_polling_forever` was a wall-clock race
 
 Found by an external review run against this runbook's own "everything is green" claim, not

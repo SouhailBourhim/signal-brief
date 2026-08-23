@@ -35,6 +35,7 @@ from pydantic import ValidationError
 from signal_core.config import Settings
 from signal_core.enrich import prompt as prompt_module
 from signal_core.enrich.client import OllamaUnavailable, generate, supports_schema_format
+from signal_core.enrich.prompt import PROMPT_VERSION
 from signal_core.enrich.schema import Enrichment
 
 EVALS = Path(__file__).parent
@@ -81,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
         for row in _load(args.out)
         if not (
             row.get("model_digest") == settings.ollama_model_digest
-            and row.get("prompt_version") == settings.prompt_version
+            and row.get("prompt_version") == PROMPT_VERSION
         )
     ]
 
@@ -104,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
             "cluster_id": example.get("cluster_id"),
             "model_digest": settings.ollama_model_digest,
             "model_name": settings.ollama_model,
-            "prompt_version": settings.prompt_version,
+            "prompt_version": PROMPT_VERSION,
             "elapsed_seconds": round(generation.elapsed_seconds, 2),
         }
         try:

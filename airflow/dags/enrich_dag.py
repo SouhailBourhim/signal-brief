@@ -47,7 +47,8 @@ def enrich_dag():
     def enrich() -> dict[str, float | int | str | None]:
         from signal_core.enrich.run import ENRICH_TOP_N, run
 
-        result = run(limit=ENRICH_TOP_N)
+        # `print` goes to the task log, which is the only place anyone watches this from.
+        result = run(limit=ENRICH_TOP_N, progress=print)
         print(
             f"{result.processed} heads: {result.inferred} inferred, "
             f"{result.cache_hits} from cache ({result.cache_hit_rate:.0%}), "
