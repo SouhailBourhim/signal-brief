@@ -7,6 +7,8 @@ immutably; collapses syndicated coverage into ranked story clusters; and publish
 at 07:00 Africa/Casablanca with lineage, replay, cost controls, and locally run LLM
 enrichment built in.
 
+![What Signal is, the problem it answers, and what a morning brief actually contains](docs/assets/project-story.jpeg)
+
 **Status: Phases 0-4A merged; Phase 4B built, both awaiting acceptance.** Eight pollers —
 Hacker News (items and top-story scores), SEC EDGAR + Form D, three RSS/Atom feeds, and daily
 market bars — run as scheduled Lambdas and land raw payloads in S3; local Spark jobs
@@ -63,6 +65,8 @@ both halves, the table lineage, and what is deliberately still missing.
 
 **New to data engineering?** [`docs/how-signal-works.md`](docs/how-signal-works.md) explains
 what each phase is for, in plain English, with no prior knowledge assumed.
+
+![The full source-to-brief journey: acquire, preserve, normalize, understand, enrich and score, assemble, deliver and learn](docs/assets/data-lifecycle.jpeg)
 
 ## Quickstart
 
@@ -185,6 +189,7 @@ moves; see `docs/athena.md` for why that's stated rather than hidden.
 | `evals/` | Labeled sets, scorers, and the accuracy floors CI enforces |
 | `evals/experiments/` | Measurements that decide a question without shipping a dependency — ADR-0009's embedding trials, and the corpus-level false-merge rate a pairwise eval cannot see |
 | [`docs/architecture.md`](docs/architecture.md) | What runs where, and why the AWS/local line falls where it does — diagrams, table lineage, and what is not built yet |
+| [`docs/operations.md`](docs/operations.md) | How Signal runs day to day: the 07:00 critical path, replay vs. catch-up, and failure-to-response mapping |
 | [`docs/athena.md`](docs/athena.md) | Querying the lake: setup, real questions, the `SELECT *` vs. projected vs. partition-pruned measurement |
 | [`docs/how-signal-works.md`](docs/how-signal-works.md) | What each phase is for, in plain English — no prior knowledge assumed |
 | [`docs/decisions/`](docs/decisions/) | ADRs, including the ones that reversed earlier choices |
