@@ -656,6 +656,22 @@ until the live Lambda's `CodeSha256` actually matches the fixed build, confirmed
 invocation, not by `terraform apply` having exited zero — the same distinction the September
 2026 finding above draws between "applied" and "actually reachable."
 
+### `macro` deployed for real, verified, and unmarked as pending
+
+Confirmed the deploy the right way — by the live `CodeSha256` matching the fixed build and a
+real invocation, not by `terraform apply` exiting zero.
+
+    deployed CodeSha256: Dck9nSZR7lBAY5VQp2YCX9YJDoRj9w87npJQj8sLJhU=
+    fixed build hash   : Dck9nSZR7lBAY5VQp2YCX9YJDoRj9w87npJQj8sLJhU=   — match
+
+    {"source_id": "macro", "documents": 6, "outcomes": {"ok": 6}}
+
+All six series, all `ok`, all sharing the corrected 5-year window — `DFF` and `DGS10`
+included, with real observation counts (26,349 and 16,865 respectively).
+
+`macro` is out of `NOT_YET_DEPLOYED`. `DEPLOYED_SOURCE_IDS` is 9; `ingest_monitor` now
+assesses it for real every hour, the way it has assessed the other eight since Phase 1-4A.
+
 ## Acceptance
 
 SPEC §12's 4B gate, item by item. **Not met** — two external gates and a calendar one.

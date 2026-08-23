@@ -359,7 +359,7 @@ SOURCES: dict[str, SourceConfig] = {
 #
 # **Remove an entry here in the same change that applies its Terraform.**
 # `test_a_pending_source_is_really_pending` stops this becoming a place things rot.
-NOT_YET_DEPLOYED: frozenset[str] = frozenset({"macro"})
+NOT_YET_DEPLOYED: frozenset[str] = frozenset()
 
 # The deployed sources: everything with a Lambda, a schedule, and a state item. `fake` is
 # the Phase 0 fixture source and has none of those, so assessing it would report a
