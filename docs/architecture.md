@@ -8,6 +8,13 @@ because it must run whether or not a laptop is on. Processing is local because E
 MWAA buy nothing here that `s3a` and Docker Compose do not — [ADR-0002](decisions/ADR-0002-local-runtime-shape.md)
 records that decision and what would reverse it.
 
+![AWS and local deployment topology: the always-on AWS ingestion box next to the local analysis, enrichment and publishing box, the numbered pipeline stages, and the replay/catch-up loop between them](assets/deployment-topology.jpeg)
+
+The diagrams below draw the same split at finer grain — table lineage, the daily sequence —
+and predate 4A/4B, so their box counts (six sources, no `gold.*` tables) are behind the
+picture above; see [`docs/operations.md`](operations.md) for the schedules and failure
+semantics that picture doesn't show.
+
 ## The system
 
 ```mermaid
@@ -168,16 +175,17 @@ a cron expression.
 
 ## What is not built yet
 
-The diagram above is what exists. Kept separate on purpose — a diagram that draws the
-finished system is a diagram that lies about the current one.
+The two mermaid diagrams above are narrower than the deployment picture — they still show
+the original six sources and no `gold.*` tables — but the table below is kept current: it is
+the actual outstanding-work list, not a diagram caption.
 
 | | phase | status |
 |---|---|---|
-| Ollama enrichment — summary, topic, extraction, cached and validated | 4B | not started |
-| ALFRED bitemporal macro store | 4B | not started |
-| Email delivery at 07:00 | 4A | not started; the brief is `make brief` today |
-| Maintenance DAG — compaction, snapshot expiry, orphan cleanup | 4A | not started |
-| dbt migration of silver→gold; Kafka + Structured Streaming | 5 | gated on [ADR-0001](decisions/ADR-0001-no-kafka.md)'s re-entry criteria |
+| Ollama enrichment — summary, topic, extraction, cached and validated | 4B | done — `enrich/`, `gold.cluster_enrichment` |
+| ALFRED bitemporal macro store | 4B | done — `spark/jobs/macro.py`, `gold.macro_observations` |
+| Email delivery at 07:00 | 4A | done — SES via boto3, `brief_dag` |
+| Maintenance DAG — compaction, snapshot expiry, orphan cleanup | 4A | done — `maintenance_dag.py`, 02:00 daily |
+| dbt migration of silver→gold; Kafka + Structured Streaming | 5 | gated on [ADR-0001](decisions/ADR-0001-no-kafka.md)'s re-entry criteria — not yet met |
 
 ## Why this is not an AWS Infrastructure Composer diagram
 
