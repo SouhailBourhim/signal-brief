@@ -604,6 +604,58 @@ and `test_no_host_specific_setting_is_interpolated_from_the_local_env` encodes w
 Worth saying plainly: this failure was the good kind. It refused to write rows keyed on a
 string that does not name a model, which is what the guard was for.
 
+### `DFF` and `DGS10` failed every real invocation: FRED's real cap is vintage dates, not bytes
+
+Found by invoking the deployed Lambda for real, immediately after confirming the key and
+`terraform apply` — checking the thing rather than the proxy for it.
+
+    {"source_id": "macro", "documents": 6, "outcomes": {"ok": 4, "error": 2}}
+
+Both failures were HTTP 400 from FRED itself:
+
+    Bad Request.  There are 2885 vintage dates in the specified real-time period:
+    2015-01-01 to 9999-12-31.  This exceeds the maximum number of vintage dates
+    allowed for this file type (2000).
+
+**The constraint this module's own docstring cited was the wrong one.** It reasoned about a
+100,000-*observation* ceiling and sized `REALTIME_START` against that. The limit that actually
+bites is a **2,000-*vintage-date*** cap, and it has nothing to do with size: a monthly series
+like `PAYEMS` accumulates one or two vintages per period and is nowhere near it after a decade,
+while a **daily** series — `DFF`, the effective fed funds rate; `DGS10`, the 10-year constant
+maturity — racks a new vintage roughly every business day whether or not the value was ever
+"revised" in the sense §8 cares about. Only 2 of 6 watchlist series are daily, which is why 4
+of 6 succeeding looked like partial success rather than a systemic bound.
+
+**Measured the actual boundary before picking a fix**, by bisection against the live API:
+
+| Years back | `DFF` | `DGS10` |
+|---:|---|---|
+| 11 (the shipped bound) | 2730 vintages — FAILS | 2719 — FAILS |
+| 9 | 2239 — FAILS | 2228 — FAILS |
+| 8 | succeeds | succeeds |
+| 5 | succeeds, ~1245 vintages | succeeds |
+
+Eight years technically clears the cap — at **99.6% of it**. That is not a bound with margin,
+it is a boundary hugged, and a fixed calendar anchor only ages toward it: the same 11-year
+window that failed today was presumably fine when this was designed against "2015 to some
+earlier now." A bound stated as a fixed date decays; the fix is the one this project has
+already used once, for backfill horizons — measure **backward from now**, not from a fixed
+point.
+
+`REALTIME_START` is now `VINTAGE_WINDOW_YEARS = 5`, resolved at poll time. Threaded through
+`_fetch_series` and `_document` rather than left as a module constant, so the record stored in
+bronze — `source_url` — names the window actually requested rather than a stale one (SPEC
+§6.1: the record must not describe a fetch that did not happen). 5 years holds `DFF` to ~60%
+of the cap, comfortable margin, and is drastically more history than §8's own worked payoff
+needs ("payrolls revised down 46k across the prior two months" is about recent revisions).
+
+**Rebuilt, re-planned, not yet re-deployed as of this writing.** `terraform plan` after
+`make lambda-package` shows **9 to change, 0 to destroy** — every poller's code hash moves,
+because all nine ship from one zip; nothing else drifts. `NOT_YET_DEPLOYED` keeps `"macro"`
+until the live Lambda's `CodeSha256` actually matches the fixed build, confirmed by direct
+invocation, not by `terraform apply` having exited zero — the same distinction the September
+2026 finding above draws between "applied" and "actually reachable."
+
 ## Acceptance
 
 SPEC §12's 4B gate, item by item. **Not met** — two external gates and a calendar one.

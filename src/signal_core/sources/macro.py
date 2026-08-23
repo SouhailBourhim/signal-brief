@@ -24,14 +24,35 @@ written rather than assumed: an unauthenticated request answers HTTP 400 with
 it reaches the Lambda through SSM Parameter Store rather than an environment variable — see
 `infra/terraform/main/macro.tf` for why.
 
-## The window is bounded, and the bound is a decision
+## The window is bounded, and the bound is a rolling one measured against a real cap
 
-`REALTIME_START` is 2015-01-01, not the beginning of each series. §8's worked payoff is
-"payrolls revised down 46k across the prior two months" — a claim about recent revisions —
-and a full vintage history of PAYEMS back to 1939 is a much larger response for data no brief
-will ever cite. It also keeps every request well inside FRED's 100,000-observation ceiling,
-which a full daily series across all vintages could plausibly approach. Widening it is a
-one-line change and costs only bytes.
+The constraint is not the one first assumed. The 100,000-observation ceiling this docstring
+used to cite is real but was never the binding one; the one that actually bites is FRED's
+**2,000-vintage-date limit per request**, and it is a limit on *vintages*, not observations
+or bytes — a monthly series like PAYEMS accumulates vintages slowly (one or two revisions per
+period) and never gets close, while a **daily** series racks one new vintage roughly every
+business day, whether or not the value was ever "revised" in the sense §8 cares about.
+
+Found against the live account (2026-08-23), not assumed: with a fixed
+`REALTIME_START = "2015-01-01"`, `DFF` (effective fed funds rate) and `DGS10` (10-year
+constant maturity) both failed with `Bad Request. There are 2885 vintage dates in the
+specified real-time period ... exceeds the maximum ... (2000)`. Measuring the actual boundary
+by bisection: 8 years back from today still succeeds, but at **99.6% of the cap** — real
+margin, not a fixed anchor with headroom, is what a bound like this needs, because a fixed
+calendar date only ages toward the ceiling and a boundary hugged this closely fails again
+within a year.
+
+So `REALTIME_START` is not a constant, it is `VINTAGE_WINDOW_YEARS` measured **backward from
+now** — the same principle `ops/recovery.py`'s backfill horizon already uses ("measured
+backward from *now*, not from the outage's end"), applied here for the same reason: an anchor
+that does not move eventually fails no matter how safe it looked when it was chosen.
+
+5 years holds a daily series to roughly 60% of the cap (measured: ~249 vintage-dates/year for
+`DFF`), comfortable margin rather than a boundary hugged, and is drastically more history than
+§8's own worked payoff needs — "payrolls revised down 46k across the prior two months" is a
+claim about recent revisions, and five years of a monthly series' sparse vintage record is not
+where the risk lives anyway. Widening it is a one-line change; the constant to re-measure
+against is 2,000 vintage dates, not 100,000 observations.
 
 ## Every fetch re-states everything
 
@@ -46,7 +67,7 @@ A published vintage never changes, so re-reading it is free of consequence — t
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 
@@ -56,8 +77,25 @@ from signal_core.timeutil import utc_now
 from signal_core.watchlist import load as load_watchlist
 
 # See the module docstring. The far-future end is ALFRED's own sentinel for "still current".
-REALTIME_START = "2015-01-01"
+# `REALTIME_START` is computed per-poll from `VINTAGE_WINDOW_YEARS`, not fixed — see below.
 REALTIME_END = "9999-12-31"
+
+# How far back the vintage window reaches, measured backward from the poll's own `now` rather
+# than a fixed calendar date. Measured against FRED's real 2,000-vintage-date cap: `DFF`, the
+# fastest-accumulating series on the watchlist, produces ~249 vintages/year, so 5 years holds
+# it to ~60% of the cap — real margin, not a boundary hugged. See the module docstring.
+VINTAGE_WINDOW_YEARS = 5
+
+
+def _realtime_start(now: datetime) -> str:
+    """`REALTIME_START`, measured backward from `now` rather than fixed at a calendar date.
+
+    A 365.25-day year, not 365: over `VINTAGE_WINDOW_YEARS` the quarter-day-a-year drift is
+    real (more than a day at 5 years) and costs nothing to get right, unlike the days it would
+    silently shave off the margin this bound depends on.
+    """
+    return (now - timedelta(days=VINTAGE_WINDOW_YEARS * 365.25)).date().isoformat()
+
 
 # FRED asks for no specific rate but the courtesy pacing every other poller here uses applies:
 # six sequential requests at this spacing is a few seconds.
@@ -146,6 +184,10 @@ def poll(config: SourceConfig, state: State) -> tuple[list[RawDocument], State]:
         # infrastructure crash the CloudWatch alarms page about (SPEC §6.1).
         return _error_batch(config, tickers, str(exc))
 
+    # Computed once per poll, not per series, so all six requests in one run carry the same
+    # window — the same reasoning `market.py` gives for its own realtime windows.
+    realtime_start = _realtime_start(utc_now())
+
     documents: list[RawDocument] = []
     with httpx.Client(
         base_url=config.url,
@@ -155,7 +197,7 @@ def poll(config: SourceConfig, state: State) -> tuple[list[RawDocument], State]:
         for index, series_id in enumerate(tickers):
             if index:
                 time.sleep(REQUEST_SPACING_SECONDS)
-            documents.append(_fetch_series(client, config, series_id, api_key))
+            documents.append(_fetch_series(client, config, series_id, api_key, realtime_start))
 
     now = utc_now()
     ok = [d for d in documents if d.outcome is FetchOutcome.OK]
@@ -177,7 +219,7 @@ def poll(config: SourceConfig, state: State) -> tuple[list[RawDocument], State]:
 
 
 def _fetch_series(
-    client: httpx.Client, config: SourceConfig, series_id: str, api_key: str
+    client: httpx.Client, config: SourceConfig, series_id: str, api_key: str, realtime_start: str
 ) -> RawDocument:
     """One series, all its vintages inside the bounded window.
 
@@ -192,7 +234,7 @@ def _fetch_series(
         "series_id": series_id,
         "api_key": api_key,
         "file_type": "json",
-        "realtime_start": REALTIME_START,
+        "realtime_start": realtime_start,
         "realtime_end": REALTIME_END,
     }
     try:
@@ -213,7 +255,7 @@ def _fetch_series(
         http_status = 0
         outcome = FetchOutcome.ERROR
 
-    return _document(config, series_id, now, started, payload, http_status, outcome)
+    return _document(config, series_id, now, started, payload, http_status, outcome, realtime_start)
 
 
 def _document(
@@ -224,6 +266,7 @@ def _document(
     payload: bytes,
     http_status: int,
     outcome: FetchOutcome,
+    realtime_start: str,
 ) -> RawDocument:
     """Build the bronze row.
 
@@ -232,10 +275,15 @@ def _document(
     a secret written into it cannot be redacted later — only the whole object deleted. This is
     also the field `spark/jobs/macro.py::series_id_from_url` reads the series id back out of,
     so it has to carry `series_id` and nothing sensitive.
+
+    `realtime_start` is threaded through rather than read off the module constant, because it
+    no longer is one — it is measured from this poll's own `now`. The stored URL has to name
+    what was actually requested, or bronze would carry a record of a fetch that never happened
+    (SPEC §6.1).
     """
     source_url = (
         f"{config.url}{PATH}?series_id={series_id}"
-        f"&realtime_start={REALTIME_START}&realtime_end={REALTIME_END}&file_type=json"
+        f"&realtime_start={realtime_start}&realtime_end={REALTIME_END}&file_type=json"
     )
     return RawDocument(
         ingest_id=f"{config.source_id}-{now:%Y%m%dT%H%M%S%f}-{series_id}",
@@ -266,8 +314,9 @@ def _error_batch(
     now = utc_now()
     started = time.monotonic()
     payload = error.encode("utf-8")
+    realtime_start = _realtime_start(now)
     documents = [
-        _document(config, series_id, now, started, payload, 0, FetchOutcome.ERROR)
+        _document(config, series_id, now, started, payload, 0, FetchOutcome.ERROR, realtime_start)
         for series_id in series_ids
     ]
     return documents, State(source_id=config.source_id, consecutive_failures=1)
