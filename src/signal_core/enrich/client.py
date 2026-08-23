@@ -28,6 +28,7 @@ of what the server did — the difference is how often that enforcement has to r
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -76,25 +77,38 @@ def _client(settings: Settings, timeout: float) -> httpx.Client:
     return httpx.Client(base_url=settings.ollama_url.rstrip("/"), timeout=timeout)
 
 
+# `FROM /path/.ollama/models/blobs/sha256-667b0c…` — the blob filename uses a hyphen, the
+# digest a colon.
+_BLOB_DIGEST = re.compile(r"blobs[/\\]sha256[-:]([0-9a-f]{64})")
+
+
 def local_model_digest(settings: Settings | None = None, *, timeout: float = 10.0) -> str | None:
-    """The digest of the locally installed model, or None if the server is unreachable.
+    """The digest of the locally installed **model weights**, or None if unreachable.
 
     This is what makes ADR-0003's pin a *measurement* rather than a value copied out of a
     document. The ADR recorded a digest on 2026-08-18; Ollama may have re-pulled the tag
     since, and pinning a digest nobody verified is worse than leaving it `UNPINNED`, because
     it makes the cache key look trustworthy while keying on a fiction.
+
+    **Read from `/api/show`'s modelfile, not from `/api/tags`.** Those return two different
+    digests and only one of them is the model: `/api/tags` gives the *manifest* digest — a
+    hash of the JSON listing the layers — while ADR-0003 recorded the
+    `application/vnd.ollama.image.model` blob, which is what `ollama show --modelfile` names
+    in its `FROM` line. Comparing the two makes every check report drift that has not
+    happened, which is worse than not checking: it trains the operator to ignore the one
+    signal that says the cache key stopped meaning anything.
     """
     settings = settings or Settings()
     try:
         with _client(settings, timeout) as client:
-            response = client.get("/api/tags")
+            response = client.post("/api/show", json={"model": settings.ollama_model})
             response.raise_for_status()
-            for model in response.json().get("models", []):
-                if model.get("name") == settings.ollama_model:
-                    return model.get("digest")
+            modelfile = response.json().get("modelfile") or ""
     except (httpx.HTTPError, ValueError):
         return None
-    return None
+
+    match = _BLOB_DIGEST.search(modelfile)
+    return f"sha256:{match.group(1)}" if match else None
 
 
 def supports_schema_format(settings: Settings | None = None, *, timeout: float = 30.0) -> bool:
