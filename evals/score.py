@@ -303,9 +303,9 @@ def score_enrichment() -> Score:
 def _enrichment_config() -> tuple[str, str]:
     """The digest and prompt version predictions must carry to be scored."""
     from signal_core.config import Settings
+    from signal_core.enrich.prompt import PROMPT_VERSION
 
-    settings = Settings()
-    return settings.ollama_model_digest, settings.prompt_version
+    return Settings().ollama_model_digest, PROMPT_VERSION
 
 
 SCORERS = {

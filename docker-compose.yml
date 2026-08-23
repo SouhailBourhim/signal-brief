@@ -51,8 +51,27 @@ x-airflow-common: &airflow-common
     # left a directory nobody could delete without root. The Lambda package already sets
     # this for its own reasons; the DAGs folder needs it for this one.
     PYTHONDONTWRITEBYTECODE: "1"
-    # Ollama is on the host, not in this network.
-    SIGNAL_OLLAMA_URL: ${SIGNAL_OLLAMA_URL:-http://host.docker.internal:11434}
+    # Ollama is on the host, not in this network — so `localhost` means two different
+    # machines depending on which side of the container wall you are standing on, and the
+    # `.env` that gets this right locally gets it exactly wrong here.
+    #
+    # **Deliberately NOT `${SIGNAL_OLLAMA_URL:-…}`.** Compose interpolates `${VAR}` from the
+    # project `.env` *before* the container starts, so `SIGNAL_OLLAMA_URL=http://localhost:11434`
+    # — correct for `uv run signal enrich` — silently replaced this default with an address
+    # that resolves to the container itself. Every enrichment task would have failed with
+    # `OllamaUnavailable` against a URL nobody set on purpose. Found 2026-08-23, the same day
+    # `resolve` turned out not to be able to see its dictionary: same shape, same cause.
+    #
+    # The override lives under a different name so it cannot collide with the local setting.
+    # Native Linux Docker (not Desktop) usually wants http://172.17.0.1:11434.
+    SIGNAL_OLLAMA_URL: ${COMPOSE_OLLAMA_URL:-http://host.docker.internal:11434}
+    # These *are* interpolated from `.env`, and that is correct: unlike the URL, a model tag
+    # and a digest name the same thing on both sides of the container wall. Missing them is
+    # how the first `enrich` DAG run failed — the container saw `UNPINNED` and refused, while
+    # the same code from a shell had the pin from `.env`. A guard doing its job against a
+    # config gap, which is a better failure than the alternative but still a gap.
+    SIGNAL_OLLAMA_MODEL: ${SIGNAL_OLLAMA_MODEL:-llama3.1:8b}
+    SIGNAL_OLLAMA_MODEL_DIGEST: ${SIGNAL_OLLAMA_MODEL_DIGEST:-UNPINNED}
 
     # Absolute, because Airflow tasks run with cwd=/opt/airflow and the defaults in
     # config.py are relative — a relative cache root would scatter downloaded staging

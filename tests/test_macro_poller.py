@@ -19,7 +19,7 @@ import respx
 from signal_core.config import SOURCES
 from signal_core.contracts import FetchOutcome, State
 from signal_core.parse.macro import parse, series_id_from_url
-from signal_core.sources.macro import PATH, PLACEHOLDER, poll
+from signal_core.sources.macro import PATH, PLACEHOLDER, VINTAGE_WINDOW_YEARS, _realtime_start, poll
 
 FIXTURES = Path(__file__).parent / "fixtures" / "bronze" / "macro"
 PAYEMS = (FIXTURES / "payems_vintages.json").read_bytes()
@@ -142,6 +142,56 @@ def test_a_changed_vintage_advances_the_content_clock():
 
     assert second.last_content_hash != first.last_content_hash
     assert second.last_content_change_at != first.last_content_change_at
+
+
+# --- the vintage window --------------------------------------------------------------------
+#
+# Regression coverage for the real failure found against the live account (2026-08-23): a
+# fixed REALTIME_START="2015-01-01" made DFF and DGS10 fail with FRED's 2,000-vintage-date
+# cap, because they are daily series and a monthly-series-sized window blows past it.
+
+
+def test_the_window_is_measured_backward_from_now_not_a_fixed_date():
+    """A fixed calendar anchor only ages toward FRED's cap; a rolling one holds a constant
+    margin forever. `ops/recovery.py`'s backfill horizon makes the identical argument for the
+    identical reason."""
+    from datetime import UTC, datetime
+
+    earlier = _realtime_start(datetime(2020, 1, 1, tzinfo=UTC))
+    later = _realtime_start(datetime(2026, 1, 1, tzinfo=UTC))
+    assert earlier != later, "the window did not move when `now` did"
+    assert earlier < later
+
+
+def test_the_window_is_the_stated_number_of_years():
+    from datetime import UTC, datetime
+
+    now = datetime(2026, 8, 23, tzinfo=UTC)
+    start = _realtime_start(now)
+    assert start.startswith(str(now.year - VINTAGE_WINDOW_YEARS))
+
+
+@respx.mock
+def test_every_series_in_one_poll_shares_the_same_window():
+    """Computed once per `poll()` call, not once per series — otherwise a poll straddling
+    midnight could send six requests with six different windows for no reason."""
+    route = _route()
+    poll(CONFIG, STATE)
+
+    starts = {dict(r.request.url.params)["realtime_start"] for r in route.calls}
+    assert len(starts) == 1, "the six requests in one poll used different windows"
+
+
+@respx.mock
+def test_the_stored_url_names_the_window_actually_requested():
+    """SPEC §6.1: the record must not lie about what was fetched. Bronze is immutable, so a
+    stored URL claiming a different window than the one actually sent would be permanently
+    wrong with no way to correct it short of deleting the row."""
+    route = _route()
+    documents, _ = poll(CONFIG, STATE)
+
+    sent_start = dict(route.calls[0].request.url.params)["realtime_start"]
+    assert f"realtime_start={sent_start}" in documents[0].source_url
 
 
 # --- the secret ---------------------------------------------------------------------------

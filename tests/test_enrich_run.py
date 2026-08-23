@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -19,6 +20,7 @@ import respx
 from signal_core.config import Settings
 from signal_core.enrich import store
 from signal_core.enrich.run import (
+    EnrichmentRun,
     _cache_keys,
     cluster_input,
     enrich_clusters,
@@ -454,3 +456,76 @@ def test_the_gold_enrichment_ddl_uses_types_athena_accepts():
     for ddl in (store.CLUSTER_ENRICHMENT_DDL, store.ENRICHMENT_REJECTS_DDL):
         for declared in _declared_types(ddl):
             assert declared in ATHENA_ICEBERG_TYPES, f"{declared!r} is not an Athena Iceberg type"
+
+
+def test_run_enriches_only_the_ranked_cut_not_the_whole_window(monkeypatch):
+    """The bug this test exists for, found by a run that took 70 minutes instead of one.
+
+    `ranker.rank` returns **every** scored cluster with only the top `limit` flagged
+    `included` — it *marks* the cut, it does not apply it. `run` passed `window.clusters`
+    straight through, so a 2,979-cluster window sent 2,979 heads to the GPU instead of 40,
+    spending most of the budget on exactly the routine SEC filings ADR-0011 exists to keep
+    out. Nothing else would have caught it: every count in `EnrichmentRun` was internally
+    consistent, and the rows written were individually correct.
+    """
+    from signal_core.brief import select as select_module
+    from signal_core.enrich import run as run_module
+
+    window = [_cluster(f"c{i}", title=f"Story number {i}") for i in range(50)]
+    for position, cluster in enumerate(window, start=1):
+        cluster["rank"] = position
+        cluster["included"] = position <= 10
+
+    monkeypatch.setattr(
+        run_module,
+        "ranked_window",
+        lambda **_: select_module.RankedWindow(
+            clusters=window,
+            cluster_read=SimpleNamespace(clusters=window),
+            entities={},
+            velocity_slopes={},
+            market_moves={},
+            feedback={},
+            cluster_query=store.EMPTY_RESULT,
+            entity_query=store.EMPTY_RESULT,
+            velocity_query=store.EMPTY_RESULT,
+            market_query=store.EMPTY_RESULT,
+            feedback_query=store.EMPTY_RESULT,
+        ),
+    )
+
+    seen: list[list[dict]] = []
+    monkeypatch.setattr(
+        run_module,
+        "enrich_clusters",
+        lambda clusters, **_: seen.append(clusters) or EnrichmentRun(processed=len(clusters)),
+    )
+
+    result = run_module.run(settings=SETTINGS, client=_FakeAthena())
+
+    assert len(seen[0]) == 10, "enriched the whole window instead of the ranked cut"
+    assert result.processed == 10
+    assert all(c["included"] for c in seen[0])
+
+
+@respx.mock
+def test_a_fully_cached_run_never_touches_the_model():
+    """The steady state this stage is designed for, and the one the 06:15 DAG hits every
+    morning after the first.
+
+    The structured-output probe is a *real* generation, so on a cold GPU it pays ADR-0003's
+    ~22.5 s model load. Running it eagerly made a run with nothing to infer cost 16.5 s to
+    infer nothing — a cache that still pays for a model load has given back most of what it
+    saves. Measured, not assumed: that was the second real run against the deployed lake.
+    """
+    cluster = _cluster()
+    athena = _FakeAthena(
+        enrichment=[[cluster["cluster_id"], _key(cluster), "cached", "ai-ml", "{}"]]
+    )
+    probe = respx.post(f"{BASE}/api/generate")
+
+    result = enrich_clusters([cluster], settings=SETTINGS, now=NOW, client=athena)
+
+    assert probe.call_count == 0, "a fully cached run still called the model"
+    assert result.cache_hit_rate == 1.0
+    assert result.inferred == 0

@@ -74,7 +74,7 @@ def run_enrich(*, limit: int | None = None) -> int:
         )
         return 1
 
-    result = run(limit=limit or ENRICH_TOP_N)
+    result = run(limit=limit or ENRICH_TOP_N, progress=print)
     print(
         f"{result.processed} heads: {result.inferred} inferred, "
         f"{result.cache_hits} from cache ({result.cache_hit_rate:.0%}), "

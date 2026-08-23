@@ -152,15 +152,16 @@ def test_the_deployed_source_count_is_what_the_phases_claim():
     §7.4's velocity component, which SPEC §12 carried forward from Phase 2, and `market`
     for its market-corroboration component.
 
-    Phase 4B adds `macro` for SPEC §8's bitemporal store — but it is **not counted here**,
-    because it is in `NOT_YET_DEPLOYED` until its Terraform is applied. `DEPLOYED_SOURCE_IDS`
-    means "has a Lambda in the account", and counting a source whose function does not exist
-    yet would fail `ingest_monitor` every hour for a deliberate state.
+    Phase 4B adds `macro` for SPEC §8's bitemporal store. It sat in `NOT_YET_DEPLOYED`
+    between the commit that added it and the `terraform apply` that created its Lambda —
+    which also surfaced a real defect (`DFF`/`DGS10` exceeding FRED's 2,000-vintage-date
+    cap, docs/runbooks/phase-4b.md) before the source was marked live. Counted here now
+    that the deployed code has been invoked and verified, not merely applied.
 
     A literal, deliberately: this is the only assertion that notices a source being added
     or dropped without anyone deciding to, and comparing the config against itself would
     notice nothing."""
-    assert len(DEPLOYED_SOURCE_IDS) == 8
+    assert len(DEPLOYED_SOURCE_IDS) == 9
 
 
 @pytest.mark.parametrize("source_id", ["hn_scores", "market", "macro"])

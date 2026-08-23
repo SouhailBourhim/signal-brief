@@ -31,7 +31,6 @@ class Settings(BaseSettings):
     # Pinned, not floating. SPEC §7.3: swapping a model is a measurement, not a vibe.
     ollama_model: str = "llama3.1:8b"
     ollama_model_digest: str = "UNPINNED"
-    prompt_version: str = "v0"
 
     aws_region: str = Field(default="us-east-1", alias="AWS_REGION")
 
@@ -360,7 +359,7 @@ SOURCES: dict[str, SourceConfig] = {
 #
 # **Remove an entry here in the same change that applies its Terraform.**
 # `test_a_pending_source_is_really_pending` stops this becoming a place things rot.
-NOT_YET_DEPLOYED: frozenset[str] = frozenset({"macro"})
+NOT_YET_DEPLOYED: frozenset[str] = frozenset()
 
 # The deployed sources: everything with a Lambda, a schedule, and a state item. `fake` is
 # the Phase 0 fixture source and has none of those, so assessing it would report a
