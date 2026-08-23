@@ -44,7 +44,7 @@ class _FakeAthenaClient:
         engine_ms: int = 0,
         columns: list[str] | None = None,
         rows: list[list[str]] | None = None,
-        polls_before_terminal: int = 0,
+        polls_before_terminal: int | float = 0,  # `float("inf")` for "never terminal"
     ) -> None:
         self.final_state = final_state
         self.reason = reason
@@ -137,7 +137,17 @@ def test_run_query_raises_on_cancelled_state():
 
 
 def test_run_query_times_out_rather_than_polling_forever():
-    client = _FakeAthenaClient(polls_before_terminal=10_000)
+    """A finite `polls_before_terminal` raced real wall-clock time: on a fast enough
+    interpreter, 10,000 tight-loop polls at `poll_interval_seconds=0` could complete inside
+    the 50 ms budget, so the fake would reach SUCCEEDED before `_await_completion` ever
+    checked the deadline — a timeout test that could pass by never timing out, and whose
+    result depended on how fast the machine running it happened to be.
+
+    `float("inf")` removes the race rather than widening the budget to paper over it: the
+    fake can now never reach a terminal state, so `TimeoutError` is the only way this loop
+    can end, on any machine.
+    """
+    client = _FakeAthenaClient(polls_before_terminal=float("inf"))
     with pytest.raises(TimeoutError):
         run_query("SELECT 1", client=client, poll_interval_seconds=0, timeout_seconds=0.05)
 
