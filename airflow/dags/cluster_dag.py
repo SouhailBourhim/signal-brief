@@ -8,7 +8,7 @@ once a morning. The asset is still declared (`assets.py`) so the dependency is v
 Airflow's graph rather than implied by a cron expression.
 
 05:00 Africa/Casablanca puts the clusters in front of the reader before the brief is opened,
-and inside the window where 4A's 07:00 mail has room to run.
+and inside the window where 4A's 16:00 mail has room to run.
 
 Re-running is safe by construction: `cluster_window` replaces the window's partitions rather
 than appending, so a manual trigger, a retry, or an overlapping backfill all converge on the

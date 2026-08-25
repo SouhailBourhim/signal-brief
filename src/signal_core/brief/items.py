@@ -15,7 +15,7 @@ user_feedback`. Three jobs, and the third is the one 4A's acceptance test turns 
 the argument that starting Spark to render ten stories is a lot of machinery for a SELECT.
 Athena engine v3 (Trino) creates and writes Iceberg tables directly, so this uses the same
 `ops/athena.py::run_query` primitive every read already goes through and adds no JVM boot
-to the 07:00 path.
+to the 16:00 path.
 
 ## Why DELETE-then-INSERT rather than MERGE
 

@@ -53,7 +53,7 @@ def test_missing_entity_id_is_not_a_match():
 
 def test_the_committed_watchlist_loads_and_is_usable():
     """The shipped file, not a fixture: a malformed edit to `watchlist.toml` should fail
-    here rather than at 07:00."""
+    here rather than at 16:00."""
     w = load()
     assert w.companies, "watchlist has no companies"
     assert w.tickers(), "watchlist has no tradable tickers for Stooq to fetch"

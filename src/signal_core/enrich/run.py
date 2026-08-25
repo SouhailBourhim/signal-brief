@@ -16,7 +16,7 @@ ADR-0003's capacity paragraph already assumed a bounded set — it sizes the mea
 40-head batch", not a ten-thousand-head one — so `ENRICH_TOP_N` is that number, and the
 selection is `brief/select.py::ranked_window`, the same read-and-rank the brief itself uses.
 Enriching a set four times the size of the brief's cut is the margin that absorbs any
-ranking drift between the pre-brief run and 07:00.
+ranking drift between the pre-brief run and 16:00.
 
 There is no circularity: §7.4's `WEIGHTS` has no enrichment component, so ranking does not
 read what this writes.
@@ -53,7 +53,7 @@ from signal_core.ops.athena import QueryResult
 from signal_core.timeutil import utc_now
 
 # ADR-0003's measured batch size. Four times the brief's default cut of 10, which is the
-# margin against ranking drift between this run and the 07:00 send.
+# margin against ranking drift between this run and the 16:00 send.
 ENRICH_TOP_N = 40
 
 # What `Settings.ollama_model_digest` ships as until someone verifies it against the running

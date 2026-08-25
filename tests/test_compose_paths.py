@@ -72,7 +72,7 @@ def test_every_relative_path_setting_is_overridden_absolutely(variable: str, set
 def test_make_clean_protects_every_bind_mounted_path_it_could_delete():
     """The guard's inventory is the part that goes stale. Deleting a bind-mounted directory
     while the containers are up breaks the mount at the inode level, and the first version of
-    this guard covered `.cache` alone — then promptly broke `out`, where the 07:00 brief
+    this guard covered `.cache` alone — then promptly broke `out`, where the 16:00 brief
     writes.
 
     Scoped to what `clean` actually removes: `./src` and `./airflow/dags` are mounted too and

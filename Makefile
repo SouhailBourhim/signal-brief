@@ -96,7 +96,7 @@ tf-validate: ## terraform fmt + validate
 # Keep this in step with the `volumes:` block. Missing one is not a small mistake: omitting
 # `.cache` cost ten hours of silently failed `ingest_monitor` runs on 2026-08-22, and the
 # first version of this guard covered `.cache` alone and promptly broke `out` and `data` the
-# same way — a brief the 07:00 DAG would have failed to write. See docs/runbooks/phase-4b.md.
+# same way — a brief the 16:00 DAG would have failed to write. See docs/runbooks/phase-4b.md.
 MOUNTED_PATHS := data out .cache
 
 # Generated, and mounted nowhere. Safe to delete whatever is running.
@@ -106,7 +106,7 @@ clean: ## remove generated data and briefs (never touches bronze in S3)
 	@if docker compose ps --services --filter status=running 2>/dev/null | grep -q airflow; then \
 		echo "Airflow is up — keeping $(MOUNTED_PATHS), which are bind-mounted into the"; \
 		echo "containers. Deleting them now breaks those mounts until the containers are"; \
-		echo "recreated, which stops ingestion and the 07:00 brief silently."; \
+		echo "recreated, which stops ingestion and the 16:00 brief silently."; \
 		echo "Run 'make down' first, or 'make clean-mounted' to delete them and recreate."; \
 		rm -rf $(UNMOUNTED_PATHS); \
 	else \

@@ -6,7 +6,7 @@ Runs the pinned local model over the ranked head of the window, writing
 itself, so a morning where Ollama was off produces a brief without summaries rather than a
 brief that is late.
 
-**06:15, between `cluster` at 05:00 and the brief at 07:00.** §7.3 is explicit that
+**06:15, between `cluster` at 05:00 and the brief at 16:00.** §7.3 is explicit that
 enrichment runs "against cluster heads once per pre-brief window, not on every 15-minute
 cycle", so this is a cron rather than an asset trigger on `CLUSTERS_COMMITTED` — a
 15-minute-triggered enrichment would spend the GPU budget re-answering the same questions
@@ -28,7 +28,7 @@ from assets import CLUSTERS_COMMITTED, ENRICHMENT_READY, MENTIONS_RESOLVED
 # ADR-0003 measured ~22.5 s of model load plus ~1.0 s per head on the dev box (RTX 5070 8GB,
 # llama3.1:8b q4). A 40-head batch is therefore ~1 minute. This bound is that figure with
 # generous headroom for a cold GPU, a longer body, or a slower box — it is a tripwire for
-# "enrichment has quietly become slow enough to threaten the 07:00 send", not a benchmark.
+# "enrichment has quietly become slow enough to threaten the 16:00 send", not a benchmark.
 # SPEC §7.3: "The DAG asserts this bound and fails loudly rather than silently lagging."
 CAPACITY_SECONDS_PER_HEAD = 8.0
 CAPACITY_FLOOR_SECONDS = 60.0
@@ -67,7 +67,7 @@ def enrich_dag():
             raise RuntimeError(
                 f"enrichment took {result.elapsed_seconds:.0f}s for {result.processed} heads "
                 f"({result.inferred} inferred), past the {budget:.0f}s bound — at this rate it "
-                "will start lagging the 07:00 send (SPEC §7.3, ADR-0003)"
+                "will start lagging the 16:00 send (SPEC §7.3, ADR-0003)"
             )
 
         if result.rejected:

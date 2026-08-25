@@ -2,6 +2,8 @@
 
 **Status:** Accepted · **Date:** 2026-08-20
 
+**Amended 2026-08-24:** the 07:00 send this record refers to now runs at **16:00**. Only the clock time changed — the reasoning below stands as written. The host sleeps through the small hours, so the scheduler was frozen (not stopped) at 07:00 and the brief arrived mid-afternoon anyway; `airflow/dags/brief_dag.py` carries the incident.
+
 ## Context
 
 SPEC §12's phase table was written before Phases 0-2 were built. Three phases in, it has

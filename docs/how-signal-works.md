@@ -10,7 +10,7 @@ engineering specification and assumes you already speak the language; this one d
 
 ## The one-paragraph version
 
-Every morning at 07:00, Signal emails you a short brief about what actually happened in
+Every morning at 16:00, Signal emails you a short brief about what actually happened in
 tech, finance, and the economy. To produce it, the system reads news feeds, regulatory
 filings, and economic data all day; works out which of the thousands of articles are
 really *the same story*; identifies which companies are being talked about; ranks the
@@ -51,7 +51,7 @@ flowchart TD
     E --> F["Identification<br/>which companies are these?"]
     F --> G["Summarizing<br/>a local AI writes one sentence each"]
     G --> H["Ranking<br/>what deserves your attention?"]
-    H --> I["The 07:00 brief"]
+    H --> I["The 16:00 brief"]
     I -.->|"you mark it up"| H
 ```
 
@@ -396,7 +396,7 @@ questions of with a real price tag attached, and groups the day's coverage into 
 the companies in them identified.
 
 What 4A is adding now: a ranker that uses more than "how recent and how many outlets", and
-delivery to your inbox at 07:00 rather than a command you have to remember to run. The AI
+delivery to your inbox at 16:00 rather than a command you have to remember to run. The AI
 summaries everyone assumes come first come last, in 4B — because a summary of the wrong ten
 stories is worse than no summary at all.
 

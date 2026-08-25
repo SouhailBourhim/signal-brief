@@ -7,21 +7,21 @@ this is the picture, kept current with what is actually built. Companion to
 
 ## A day in the pipeline
 
-![A day in the pipeline: continuous ingestion in AWS from 00:00, the local Airflow critical path from 02:00 maintenance through 07:00 delivery, and which Iceberg tables become readable at each step](assets/daily-timeline.jpeg)
+![A day in the pipeline: continuous ingestion in AWS from 00:00, the local Airflow critical path from 02:00 maintenance through 16:00 delivery, and which Iceberg tables become readable at each step](assets/daily-timeline.jpeg)
 
 Two clocks, not one. **Ingestion never stops** — Hacker News polls every 5 minutes, RSS and
 EDGAR every 15, market and macro Lambdas fetch once a day at 02:11 and 02:26 UTC — because a
 poller has nothing to wait for; it stages bytes to S3 and returns. **Everything past staging
-is a local Airflow critical path with one deadline**: the 07:00 Africa/Casablanca send, which
+is a local Airflow critical path with one deadline**: the 16:00 Africa/Casablanca send, which
 is a clock time, not "whenever the last upstream table finishes" (`docs/runbooks/phase-4a.md`
 records why `brief` is cron-scheduled rather than asset-triggered off `CLUSTERS_COMMITTED`).
 
-The local chain that has to clear before 07:00, in order: `maintenance` (02:00, off-peak
+The local chain that has to clear before 16:00, in order: `maintenance` (02:00, off-peak
 compaction) → `market` and `macro` Spark loads (03:30 / 03:40, reading what the morning's
 Lambda polls already staged) → `resolve` (04:30) → `cluster` (05:00, a 72-hour window) →
 `enrich` (06:15, the ranked head only — see
 [ADR-0011](decisions/ADR-0011-enrichment-scope-and-the-first-secret.md) for why not every
-cluster) → `brief` (07:00: rank, render, mail). That is a 45-minute window reserved for
+cluster) → `brief` (16:00: rank, render, mail). That is a 45-minute window reserved for
 enrichment before the send — generous against ADR-0003's measured ~1.5 s/head, which puts a
 40-head batch under two minutes end to end — and the send does not wait on it anyway: if
 `enrich` is late or Ollama is down, **the brief still renders, without summaries**, rather than

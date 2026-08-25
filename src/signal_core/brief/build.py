@@ -31,7 +31,7 @@ same ranked window, and two copies of it would drift the first time a component 
 **The brief never calls the model.** It reads `gold.cluster_enrichment` and renders what is
 there, so a morning where Ollama was off produces a brief without summaries rather than no
 brief — the same degradation `select.optional_read` gives every other additive read. This is
-also why the 07:00 path stays JVM-free and inference-free: `enrich_dag` runs earlier and the
+also why the 16:00 path stays JVM-free and inference-free: `enrich_dag` runs earlier and the
 cache is warm by the time this runs.
 """
 

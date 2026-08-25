@@ -1,5 +1,12 @@
 # Phase 3 runbook — cluster + resolve
 
+> **Amended 2026-08-24 — the brief now sends at 16:00, not 07:00.** The times recorded
+> below are what the schedule was at the time and are left as written. The send moved
+> because the host sleeps through the small hours: on 2026-08-24 the scheduler logged
+> nothing between 21:00 and 12:58 UTC, then resumed mid-stride and fired the whole chain
+> at once, so the brief landed at 13:59. The containers never died — they were frozen
+> with the host, which still reported them `Up`. See `airflow/dags/brief_dag.py`.
+
 Exit condition (SPEC §12): reported precision/recall on both labeled sets, reproducible via
 `make eval` — **and a real brief has been read every morning since 3.0**, not a fake one.
 
