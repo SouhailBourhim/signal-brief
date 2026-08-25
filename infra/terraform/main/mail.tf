@@ -1,4 +1,4 @@
-# Phase 4A: the 07:00 send. SPEC §12; ADR-0002, ADR-0010.
+# Phase 4A: the 16:00 send. SPEC §12; ADR-0002, ADR-0010.
 #
 # The mailer runs **locally**, not in Lambda. ADR-0002 puts ingestion in AWS because it must
 # run whether or not the laptop is on, and everything interpretive locally; the renderer is

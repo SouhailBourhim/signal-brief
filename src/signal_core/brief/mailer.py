@@ -1,4 +1,4 @@
-"""The 07:00 send. SPEC §12's 4A deliverable; ADR-0002, ADR-0010.
+"""The 16:00 send. SPEC §12's 4A deliverable; ADR-0002, ADR-0010.
 
 ## Why this runs locally rather than in a Lambda
 

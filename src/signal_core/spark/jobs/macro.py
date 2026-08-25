@@ -34,7 +34,7 @@ null rather than treated as a move from nothing.
 ## Spark, not Athena
 
 Unlike the enrichment tables, this is a bulk load with window functions over full vintage
-history, which is Spark's shape — and it is off the 07:00 path entirely, so the argument
+history, which is Spark's shape — and it is off the 16:00 path entirely, so the argument
 `brief/items.py` makes for staying JVM-free does not apply.
 """
 

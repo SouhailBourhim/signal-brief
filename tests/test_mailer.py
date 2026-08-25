@@ -1,4 +1,4 @@
-"""The 07:00 send. 4A.J; SPEC §12, ADR-0010.
+"""The 16:00 send. 4A.J; SPEC §12, ADR-0010.
 
 `moto`'s `mock_aws` covers `ses.send_email` with no dependency change — verified against the
 installed environment rather than assumed, since the whole reason SES won over SMTP was that

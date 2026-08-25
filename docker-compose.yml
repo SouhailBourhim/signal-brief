@@ -16,6 +16,14 @@ x-airflow-common: &airflow-common
   # botocore reports "unable to locate credentials" rather than a permission error.
   # Group 0 because the image makes /home/airflow group-writable for exactly this.
   user: "${AIRFLOW_UID:-50000}:0"
+  # Survives a WSL/Docker restart unattended: the brief DAG fires at a clock time (16:00),
+  # not on demand, so a container that stays down after a host reboot silently costs a
+  # day's email with nothing to alert on it. Note this does NOT cover the host itself
+  # sleeping — the containers are then frozen rather than stopped, and Docker still reports
+  # them `Up`; see brief_dag.py for the 2026-08-24 incident that moved the send to 16:00.
+  # airflow-init overrides this below — it's a one-shot migration job, not a long-running
+  # service, and should never restart.
+  restart: unless-stopped
   environment: &airflow-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
@@ -23,7 +31,7 @@ x-airflow-common: &airflow-common
     # acceptance: `brief`, `market` and `maintenance` were built, merged, deployed and never
     # ran once, because nobody unpaused them. Nothing surfaced it — the AWS half kept
     # ingesting, bronze kept filling, and the one thing SPEC §12's 4A gate turns on (a mail
-    # at 07:00) had simply never happened. See docs/runbooks/phase-4b.md.
+    # at 16:00) had simply never happened. See docs/runbooks/phase-4b.md.
     #
     # The trade is real and it goes the other way for a half-written DAG: the dag-processor
     # picks up file changes within seconds, so a DAG now starts running as soon as it is
@@ -119,6 +127,7 @@ x-airflow-common: &airflow-common
 services:
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow

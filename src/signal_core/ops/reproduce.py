@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 
 # Where the shadow tables live. A namespace rather than a suffix so `make clean` and the
 # maintenance sweep can both reason about them as a group, and so a shadow table can never be
-# mistaken for a real one in a query someone writes at 07:00.
+# mistaken for a real one in a query someone writes at 16:00.
 REPRO_NAMESPACE = "repro"
 
 # The clustering agreement floor, **stated rather than fitted**.

@@ -111,7 +111,7 @@ def test_a_non_json_body_is_unavailable_rather_than_an_empty_generation():
 @respx.mock
 def test_timing_comes_back_so_the_dag_can_assert_the_capacity_bound():
     """§7.3 requires the DAG to assert its capacity bound and "fail loudly rather than
-    silently lagging the 07:00 send". It needs a number to assert against."""
+    silently lagging the 16:00 send". It needs a number to assert against."""
     _generate_route(eval_count=42)
     result = generate("prompt", settings=SETTINGS)
     assert result.elapsed_seconds >= 0

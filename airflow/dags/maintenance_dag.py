@@ -7,7 +7,7 @@ for a measured compaction delta, and this is where the number comes from.
 **Cron at 02:00, not asset-triggered.** Iceberg's snapshot isolation means compaction is safe
 to run alongside readers and writers regardless of timing, so the schedule is about resource
 contention rather than correctness: 02:00 Africa/Casablanca is off-peak and clear of the
-02:11 market poll, the 03:30 market DAG, `resolve` at 04:30, `cluster` at 05:00 and the 07:00
+02:11 market poll, the 03:30 market DAG, `resolve` at 04:30, `cluster` at 05:00 and the 16:00
 brief. `SILVER_COMMITTED` is declared as an inlet for graph visibility only — `assets.py`
 already anticipated this ("so 4A's maintenance DAG has something to hang off").
 

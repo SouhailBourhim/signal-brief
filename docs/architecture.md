@@ -165,7 +165,7 @@ sequenceDiagram
     end
     Note over A,K: daily, not per-commit — a 72h window<br/>recomputed hourly is 24× the work for one read
     A->>K: 04:30 resolve · 05:00 cluster
-    A->>R: 07:00 brief
+    A->>R: 16:00 brief
     R-->>A: thumbs up/down (stored, §7.4)
 ```
 
@@ -183,7 +183,7 @@ the actual outstanding-work list, not a diagram caption.
 |---|---|---|
 | Ollama enrichment — summary, topic, extraction, cached and validated | 4B | done — `enrich/`, `gold.cluster_enrichment` |
 | ALFRED bitemporal macro store | 4B | done — `spark/jobs/macro.py`, `gold.macro_observations` |
-| Email delivery at 07:00 | 4A | done — SES via boto3, `brief_dag` |
+| Email delivery at 16:00 | 4A | done — SES via boto3, `brief_dag` |
 | Maintenance DAG — compaction, snapshot expiry, orphan cleanup | 4A | done — `maintenance_dag.py`, 02:00 daily |
 | dbt migration of silver→gold; Kafka + Structured Streaming | 5 | gated on [ADR-0001](decisions/ADR-0001-no-kafka.md)'s re-entry criteria — not yet met |
 

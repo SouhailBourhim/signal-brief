@@ -2,6 +2,8 @@
 
 **Status:** Accepted · **Date:** 2026-08-22
 
+**Amended 2026-08-24:** the 07:00 send this record refers to now runs at **16:00**. Only the clock time changed — the reasoning below stands as written. The host sleeps through the small hours, so the scheduler was frozen (not stopped) at 07:00 and the brief arrived mid-afternoon anyway; `airflow/dags/brief_dag.py` carries the incident.
+
 ## Context
 
 Phase 4B builds SPEC §7.3's governed LLM stage and §8's bitemporal macro store — §2's

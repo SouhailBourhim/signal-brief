@@ -49,7 +49,7 @@ def timestamps_disagree(
 def brief_date(moment: datetime | None = None) -> str:
     """The brief's date label, in the reader's timezone rather than UTC.
 
-    The brief is a local artifact for a reader in Casablanca; labelling a 07:00 local
+    The brief is a local artifact for a reader in Casablanca; labelling a 16:00 local
     edition with a UTC date would name some editions after the previous day.
     """
     return ensure_utc(moment or utc_now()).astimezone(BRIEF_TZ).strftime("%Y-%m-%d")

@@ -4,7 +4,7 @@
 
 Ingests public news, filings, and macro data on a 15-minute cadence; stores raw responses
 immutably; collapses syndicated coverage into ranked story clusters; and publishes a brief
-at 07:00 Africa/Casablanca with lineage, replay, cost controls, and locally run LLM
+at 16:00 Africa/Casablanca with lineage, replay, cost controls, and locally run LLM
 enrichment built in.
 
 ![What Signal is, the problem it answers, and what a morning brief actually contains](docs/assets/project-story.jpeg)
@@ -21,7 +21,7 @@ morning since 3.0, which is what Phase 3's acceptance actually asks for. The inf
 is Terraform, and applied.
 
 **Phase 4A** adds the ranker over those clusters — five of SPEC §7.4's six components, with
-novelty deferred to 4B on the record rather than by omission — plus email at 07:00, a nightly
+novelty deferred to 4B on the record rather than by omission — plus email at 16:00, a nightly
 Iceberg maintenance job, a feedback CLI, and the five items SPEC §12 carried forward. Its
 acceptance is behavioural and takes calendar time: three mornings read with marks recorded.
 See [`docs/runbooks/phase-4a.md`](docs/runbooks/phase-4a.md).
@@ -189,7 +189,7 @@ moves; see `docs/athena.md` for why that's stated rather than hidden.
 | `evals/` | Labeled sets, scorers, and the accuracy floors CI enforces |
 | `evals/experiments/` | Measurements that decide a question without shipping a dependency — ADR-0009's embedding trials, and the corpus-level false-merge rate a pairwise eval cannot see |
 | [`docs/architecture.md`](docs/architecture.md) | What runs where, and why the AWS/local line falls where it does — diagrams, table lineage, and what is not built yet |
-| [`docs/operations.md`](docs/operations.md) | How Signal runs day to day: the 07:00 critical path, replay vs. catch-up, and failure-to-response mapping |
+| [`docs/operations.md`](docs/operations.md) | How Signal runs day to day: the 16:00 critical path, replay vs. catch-up, and failure-to-response mapping |
 | [`docs/athena.md`](docs/athena.md) | Querying the lake: setup, real questions, the `SELECT *` vs. projected vs. partition-pruned measurement |
 | [`docs/how-signal-works.md`](docs/how-signal-works.md) | What each phase is for, in plain English — no prior knowledge assumed |
 | [`docs/decisions/`](docs/decisions/) | ADRs, including the ones that reversed earlier choices |
