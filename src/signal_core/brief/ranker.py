@@ -20,6 +20,7 @@ something. It arrives in 4B with the stage that pays for it.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -61,7 +62,7 @@ MARKET_MOVE_SIGMA = 1.5
 VELOCITY_SATURATION = 30.0
 
 
-def _relevance(cluster: dict[str, Any], watchlist: Watchlist) -> float:
+def _relevance(cluster: Mapping[str, Any], watchlist: Watchlist) -> float:
     """Is this cluster about something the reader follows? SPEC §7.4.
 
     **Scored on the highest-mention entity, not on any resolved mention.** That is 3.E's
@@ -89,7 +90,7 @@ def _relevance(cluster: dict[str, Any], watchlist: Watchlist) -> float:
     return 0.0
 
 
-def _velocity(cluster: dict[str, Any], slopes: dict[str, float]) -> float:
+def _velocity(cluster: Mapping[str, Any], slopes: dict[str, float]) -> float:
     """Is attention on this story accelerating? SPEC §7.4.
 
     Reads `silver.hn_score_snapshots` through `read_hn_velocity`, which is the whole reason
@@ -110,7 +111,7 @@ def _velocity(cluster: dict[str, Any], slopes: dict[str, float]) -> float:
     return max(0.0, min(slope / VELOCITY_SATURATION, 1.0))
 
 
-def _market_corroboration(cluster: dict[str, Any], moves: dict[str, float]) -> float:
+def _market_corroboration(cluster: Mapping[str, Any], moves: dict[str, float]) -> float:
     """Did the linked ticker move beyond its normal range? SPEC §7.4.
 
     Scored on the same highest-mention entity `_relevance` uses, and for the same salience
@@ -133,7 +134,7 @@ def _market_corroboration(cluster: dict[str, Any], moves: dict[str, float]) -> f
 
 
 def score_cluster(
-    cluster: dict[str, Any],
+    cluster: Mapping[str, Any],
     now: datetime | None = None,
     *,
     watchlist: Watchlist | None = None,
@@ -194,7 +195,7 @@ def score_cluster(
 
 
 def rank(
-    clusters: list[dict[str, Any]],
+    clusters: Sequence[Mapping[str, Any]],
     limit: int = 10,
     now: datetime | None = None,
     *,

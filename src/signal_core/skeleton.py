@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any
 
 from signal_core.brief.ranker import rank
 from signal_core.brief.render import write_brief
@@ -21,12 +20,13 @@ from signal_core.contracts import State
 from signal_core.dedup import exact_dedup, group_stories
 from signal_core.ops.health import RunHealth, assess_source
 from signal_core.parse import get_parser
+from signal_core.records import Article, as_article
 from signal_core.sources import get_poller
 from signal_core.storage import write_bronze
 from signal_core.transform import to_article
 
 
-def _normalize_with_spark(bronze_root: Path) -> list[dict[str, Any]]:
+def _normalize_with_spark(bronze_root: Path) -> list[Article]:
     # Plain, non-Iceberg session: `make skeleton` must run on a fresh clone with no
     # network beyond PyPI, and `build_iceberg_session` resolves a runtime jar from
     # Maven on first use (docs/runbooks/phase-2.md 2.C).
@@ -39,12 +39,12 @@ def _normalize_with_spark(bronze_root: Path) -> list[dict[str, Any]]:
         reject_count = rejects.count()
         if reject_count:
             print(f"  quarantined {reject_count} unparseable rows (SPEC 6.2)")
-        return [row.asDict() for row in clean.collect()]
+        return [as_article(row.asDict()) for row in clean.collect()]
     finally:
         spark.stop()
 
 
-def _normalize_in_process(documents) -> list[dict[str, Any]]:
+def _normalize_in_process(documents) -> list[Article]:
     """Spark-free fallback so the skeleton still runs without a JVM.
 
     Identical logic to the Spark path — both call `parse.get_parser` then
@@ -55,7 +55,7 @@ def _normalize_in_process(documents) -> list[dict[str, Any]]:
     without a JVM is not blocked, and it prints loudly so nobody mistakes it for a green
     Spark run.
     """
-    rows: list[dict[str, Any]] = []
+    rows: list[Article] = []
     for d in documents:
         bronze_row = {
             "source_id": d.source_id,

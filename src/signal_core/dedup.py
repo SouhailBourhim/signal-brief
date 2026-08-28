@@ -40,12 +40,12 @@ from __future__ import annotations
 import html
 import math
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 
 from signal_core.hashing import hamming, simhash64
+from signal_core.records import Article, StoryCluster
 from signal_core.timeutil import ensure_utc
 
 # Every constant below was fitted by `evals/fit_thresholds.py` against the labeled pairs —
@@ -314,7 +314,10 @@ def accessions(text: str) -> frozenset[str]:
     return frozenset(_ACCESSION.findall(strip_boilerplate(text or "")))
 
 
-def prepare(title: str, body: str) -> Prepared:
+def prepare(title: str | None, body: str | None) -> Prepared:
+    """`title` and `body` are nullable in `ARTICLES_DDL`, and every line below already
+    coerced them — the signature said `str` while the body said `title or ""`. Widened to
+    match what it does, so callers stop having to decide which of the two to believe."""
     clean_title = strip_boilerplate(title or "")
     clean_body = strip_boilerplate(body or "")
     raw = f"{title or ''} {body or ''}"
@@ -402,8 +405,15 @@ _AUTHORITY = {
 DEFAULT_AUTHORITY = 0.5
 
 
-def authority(domain: str) -> float:
-    return _AUTHORITY.get(domain, DEFAULT_AUTHORITY)
+def authority(domain: str | None) -> float:
+    """How much independent reporting a publisher tends to originate.
+
+    `None` is accepted and scores `DEFAULT_AUTHORITY`: `publisher_domain` is nullable, and an
+    article whose domain could not be derived is an unknown publisher, which is exactly what
+    the default means. Rejecting it would make canonical selection raise on a row the table
+    permits.
+    """
+    return _AUTHORITY.get(domain or "", DEFAULT_AUTHORITY)
 
 
 # Where an aggregator's submissions actually come from. SPEC §7.4 defines `breadth` as the
@@ -424,7 +434,7 @@ AGGREGATOR_PUBLISHERS: dict[str, str] = {
 }
 
 
-def effective_publisher(article: dict[str, Any]) -> str:
+def effective_publisher(article: Article) -> str:
     """The publisher a cluster should count for `breadth`.
 
     Identity for ordinary sources — a TechCrunch article's publisher is TechCrunch. For an
@@ -462,14 +472,28 @@ def blocking_keys(tokens: frozenset[str], frequency: dict[str, int], threshold: 
     return ordered[len(ordered) - max(keep, 1) :]
 
 
-def exact_dedup(articles: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
-    """Collapse byte-identical reprints. Returns (kept, removed_count)."""
+def exact_dedup[ArticleT: Article](articles: Sequence[ArticleT]) -> tuple[list[ArticleT], int]:
+    """Collapse byte-identical reprints. Returns (kept, removed_count).
+
+    Generic in the row type so it returns what it was given: the Spark job hands it articles
+    already carrying `prepared` and needs them back, while the in-process path passes plain
+    `Article`s. A bare `list[Article]` return would silently widen the former.
+
+    A missing hash is *not* a hash two articles can share. `content_hash` is nullable in
+    `ARTICLES_DDL`, and treating null as a value made the first null-hashed article
+    swallow every later one — silent data loss dressed as deduplication, and the more
+    articles were missing a hash the more of them vanished. `to_article` always computes
+    one today, so this has never fired; it is guarded because the column permits it and the
+    failure would be invisible in the output.
+    """
     seen: set[str] = set()
     kept = []
     for article in articles:
-        if article["content_hash"] in seen:
-            continue
-        seen.add(article["content_hash"])
+        digest = article["content_hash"]
+        if digest is not None:
+            if digest in seen:
+                continue
+            seen.add(digest)
         kept.append(article)
     return kept, len(articles) - len(kept)
 
@@ -509,12 +533,12 @@ class ClusterResult:
     looks identical, in the brief, to a run that never formed one.
     """
 
-    clusters: list[dict[str, Any]]
+    clusters: list[StoryCluster]
     dissolved: int = 0
     dissolved_articles: int = 0
 
 
-def trusted_timestamp(article: dict[str, Any]) -> datetime:
+def trusted_timestamp(article: Article) -> datetime:
     """When this article says it happened, if we believe it — else when we saw it.
 
     SPEC §6.2's rule, applied per article. It used to live only in `ranker.score_cluster`
@@ -527,7 +551,7 @@ def trusted_timestamp(article: dict[str, Any]) -> datetime:
     return ensure_utc(article["fetched_at"])
 
 
-def group_edges(articles: list[dict[str, Any]], edges: Iterable[tuple[str, str]]) -> ClusterResult:
+def group_edges(articles: Sequence[Article], edges: Iterable[tuple[str, str]]) -> ClusterResult:
     """Connected components over a supplied edge list, then stages 3-4. SPEC §7.1.
 
     Split out from `group_stories` so the in-process path and the Spark job share one
@@ -557,7 +581,7 @@ def group_edges(articles: list[dict[str, Any]], edges: Iterable[tuple[str, str]]
     for left, right in edges:
         union(index_of[left], index_of[right])
 
-    grouped: dict[int, list[dict[str, Any]]] = {}
+    grouped: dict[int, list[Article]] = {}
     for index, article in enumerate(articles):
         grouped.setdefault(find(index), []).append(article)
 
@@ -565,7 +589,7 @@ def group_edges(articles: list[dict[str, Any]], edges: Iterable[tuple[str, str]]
     # head to choose.
     cap = max(MIN_CLUSTER_CAP, int(len(articles) * MAX_CLUSTER_SHARE))
     dissolved = dissolved_articles = 0
-    components: list[list[dict[str, Any]]] = []
+    components: list[list[Article]] = []
     for members in grouped.values():
         if len(members) > cap:
             dissolved += 1
@@ -574,7 +598,7 @@ def group_edges(articles: list[dict[str, Any]], edges: Iterable[tuple[str, str]]
         else:
             components.append(members)
 
-    clusters = []
+    clusters: list[StoryCluster] = []
     for members in components:
         # Canonical = most authoritative, earliest-seen. The rest become
         # distinct_publisher_count, which feeds ranking instead of being discarded.
@@ -624,7 +648,7 @@ def group_edges(articles: list[dict[str, Any]], edges: Iterable[tuple[str, str]]
     )
 
 
-def group_stories(articles: list[dict[str, Any]]) -> ClusterResult:
+def group_stories(articles: Sequence[Article]) -> ClusterResult:
     """Group articles into story clusters, comparing every pair. SPEC §7.1 stages 2-4.
 
     O(n^2) and honestly so: 3.0 measured 3.58M comparisons in 1.3 s, which is why the

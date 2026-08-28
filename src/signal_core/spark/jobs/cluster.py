@@ -22,11 +22,13 @@ from __future__ import annotations
 
 import hashlib
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from signal_core import dedup
+from signal_core.records import ArticleClusterRow, ClusterRow, PreparedArticle, as_article
 from signal_core.spark.tables import ensure_columns
 from signal_core.timeutil import ensure_utc, utc_now
 
@@ -173,7 +175,7 @@ def _ordering_key(article_ids: list[str]) -> str:
     return f"fetched_at,article_id@{digest[:16]}"
 
 
-def _candidate_pairs(rows: list[dict[str, Any]]) -> tuple[set[tuple[str, str]], int]:
+def _candidate_pairs(rows: Sequence[PreparedArticle]) -> tuple[set[tuple[str, str]], int]:
     """Blocking. Returns (candidate pairs, blocking keys dropped for being too large).
 
     **One key per branch of `dedup.decide`.** A rule the decision can reach but blocking
@@ -266,15 +268,20 @@ def cluster_window(
     since, until = ensure_utc(since), ensure_utc(until)
 
     windowed = read_window(spark, since, until, table=articles_table)
-    articles = [row.asDict() for row in windowed.collect()]
+    articles = [as_article(row.asDict()) for row in windowed.collect()]
     articles_in = len(articles)
 
+    # `prepared` is computed once per article and carried on the row, because clustering
+    # compares O(n^2) pairs and tokenizing inside that loop is what made Phase 0's version
+    # slow enough to notice. `PreparedArticle` is that shape: an `Article` plus the one
+    # derived field, kept off `Article` itself so the DDL parity test stays exact.
     deduped, exact_removed = dedup.exact_dedup(articles)
-    for row in deduped:
-        row["prepared"] = dedup.prepare(row["title"] or "", row["body_text"] or "")
+    prepared_rows: list[PreparedArticle] = [
+        {**row, "prepared": dedup.prepare(row["title"], row["body_text"])} for row in deduped
+    ]
 
-    candidates, dropped = _candidate_pairs(deduped)
-    by_id = {row["article_id"]: row for row in deduped}
+    candidates, dropped = _candidate_pairs(prepared_rows)
+    by_id = {row["article_id"]: row for row in prepared_rows}
     edges = [
         (a, b)
         for a, b in sorted(candidates)
@@ -287,45 +294,49 @@ def cluster_window(
             "label propagation (see normalize._resolve_story_ids) before raising the cap."
         )
 
-    grouped = dedup.group_edges(deduped, edges)
-    ordering_key = _ordering_key([row["article_id"] for row in deduped])
+    grouped = dedup.group_edges(prepared_rows, edges)
+    ordering_key = _ordering_key([row["article_id"] for row in prepared_rows])
     clustered_at = utc_now()
 
-    cluster_rows, map_rows = [], []
+    # Annotated, not inferred. These two literals are what 3.D's first defect looked like
+    # from the writer's side — the DDL grew `first_seen`/`last_seen` and nothing tied this
+    # dict to it. `ClusterRow` and `ArticleClusterRow` are checked against those DDLs by
+    # `tests/test_records.py`, so a missing or misspelled key is now a mypy error here
+    # rather than a `COLUMN_NOT_FOUND` on the first real run.
+    cluster_rows: list[ClusterRow] = []
+    map_rows: list[ArticleClusterRow] = []
     for cluster in grouped.clusters:
-        cluster_rows.append(
-            {
+        cluster_row: ClusterRow = {
+            "cluster_id": cluster["cluster_id"],
+            "window_start": since,
+            "window_end": until,
+            "canonical_article_id": cluster["canonical_article_id"],
+            "title": cluster["title"],
+            "url_canonical": cluster["url_canonical"],
+            "publisher_domain": cluster["publisher_domain"],
+            "published_at": cluster["published_at"],
+            "fetched_at": cluster["fetched_at"],
+            "first_seen": cluster["first_seen"],
+            "last_seen": cluster["last_seen"],
+            "event_date": cluster["fetched_at"],
+            "article_count": cluster["article_count"],
+            "distinct_publisher_count": cluster["distinct_publisher_count"],
+            "publishers": cluster["publishers"],
+            "timestamp_flagged": cluster["timestamp_flagged"],
+            "ordering_key": ordering_key,
+            "algo_version": ALGO_VERSION,
+            "clustered_at": clustered_at,
+        }
+        cluster_rows.append(cluster_row)
+        for article_id in cluster["article_ids"]:
+            map_row: ArticleClusterRow = {
+                "article_id": article_id,
                 "cluster_id": cluster["cluster_id"],
                 "window_start": since,
-                "window_end": until,
-                "canonical_article_id": cluster["canonical_article_id"],
-                "title": cluster["title"],
-                "url_canonical": cluster["url_canonical"],
-                "publisher_domain": cluster["publisher_domain"],
-                "published_at": cluster["published_at"],
-                "fetched_at": cluster["fetched_at"],
-                "first_seen": cluster["first_seen"],
-                "last_seen": cluster["last_seen"],
-                "event_date": cluster["fetched_at"],
-                "article_count": cluster["article_count"],
-                "distinct_publisher_count": cluster["distinct_publisher_count"],
-                "publishers": cluster["publishers"],
-                "timestamp_flagged": cluster["timestamp_flagged"],
-                "ordering_key": ordering_key,
+                "is_canonical": article_id == cluster["canonical_article_id"],
                 "algo_version": ALGO_VERSION,
-                "clustered_at": clustered_at,
             }
-        )
-        for article_id in cluster["article_ids"]:
-            map_rows.append(
-                {
-                    "article_id": article_id,
-                    "cluster_id": cluster["cluster_id"],
-                    "window_start": since,
-                    "is_canonical": article_id == cluster["canonical_article_id"],
-                    "algo_version": ALGO_VERSION,
-                }
-            )
+            map_rows.append(map_row)
 
     _overwrite(spark, clusters_table, cluster_rows, CLUSTERS_DDL)
     _overwrite(spark, map_table, map_rows, ARTICLE_CLUSTERS_DDL)
@@ -344,8 +355,15 @@ def cluster_window(
     )
 
 
-def _overwrite(spark: SparkSession, table: str, rows: list[dict[str, Any]], ddl: str) -> None:
+def _overwrite(
+    spark: SparkSession, table: str, rows: Sequence[Mapping[str, Any]], ddl: str
+) -> None:
     """Replace exactly the partitions these rows fall in, atomically.
+
+    `Sequence[Mapping[...]]` rather than `list[dict[...]]` so the typed row lists above are
+    accepted: a `list[ClusterRow]` is not a `list[dict[str, Any]]` to mypy, because `list`
+    is invariant and a caller holding the wider type could append the wrong row shape to it.
+    Reading rows is all this does, so the read-only types are the honest signature anyway.
 
     An empty window still has to clear the partition, and `overwritePartitions` on an empty
     DataFrame writes nothing — so that case is a targeted DELETE instead. Skipping it would

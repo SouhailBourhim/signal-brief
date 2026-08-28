@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from signal_core.parse import get_parser
+from signal_core.records import columns
 from signal_core.spark.jobs.commit_bronze import BRONZE_TABLE
 from signal_core.spark.tables import ensure_columns
 from signal_core.timeutil import ensure_utc, utc_now
@@ -130,8 +131,12 @@ def _normalize_row(row: dict) -> list[dict]:
     return articles
 
 
-def _to_signed_i64(value: int) -> int:
+def _to_signed_i64(value: int | None) -> int | None:
     """Reinterpret an unsigned 64-bit bit pattern as signed two's complement.
+
+    `None` passes through. `simhash` is nullable in `ARTICLES_DDL`, and while `to_article`
+    always sets it today, the arithmetic below would raise `TypeError` on a null rather than
+    leave it null — turning a permitted absence into a failed window.
 
     `hashing.simhash64` returns an unsigned value up to `2**64 - 1`; Iceberg/Spark's
     `long` is signed 64-bit, and pyarrow's safe cast raises rather than silently
@@ -142,6 +147,8 @@ def _to_signed_i64(value: int) -> int:
     identically to the unsigned value `to_article` (and the skeleton's Spark-free path)
     still returns directly.
     """
+    if value is None:
+        return None
     return value - (1 << 64) if value >= (1 << 63) else value
 
 
@@ -248,27 +255,15 @@ ARTICLES_DDL = """
     external_id string
 """
 
-# Matches `ARTICLES_DDL`'s column order exactly — used to strip `SILVER_COLUMNS`' extra
-# `ingest_id` plumbing column and guarantee `MERGE ... INSERT *` lines up positionally.
-_ARTICLES_COLUMNS = [
-    "article_id",
-    "source_id",
-    "url_canonical",
-    "title",
-    "body_text",
-    "published_at",
-    "fetched_at",
-    "event_date",
-    "lang",
-    "publisher_domain",
-    "authority_score",
-    "simhash",
-    "content_hash",
-    "timestamp_flagged",
-    "story_key",
-    "parse_error",
-    "external_id",
-]
+# Used to strip `SILVER_COLUMNS`' extra `ingest_id` plumbing column and guarantee
+# `MERGE ... INSERT *` lines up positionally.
+#
+# Derived from `ARTICLES_DDL` rather than restated. This was a hand-copied list under a
+# comment promising it "matches ARTICLES_DDL's column order exactly" — a promise that was
+# true, unenforced, and load-bearing in the worst way: `INSERT *` matches positionally, so a
+# copy that fell one column out of step would write `title` into `body_text` and commit it
+# rather than fail. 3.D's first defect was this same class of drift one layer down.
+_ARTICLES_COLUMNS = list(columns(ARTICLES_DDL))
 
 # `story_id` is resolved by `_resolve_story_ids` below, walking `parent_id` up the
 # comment graph — a story never appears as a comment, so the id where the chain stops
