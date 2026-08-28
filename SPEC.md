@@ -481,12 +481,24 @@ receiving phase's row below, so it is gated by an acceptance test rather than by
 | **3. Cluster + resolve** *(done)* | **3.0 first: a real brief** — the existing renderer pointed at real `silver.articles`, ugly ranking, no enrichment, no email. Then: Spark dedup, clustering, entity resolution; both labeled eval sets committed | Reported precision/recall on both, reproducible via `make eval` — **and you have been reading a real brief every morning since 3.0**, not a fake one |
 | **4A. Publish** *(built 2026-08-22; acceptance pending)* | Ranker over real clusters; HTML brief with §11's health footer, emailed at 16:00; maintenance DAG; **plus the carried-forward items below** | You read it three mornings running and the feedback loop records your marks. Compaction delta measured |
 | **4B. Enrich + macro** *(built 2026-08-22; acceptance pending)* | Ollama stage with content-hash cache, Pydantic validation and evals (§7.3); ALFRED bitemporal macro store (§8) | A 30-day backfill: **bronze bytes, normalization, hashing, simhash and entity resolution reproduce identically; clustering reproduces within a stated tolerance given a recorded ordering key; enrichment resolves from cache with a published hit rate** |
-| **5. Platform polish** | dbt migration of silver→gold; Kafka + Structured Streaming **if and only if §14's criteria are met** | 14+ consecutive daily briefs; each re-added component has a written before/after justification |
+| **5. Platform polish** | Close 4A's and 4B's acceptances; §14's re-entry criteria **measured and written up** — dbt, Kafka + Structured Streaming, pgvector, weight fitting — re-added only where a criterion is actually met; ADR-0009's three carried items; alerting for the local half; **plus the carried-forward items below** | 14+ consecutive daily briefs; each re-added component has a written before/after justification — **and each refused one has the measurement that refused it** |
 
 Phase 4 is the one people skip and the one interviewers probe. It is not optional — which is
 why it is now two phases rather than one ten-item row that can be half-finished and called
 done. **ADR-0008** records the split and the reasoning; 4A/4B rather than a renumber, so
 existing "Phase 4" references stay valid.
+
+**Phase 5's row was amended on 2026-08-26, and the amendment is itself a finding.** It
+previously read "dbt migration of silver→gold", which cannot be executed: §14 gates dbt on
+the gold layer exceeding ~10 models and gold holds four tables, but the sharper problem is
+that **there is no silver→gold SQL layer to migrate**. `gold.cluster_enrichment` is an LLM
+call, `gold.macro_observations` is a bitemporal Spark MERGE, `gold.brief_items` is a
+render-time record of what the reader was shown; dbt models are `SELECT` statements.
+Migrating would mean rewriting working Spark into SQL to justify a tool — which is what §2
+and §14 exist to prevent, so the row was asking for the thing the rest of this document
+argues against. The row now asks for the **measurement** instead, and the acceptance asks
+for the refusal to carry its numbers. A deferral whose criterion was never checked is a wish
+(§14's opening line); so is a deliverable nobody re-read against the code.
 
 ### The brief ladder
 
@@ -531,6 +543,27 @@ checking the code against the row rather than trusting either.
 | **Publisher-diversity inflation** — one HN submission's outbound links count as three publishers | `docs/runbooks/phase-3.md` 3.E | §7.4's breadth component |
 | **EDGAR shaping** — one Form 4 clusters twice, once per CIK: the filing is indexed under both the reporting person and the issuer | `docs/runbooks/phase-3.md` 3.E | The brief's top ten |
 
+**All five closed in 4A**, each inside the component it gates rather than as a cleanup pass;
+`docs/runbooks/phase-4a.md`'s "Built, and what remains" maps them one to one.
+
+### Carried forward into Phase 5
+
+Same rule, one phase on. Every item below is open, recorded in the runbook it came from, and
+named again in `docs/runbooks/phase-5.md` — visible in both places or it is not carried.
+
+| Item | Recorded in | Gates |
+|---|---|---|
+| **30-day reproducibility backfill** — bronze starts 2026-08-18, so the window cannot close before 2026-09-17 | `docs/runbooks/phase-4b.md` | 4B's own acceptance |
+| **100 enrichment examples and the `[enrichment]` floors** — the harness is complete and has never been run; the floors are still `0.0` | `docs/runbooks/phase-4b.md` 4B.G | `make eval` gating §7.3 at all |
+| **ADR-0009's embedding branch behind `dedup.decide`** | ADR-0009 | Dedup recall's 0.500 ceiling |
+| **§7.4's novelty component** — absent from `WEIGHTS` for two phases | `docs/runbooks/phase-4a.md` 4A.H, ADR-0009 | The ranker is five-sixths of its spec |
+| **The resolver's `?itemDescription` and a wider candidate set** | ADR-0009 | Entity recall's 0.630 ceiling |
+| **Nothing alerts on a local DAG failing** — ten hours of dead ingestion produced no signal behind a green AWS console; §11's monitoring covers the AWS half only | `docs/runbooks/phase-4b.md` | §11's whole argument, and the 14-brief streak that rests on it |
+
+The last one is the sharpest, for the reason 4B gives: §11 argues that silence is the failure
+mode, and the monitoring built for it watches Lambdas — which were fine. The half that broke
+was the local half, and it broke silently.
+
 ### Labeled sets are work, and they start now
 
 ~600 hand labels gate two phase acceptances: ~200 article pairs (§7.1) and ~300 mentions
@@ -539,7 +572,14 @@ checking the code against the row rather than trusting either.
 **Phase 3's two are done**: `evals/dedup/pairs.jsonl` holds 252 real pairs beside the 55
 synthetic Phase 0 ones, scored separately so the fixture cannot flatter the real set, and
 `evals/entities/mentions.jsonl` holds 300. Both floors are off `0.0` and enforced in CI.
-`evals/enrichment/` is still empty, with its floors at `0.0` waiting for 4B.
+
+**`evals/enrichment/` is still empty, and the reason it is still empty is the one this
+section warns about.** It was recorded through 4B as blocked on a local model running.
+`evals/sample_enrichment.py`, `evals/enrichment_predict.py` and the `[enrichment]` scorer
+were all built and none has been run; the block cleared when Ollama came up and nothing went
+back for it. This is the third rule the section now carries: **a gate marked "blocked on X"
+needs re-checking when X clears, or it silently becomes a gate marked "not done".** It is
+carried into Phase 5 as 5.0 and named in the table above.
 
 Label **incrementally against the real `silver.articles` data that already exists**, not in
 one block once the code is written — 20 pairs a day through Phase 3's build reaches 200 by
