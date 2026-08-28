@@ -136,6 +136,13 @@ Two things worth being honest about rather than glossing over:
   1,106) because the case ADR-0007 defends against hasn't occurred yet — which is the
   right time to have already built the defense.
 
+## A BI client instead
+
+The same workgroup, the same `signal-analyst` role, read from Power BI — for the questions
+that are about change over time rather than a single answer. Setup, the query set, and the
+measured case for Import over DirectQuery: [`docs/powerbi.md`](powerbi.md). It reads these
+tables and nothing else depends on it (ADR-0012).
+
 ## Guardrails
 
 `enforce_workgroup_configuration = true` on the `signal` workgroup means its own
