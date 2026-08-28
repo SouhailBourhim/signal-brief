@@ -176,12 +176,26 @@ def _ordering_key(article_ids: list[str]) -> str:
 def _candidate_pairs(rows: list[dict[str, Any]]) -> tuple[set[tuple[str, str]], int]:
     """Blocking. Returns (candidate pairs, blocking keys dropped for being too large).
 
+    **One key per branch of `dedup.decide`.** A rule the decision can reach but blocking
+    never proposes a candidate for is dead in this path while still passing every test that
+    exercises `group_stories`, whose all-pairs enumeration hides the omission. `group_edges`
+    promises the two paths "differ only in how they arrive at the edges", so every branch
+    added there has to be matched here.
+
     Exact for both token branches: `dedup.blocking_keys` uses prefix filtering, so any pair
-    above the Jaccard threshold is guaranteed to share a key. The simhash branch is covered
-    by banding the stored `silver.articles.simhash` — approximate, which is all a *blocking*
-    key has to be, since every surviving candidate is then decided exactly by `dedup.decide`.
-    That is the one job the stored column still has now the decision recomputes its own
-    simhash over cleaned text.
+    above the Jaccard threshold is guaranteed to share a key. Exact for the accession branch
+    too — that rule fires only on equality, so one key per accession number is complete by
+    construction.
+
+    Approximate for simhash, and less tightly than it looks: the bands are computed over the
+    **stored** `silver.articles.simhash`, which is hashed over raw text, while `dedup.decide`
+    recomputes its own simhash over *cleaned* text. Those are hashes of two different strings,
+    so a band collision is only loosely correlated with proximity of the value actually
+    compared. It survives because `NEAR_DUPLICATE_DISTANCE` is 0 — identical cleaned text
+    nearly always means near-identical raw text — but the honest description is "a cheap
+    correlated prefilter", not "a banding of the compared value". The token branches are the
+    ones carrying the exactness guarantee; recomputing the simhash here would cost a second
+    pass over every article to tighten a branch whose own threshold is already exact-match.
     """
     title_frequency: Counter[str] = Counter()
     body_frequency: Counter[str] = Counter()
@@ -199,6 +213,25 @@ def _candidate_pairs(rows: list[dict[str, Any]]) -> tuple[set[tuple[str, str]], 
         keys += [
             f"b:{k}" for k in dedup.blocking_keys(prepared.body, body_frequency, dedup.BODY_JACCARD)
         ]
+        # The accession branch of `decide`. Without this the rule 4A.G added there — "one
+        # Form 4 clusters twice" — is reachable in `group_stories` and mostly unreachable
+        # here, because the pair it targets is precisely the pair the other keys cannot
+        # produce: two EDGAR index entries for one submission carry different titles (no
+        # shared tokens at all — "Koss Jennifer G." against "Reservoir Media, Inc."), ~9-token
+        # boilerplate bodies whose only shared tokens are the filing date, and an accession
+        # number that `content_tokens` strips as a long digit run.
+        #
+        # Sharing the date is what makes it fail *with scale* rather than outright: EDGAR
+        # posts thousands of filings a day, so `b:2026`/`b:08`/`b:18` grow past
+        # MAX_BLOCK_SIZE and get dropped, taking the only co-blocking the pair had. Measured
+        # over synthetic filings at the shape of a real day: 100% of same-filing pairs
+        # proposed at 100 submissions, 92% at 300, 75.8% at 1,000 — an accuracy loss that
+        # arrives quietly as the lake grows and shows up nowhere in the eval, which scores
+        # `decide` rather than what blocking fed it.
+        #
+        # These blocks hold 2-3 rows (one submission indexed under each CIK it concerns), so
+        # MAX_BLOCK_SIZE never drops them and the cost is one key per filing.
+        keys += [f"x:{accession}" for accession in prepared.accessions]
         # 8 bands of 8 bits over the stored simhash. Probabilistic by design; the decision
         # re-checks every candidate.
         stored = row["simhash"] or 0

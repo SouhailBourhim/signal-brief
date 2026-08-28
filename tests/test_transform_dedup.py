@@ -388,3 +388,83 @@ def test_unrelated_stories_are_not_merged(polled):
         members = [a for a in deduped if a["title"] == cluster["title"]]
         assert len({m["story_key"] for m in members}) == 1
     assert len(clusters) >= 5, "distinct events must stay distinct"
+
+
+# --- blocking must be able to reach every branch of `decide` ------------------------------
+
+
+def _edgar_day(submissions: int) -> list[dict]:
+    """One EDGAR day, at the shape the real feed has.
+
+    Every submission is indexed twice — once under the reporting person, once under the
+    issuer — which is the pair `decide`'s accession rule exists to catch. The bodies are
+    EDGAR's real boilerplate, so the only tokens the two entries share are the filing date,
+    and that date is shared by every other filing that day too.
+    """
+    from signal_core.dedup import prepare
+    from signal_core.hashing import simhash64
+
+    names = [
+        "acme", "borealis", "cavendish", "durant", "eastwind", "fairhaven", "glenmore",
+        "harrow", "ironside", "jessup", "kirkland", "lomond", "marbury", "northgate",
+        "orlean", "pemberton", "quill", "ravenswood", "stanhope", "thornbury",
+    ]
+    rows = []
+    for i in range(submissions):
+        accession = f"{1800000 + i:010d}-26-{i:06d}"
+        sides = [
+            (f"{names[i % 20].title()} {names[(i * 7) % 20].title()}", "Reporting"),
+            (f"{names[(i * 3) % 20].title()} {names[(i * 11) % 20].title()} Inc.", "Issuer"),
+        ]
+        for k, (name, role) in enumerate(sides):
+            title = f"4 - {name} ({accession.split('-')[0]}) ({role})"
+            body = f"<b>Filed:</b> 2026-08-18 <b>AccNo:</b> {accession} <b>Size:</b> 9 KB"
+            rows.append(
+                {
+                    "article_id": f"f{i:05d}-{k}",
+                    "title": title,
+                    "body_text": body,
+                    # The *stored* simhash, hashed over raw text the way silver writes it.
+                    "simhash": simhash64(f"{title} {body}".strip()),
+                    "prepared": prepare(title, body),
+                }
+            )
+    return rows
+
+
+def test_the_accession_rule_has_a_blocking_key_that_holds_at_scale():
+    """`group_edges` promises the Spark path and the in-process path "differ only in how they
+    arrive at the edges". A rule `decide` can reach but blocking never proposes a candidate
+    for breaks that promise silently — `group_stories` enumerates all pairs, so every test
+    written against it still passes.
+
+    That is what happened to the accession rule 4A.G added: `_candidate_pairs` emitted `t:`,
+    `b:` and `s:` keys and nothing for accessions. The pair it targets is exactly the pair
+    the other keys cannot produce — different titles sharing no tokens, boilerplate bodies
+    whose only common tokens are the filing date.
+
+    Sharing the date is what makes this fail *with scale* rather than outright: EDGAR posts
+    thousands of filings a day, so `b:2026`/`b:08`/`b:18` grow past MAX_BLOCK_SIZE and are
+    dropped, taking the pair's only co-blocking with them. Measured before the fix: 100% of
+    same-filing pairs proposed at 100 submissions, 92% at 300, 75.8% at 1,000.
+
+    Asserted at 1,000 submissions because at 100 the bug is invisible.
+    """
+    from signal_core.spark.jobs.cluster import _candidate_pairs
+
+    rows = _edgar_day(1_000)
+    same_filing = {
+        (a["article_id"], b["article_id"])
+        for a, b in zip(rows[::2], rows[1::2], strict=True)
+        if a["prepared"].accessions == b["prepared"].accessions
+    }
+    assert len(same_filing) == 1_000, "fixture must contain one indexed pair per submission"
+
+    candidates, dropped = _candidate_pairs(rows)
+
+    assert dropped, "the date-token blocks must be oversized here, or the test proves nothing"
+    missed = same_filing - candidates
+    assert not missed, (
+        f"{len(missed)} of {len(same_filing)} same-filing pairs are never proposed as "
+        "candidates, so `decide`'s accession rule cannot fire on them in the Spark path"
+    )
