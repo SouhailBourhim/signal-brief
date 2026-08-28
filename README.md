@@ -9,6 +9,26 @@ enrichment built in.
 
 ![What Signal is, the problem it answers, and what a morning brief actually contains](docs/assets/project-story.jpeg)
 
+**Stack:** Python 3.12 · AWS Lambda + S3 · Apache Iceberg · Spark 4 · Terraform · Airflow · Athena ·
+Ollama (local LLM) · Power BI
+
+**Nine sources → bronze → silver → story clusters → ranked brief.** Ingestion is serverless because it
+must run whether or not a laptop is on; processing is local Spark because EMR and MWAA buy nothing here
+that `s3a` and Docker Compose do not.
+
+| | |
+|---|---|
+| **The hard parts** | Story-level dedup (one acquisition arrives as 40 articles) · entity resolution to tickers · a local LLM as a *governed* pipeline stage (cached, validated, quarantined, versioned) · a bitemporal macro store, because CPI gets revised for months |
+| **Measured** | Dedup 1.000 / 0.500 held out (n=252) · entity resolution 0.833 / 0.556 held out (n=300) · one brief costs **$0.00014** in Athena · replay after a 24.2 h outage re-read 23,306 rows and committed **0** |
+| **Honest about** | The enrichment eval has a harness and no labels yet, so it reports *unscored* rather than guessing. Held-out numbers are quoted instead of the flattering full-set ones. Bad metrics stayed published while they were bad. |
+
+Full numbers, including the ones that are still blank, are in [Measured, not claimed](#measured-not-claimed).
+New to data engineering? [`docs/how-signal-works.md`](docs/how-signal-works.md) assumes nothing.
+
+<details>
+<summary><b>Detailed build status — phases 0 through 4B</b></summary>
+
+
 **Status (2026-08-28): Phases 0-4A merged; Phase 4B deployed and running, acceptance pending
 on evidence that takes calendar time.** Nine pollers — Hacker News (items and top-story
 scores), SEC EDGAR + Form D, three RSS/Atom feeds, daily market bars, and ALFRED macro
@@ -74,6 +94,8 @@ both halves, the table lineage, and what is deliberately still missing.
 what each phase is for, in plain English, with no prior knowledge assumed.
 
 ![The full source-to-brief journey: acquire, preserve, normalize, understand, enrich and score, assemble, deliver and learn](docs/assets/data-lifecycle.jpeg)
+
+</details>
 
 ## Quickstart
 
