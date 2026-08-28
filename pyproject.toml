@@ -80,3 +80,26 @@ pythonpath = ["."]
 python_version = "3.12"
 packages = ["signal_core"]
 ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["src/signal_core"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+# A ratchet just under the measured number, not an aspiration: 84.28% branch coverage over
+# 546 tests, so the floor is 84. The point of a floor is that a change which deletes
+# coverage has to say so out loud; a target nobody meets teaches everyone to pass
+# `--no-cov`, which is how a gate becomes decoration. Raise it when the real number moves,
+# never lower it to make a build pass.
+#
+# Branch coverage, which is why this reads lower than the 86% a line-only run reports. The
+# difference is entirely the half-taken `if`s, and those are where this codebase's bugs
+# actually live — finding 1 of the review was a falsy-`.content` fallback that line coverage
+# counted as covered.
+fail_under = 84
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

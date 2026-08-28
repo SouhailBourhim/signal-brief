@@ -405,9 +405,26 @@ def _edgar_day(submissions: int) -> list[dict]:
     from signal_core.hashing import simhash64
 
     names = [
-        "acme", "borealis", "cavendish", "durant", "eastwind", "fairhaven", "glenmore",
-        "harrow", "ironside", "jessup", "kirkland", "lomond", "marbury", "northgate",
-        "orlean", "pemberton", "quill", "ravenswood", "stanhope", "thornbury",
+        "acme",
+        "borealis",
+        "cavendish",
+        "durant",
+        "eastwind",
+        "fairhaven",
+        "glenmore",
+        "harrow",
+        "ironside",
+        "jessup",
+        "kirkland",
+        "lomond",
+        "marbury",
+        "northgate",
+        "orlean",
+        "pemberton",
+        "quill",
+        "ravenswood",
+        "stanhope",
+        "thornbury",
     ]
     rows = []
     for i in range(submissions):
