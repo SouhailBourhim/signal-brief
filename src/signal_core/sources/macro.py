@@ -218,6 +218,26 @@ def poll(config: SourceConfig, state: State) -> tuple[list[RawDocument], State]:
     )
 
 
+def _status_line(response: httpx.Response) -> bytes:
+    """`502 Bad Gateway` — the diagnosable part of a bodyless failure, with no URL in it."""
+    return f"{response.status_code} {response.reason_phrase}".strip().encode("utf-8")
+
+
+def redact(text: str, api_key: str) -> str:
+    """Replace the key with `***` wherever it appears.
+
+    Redaction by *value* rather than by pattern, because the failure this guards is the one
+    that got past the `source_url` rule: that rule reasoned about the one field known to be
+    dangerous, and the leak arrived through a different field entirely. Matching the secret
+    itself does not depend on guessing which parameter name or which format it turns up in.
+
+    Public so the poller's own error paths and its tests name the same function.
+    """
+    if not api_key:
+        return text
+    return text.replace(api_key, "***")
+
+
 def _fetch_series(
     client: httpx.Client, config: SourceConfig, series_id: str, api_key: str, realtime_start: str
 ) -> RawDocument:
@@ -247,11 +267,20 @@ def _fetch_series(
         # FRED puts a readable reason in the body on a 400 — a bad key, an unknown series id.
         # Storing that body as the payload is what makes the failure diagnosable straight out
         # of bronze without re-running anything, and it is the same shape `market.py` uses.
-        payload = exc.response.content or str(exc).encode("utf-8")
+        #
+        # The fallback is the status line, never `str(exc)`: httpx renders an
+        # `HTTPStatusError` as "... for url '{request.url}'" — the full URL, query string and
+        # `api_key` included. A bodyless 4xx/5xx (a 502 from an edge proxy, a bodyless 429)
+        # makes `.content` falsy, and that is the branch that would write the key into an
+        # object `_document`'s docstring correctly says can never be redacted, only deleted.
+        payload = exc.response.content or _status_line(exc.response)
         http_status = exc.response.status_code
         outcome = FetchOutcome.ERROR
     except httpx.HTTPError as exc:
-        payload = str(exc).encode("utf-8")
+        # Redacted rather than trusted. Transport errors carry no URL today, but they are one
+        # httpx release away from doing so, and the cost of being wrong here is asymmetric:
+        # a leaked key is permanent, a redacted message is merely less specific.
+        payload = redact(str(exc), api_key).encode("utf-8")
         http_status = 0
         outcome = FetchOutcome.ERROR
 
