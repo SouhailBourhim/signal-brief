@@ -1,6 +1,6 @@
 # Signal — see SPEC.md. Every target here is meant to work from a fresh clone.
 .DEFAULT_GOAL := help
-.PHONY: help setup up down skeleton test lint fmt eval brief brief-open clean tf-validate lambda-package airflow-password athena-query
+.PHONY: help setup up down skeleton test test-fast lint fmt eval brief brief-open clean tf-validate lambda-package airflow-password athena-query
 
 UV ?= uv
 
@@ -30,7 +30,10 @@ skeleton: ## Phase 0 walking skeleton: fake source -> bronze -> silver -> brief
 skeleton-nospark: ## same, without a JVM (transport differs, logic is identical)
 	$(UV) run signal skeleton --no-spark
 
-test: ## run the test suite
+test: ## run the test suite with the coverage gate
+	$(UV) run pytest --cov=signal_core --cov-report=term-missing
+
+test-fast: ## the suite without coverage, for a tight local loop
 	$(UV) run pytest
 
 lint: ## ruff check + format check + mypy

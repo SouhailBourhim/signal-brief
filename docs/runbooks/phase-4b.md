@@ -707,14 +707,20 @@ after the fix.
 
 ## Acceptance
 
-SPEC §12's 4B gate, item by item. **Not met** — two external gates and a calendar one.
+SPEC §12's 4B gate, item by item. **Not met** — but the two external gates have since
+cleared, and what remains is one labeling job and one calendar window.
+
+*Status as of 2026-08-28. The three rows below that used to read "blocked on Ollama" and
+"blocked on `terraform apply`" were still saying so days after both had happened — see
+§4B.L and the batch measurements above. Restated here rather than left, because a stale
+status table is worse than no status table: it is the paragraph a reader trusts most.*
 
 | Asked for | Where it is | State |
 |---|---|---|
-| Ollama stage with content-hash cache | `enrich/` — client, prompt, schema, store, run | Built |
-| Pydantic validation, quarantine | `enrich/schema.py`, `gold.enrichment_rejects` | Built |
-| Eval harness, 100 examples | `score_enrichment`, `sample_enrichment.py`, `enrichment_predict.py` | Harness built; **examples blocked on Ollama** |
-| ALFRED bitemporal macro store | `sources/macro.py`, `spark/jobs/macro.py`, `gold.macro_observations` | Built |
+| Ollama stage with content-hash cache | `enrich/` — client, prompt, schema, store, run | Built; **run against a live model** |
+| Pydantic validation, quarantine | `enrich/schema.py`, `gold.enrichment_rejects` | Built; 0 schema failures on the first clean batch of 40 |
+| Eval harness, 100 examples | `score_enrichment`, `sample_enrichment.py`, `enrichment_predict.py` | Harness built; **no labeled examples yet** |
+| ALFRED bitemporal macro store | `sources/macro.py`, `spark/jobs/macro.py`, `gold.macro_observations` | Built; **deployed and verified 2026-08-23** (§4B.L) |
 | Revisions in the brief | `read_macro_revisions` + the template's revision block | Built |
 | 30-day reproducibility backfill | `ops/reproduce.py`, `signal reproduce` | Harness built; **window closes 2026-09-17** |
 
@@ -722,16 +728,22 @@ SPEC §12's 4B gate, item by item. **Not met** — two external gates and a cale
 
 | Blocked on | Command |
 |---|---|
-| **Ollama running on the host** — then verify the digest against ADR-0003 and pin it | `signal enrich --check-model` |
-| **A free FRED key** in the SSM parameter Terraform creates | `aws ssm put-parameter --name /signal/fred-api-key --type SecureString --value <key> --overwrite` |
-| **`terraform apply`** for `macro.tf` and source #9 | `terraform -chdir=infra/terraform/main apply` |
+| **Labeling ~100 enrichment examples** — the harness scores nothing without them, and says so rather than guessing | `uv run python evals/sample_enrichment.py` then `evals/label_apply.py` |
 | **30 days of bronze** — 2026-09-17 at the earliest | `signal reproduce --days 30` |
 
-Neither gate blocks construction: every module here is tested against `respx` and `moto`, and
-`make test`, `make lint`, `make eval`, `make skeleton`, `make lambda-package` and
+### Cleared
+
+| Was blocked on | Cleared by |
+|---|---|
+| **Ollama running on the host**, digest verified against ADR-0003 | `signal enrich --check-model`, then the real batches above |
+| **A free FRED key** in the SSM parameter Terraform creates | `aws ssm put-parameter --name /signal/fred-api-key --type SecureString --value <key> --overwrite` |
+| **`terraform apply`** for `macro.tf` and source #9 | Applied and verified by `CodeSha256` + live invocation — §4B.L |
+
+Neither remaining gate blocks construction: every module here is tested against `respx` and
+`moto`, and `make test`, `make lint`, `make eval`, `make skeleton`, `make lambda-package` and
 `make tf-validate` are all green.
 
-The rehearsal on five days is the next thing to run once the first two clear.
+The rehearsal on five days is the next thing to run.
 
 ## Then
 

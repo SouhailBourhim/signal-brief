@@ -25,13 +25,17 @@ jobs:
 
       - run: uv sync --all-extras
 
-      - name: lint
-        run: |
-          uv run ruff check .
-          uv run ruff format --check .
+      # `make lint` and `make test`, not the underlying commands. CI used to spell out
+      # `ruff check` and `ruff format --check` itself, which silently dropped the `mypy src`
+      # that `make lint` had gained — a configured gate that never ran. Calling the target
+      # is what stops the Makefile and CI drifting apart again: a gate added in one place
+      # now runs in both, which is the property being bought, not the brevity.
+      - name: lint (ruff + mypy)
+        run: make lint
 
+      # Carries the coverage gate — see `fail_under` in pyproject.toml.
       - name: test
-        run: uv run pytest
+        run: make test
 
       - name: walking skeleton (clean clone, with Spark)
         run: uv run signal skeleton

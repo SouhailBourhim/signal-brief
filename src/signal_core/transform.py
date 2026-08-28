@@ -21,6 +21,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from signal_core.hashing import content_hash, simhash64
 from signal_core.parse.models import ParsedItem
+from signal_core.records import Article
 from signal_core.timeutil import ensure_utc, timestamps_disagree
 
 # Tracking parameters carry no meaning and split otherwise-identical URLs.
@@ -43,7 +44,7 @@ def publisher_domain(url: str) -> str:
     return urlsplit(url).netloc.lower().removeprefix("www.")
 
 
-def to_article(parsed: ParsedItem, bronze_row: dict[str, Any]) -> dict[str, Any]:
+def to_article(parsed: ParsedItem, bronze_row: dict[str, Any]) -> Article:
     """One `ParsedItem`, plus the bronze row it came from, -> one `silver.articles` row.
 
     Raises nothing on bad input by design: SPEC §6.2 says failed records are quarantined
@@ -52,7 +53,7 @@ def to_article(parsed: ParsedItem, bronze_row: dict[str, Any]) -> dict[str, Any]
     parser found it missing a title or URL) is quarantined here too, unchanged.
     """
     fetched_at = ensure_utc(bronze_row["fetched_at"])
-    base = {
+    base: Article = {
         "article_id": "",
         "source_id": bronze_row["source_id"],
         "url_canonical": "",

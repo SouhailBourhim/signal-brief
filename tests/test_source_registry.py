@@ -237,3 +237,46 @@ def test_nothing_deployed_is_silently_unmonitored():
         assert source_id in DEPLOYED_SOURCE_IDS or source_id in NOT_YET_DEPLOYED, (
             f"{source_id} has a Lambda but is neither monitored nor marked pending"
         )
+
+
+def test_the_readme_poller_count_matches_the_deployed_set():
+    """The README's own status line, held to the same parity as everything else here.
+
+    It said "Eight pollers" for five days after `macro` became source #9 — the deploy is
+    recorded in the runbook and in `NOT_YET_DEPLOYED` going empty, and the one sentence a
+    reader trusts most still said otherwise. Every other declaration site in this project is
+    asserted against the others; the sentence that summarises them for a first-time reader
+    was the one place drift was invisible.
+
+    A count rather than the prose around it: the number is the part that goes stale
+    mechanically, and pinning it makes deploying source #10 fail here until the README is
+    told, which is the same trade `test_a_pending_source_is_really_pending` already makes.
+    """
+    words = {
+        1: "one",
+        2: "two",
+        3: "three",
+        4: "four",
+        5: "five",
+        6: "six",
+        7: "seven",
+        8: "eight",
+        9: "nine",
+        10: "ten",
+        11: "eleven",
+        12: "twelve",
+    }
+    expected = len(DEPLOYED_SOURCE_IDS)
+    assert expected in words, f"{expected} pollers — extend the number words above"
+
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    claimed = re.findall(r"\*\*?([A-Za-z]+) pollers\b", readme) + re.findall(
+        r"\b([A-Za-z]+) pollers\b", readme
+    )
+    assert claimed, "the README no longer states a poller count — update this test with it"
+
+    stated = claimed[0].lower()
+    assert stated == words[expected], (
+        f"README says {stated!r} pollers, but {expected} sources are deployed "
+        f"({', '.join(DEPLOYED_SOURCE_IDS)}). Update the README's status line."
+    )

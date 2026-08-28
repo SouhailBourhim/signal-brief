@@ -114,6 +114,42 @@ def test_a_transport_failure_is_an_error_document_too():
 
 
 @respx.mock
+def test_a_bodyless_error_stores_the_status_line_and_not_the_key():
+    """The leak the `source_url` rule did not cover.
+
+    httpx renders `HTTPStatusError` as "... for url '{request.url}'" — query string and
+    `api_key` included. When the response body is empty the old fallback was `str(exc)`, so
+    a 502 from an edge proxy or a bodyless 429 wrote the key into bronze, which
+    `_document`'s own docstring says can never be redacted, only deleted. Asserted against
+    `payload` rather than `source_url` because the payload is the field that leaked.
+    """
+    _route(payload=b"", status=502)
+    documents, _ = poll(CONFIG, STATE)
+
+    assert documents, "expected one document per watchlist series"
+    for document in documents:
+        assert b"test-key" not in document.payload
+        assert b"api_key" not in document.payload
+        assert document.payload == b"502 Bad Gateway"
+
+
+@respx.mock
+def test_a_transport_error_carrying_the_key_is_redacted():
+    """Defence in depth: transport errors carry no URL today, but a leaked key is permanent
+    and a redacted message is only less specific. Pinned by simulating the message httpx
+    would produce if that ever changed."""
+    respx.get(f"{BASE}{PATH}").mock(
+        side_effect=httpx.ConnectError(f"refused for url '{BASE}{PATH}?api_key=test-key'")
+    )
+    documents, _ = poll(CONFIG, STATE)
+
+    assert documents
+    for document in documents:
+        assert b"test-key" not in document.payload
+        assert b"***" in document.payload
+
+
+@respx.mock
 def test_content_movement_is_measured_over_all_series_together():
     """`State` holds one content hash, and the honest question for this source is "did any
     vintage anywhere move" — not "did PAYEMS move"."""
