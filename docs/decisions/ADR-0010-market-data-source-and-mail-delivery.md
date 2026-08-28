@@ -2,7 +2,7 @@
 
 **Status:** Accepted · **Date:** 2026-08-22
 
-**Amended 2026-08-24:** the 07:00 send this record refers to now runs at **16:00**. Only the clock time changed — the reasoning below stands as written. The host sleeps through the small hours, so the scheduler was frozen (not stopped) at 07:00 and the brief arrived mid-afternoon anyway; `airflow/dags/brief_dag.py` carries the incident.
+**Amended 2026-08-24:** the send this record refers to now runs at **16:00**. Only the clock time changed — the reasoning below stands as written. The host slept through the former early-morning schedule, so the scheduler was frozen (not stopped) and the brief arrived mid-afternoon anyway; `airflow/dags/brief_dag.py` carries the incident.
 
 **§2 superseded by [ADR-0013](ADR-0013-brief-delivery-over-gmail-smtp.md) on 2026-08-28 — the brief is not sent through SES any more.** It was *accepted* by SES every time (8 delivery attempts, 0 bounces, 0 rejects) and quarantined by Gmail every time, because a `From:` of `gmail.com` leaving via `amazonses.com` aligns for neither SPF nor DKIM, and `gmail.com` publishes `p=none; sp=quarantine` — so it never bounced, and five briefs sat in Spam behind a green DAG. Note the 2026-08-24 amendment above fixed a genuinely different bug: the send was late *and* undelivered, and only the lateness was addressed. The "mail from the local side" half of §2 stands; only the transport changed. §1 and §3 are untouched.
 
@@ -19,7 +19,7 @@ rather than absorb:
   embeddings for same-story dedup **in 4B, via Ollama**, and rejected them for entity
   resolution outright. It did not say what novelty does in the meantime.
 
-Separately, 4A's deliverable is a brief *emailed at 07:00*, and the project has no mailer.
+Separately, 4A's deliverable is a scheduled emailed brief, and the project has no mailer.
 ADR-0002 splits the runtime — ingestion serverless in AWS because it must run whether or not
 the laptop is on, everything interpretive local — and the send has to land on one side of
 that line.
@@ -77,7 +77,7 @@ for splits and dividends, and a re-fetch correcting an old bar has to overwrite 
 
 ADR-0002's boundary decides this. The renderer runs locally and holds the finished HTML in
 memory; a Lambda mailer would exist only to re-read from S3 what the process that called it
-just produced, and would put the 07:00 send behind a deployment cycle. `brief/mailer.py`
+just produced, and would put the scheduled send behind a deployment cycle. `brief/mailer.py`
 sits beside `ranker.py` and `render.py` — which is also where SPEC §13's repository layout
 puts it (`brief/ # ranker, renderer, mailer`).
 

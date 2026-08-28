@@ -2,7 +2,7 @@
 
 **Status:** Accepted · **Date:** 2026-08-22
 
-**Amended 2026-08-24:** the 07:00 send this record refers to now runs at **16:00**. Only the clock time changed — the reasoning below stands as written. The host sleeps through the small hours, so the scheduler was frozen (not stopped) at 07:00 and the brief arrived mid-afternoon anyway; `airflow/dags/brief_dag.py` carries the incident.
+**Amended 2026-08-24:** the send this record refers to now runs at **16:00**. Only the clock time changed — the reasoning below stands as written. The host slept through the former early-morning schedule, so the scheduler was frozen (not stopped) and the brief arrived mid-afternoon anyway; `airflow/dags/brief_dag.py` carries the incident.
 
 ## Context
 
@@ -46,7 +46,7 @@ renders, via `brief/select.py::ranked_window`.
 - **No circularity.** §7.4's `WEIGHTS` has no enrichment component and 4B did not add one, so
   ranking never reads what enrichment writes.
 - **A margin, not an exact match.** 40 is four times the brief's default cut of 10, which
-  absorbs any ranking drift between the 06:15 enrich run and the 07:00 send. A cluster that
+  absorbs any ranking drift between the 06:15 enrich run and the scheduled send. A cluster that
   slips through unenriched degrades to its snippet rather than breaking the brief.
 - **Ranking is now shared code.** `brief/build.py` and `enrich/run.py` call one function;
   two copies of the read sequence would drift the first time a component was added to

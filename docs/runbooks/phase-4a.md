@@ -1,14 +1,13 @@
 # Phase 4A runbook — publish
 
-> **Amended 2026-08-24 — the brief now sends at 16:00, not 07:00.** The times recorded
-> below are what the schedule was at the time and are left as written. The send moved
-> because the host sleeps through the small hours: on 2026-08-24 the scheduler logged
+> **Amended 2026-08-24 — the brief sends at 16:00.** This runbook uses the current schedule.
+> The send moved because the host sleeps through the small hours: on 2026-08-24 the scheduler logged
 > nothing between 21:00 and 12:58 UTC, then resumed mid-stride and fired the whole chain
 > at once, so the brief landed at 13:59. The containers never died — they were frozen
 > with the host, which still reported them `Up`. See `airflow/dags/brief_dag.py`.
 
 Exit condition (SPEC §12): the ranker over real clusters, the HTML brief with §11's health
-footer **emailed at 07:00**, the maintenance DAG, and the carried-forward items — accepted by
+footer **emailed at 16:00**, the maintenance DAG, and the carried-forward items — accepted by
 **three mornings read running with the feedback loop recording marks**, and a measured
 compaction delta.
 
@@ -351,7 +350,7 @@ the next run's `feedback` component reads back.
 
 Written with `run_query`, not Spark. `build.py` and `read.py` stay JVM-free by design —
 their docstrings argue that starting Spark to render ten stories is a lot of machinery for a
-SELECT — and Athena v3 writes Iceberg directly, so the 07:00 path gains no JVM boot.
+SELECT — and Athena v3 writes Iceberg directly, so the 16:00 path gains no JVM boot.
 
 **DELETE-then-INSERT rather than MERGE**, and the WHERE clause is the reason: `make brief`
 twice in one morning must not double the rows *and* must not discard a mark already left. So
@@ -391,11 +390,11 @@ to SNS subscriptions and, in 4A.J below, to the SES identity.
 `--list` exists because cluster ids are content hashes. Nobody reads one off a page and types
 it from memory, so the verb that needs one has to be able to show them.
 
-## 4A.J — Email at 07:00 *(done 2026-08-22)*
+## 4A.J — Email at 16:00 *(done 2026-08-22)*
 
-- [x] `brief/mailer.py` — SES via boto3, lazily imported like `ops/athena.py`'s client
-- [x] `infra/terraform/main/mail.tf` — identity, least-privilege role, verification check
-- [x] `airflow/dags/brief_dag.py` — cron `0 7 * * *` Africa/Casablanca, build then mail
+- [x] `brief/mailer.py` — Gmail SMTP, with its app password read from SSM
+- [x] `infra/terraform/main/mail.tf` — Gmail app-password parameter and verification check
+- [x] `airflow/dags/brief_dag.py` — cron `0 16 * * *` Africa/Casablanca, build then mail
 - [x] `mail_from`/`mail_to` on `Settings`, defaulting to `contact_email`
 
 **Local, not a ninth Lambda.** ADR-0002's boundary decides it: the renderer runs locally and
@@ -405,7 +404,7 @@ deployment cycle. SPEC §13's layout says the same thing — `brief/ # ranker, r
 
 **Cron, not asset-triggered**, and this is the phase's one genuinely arguable schedule.
 `assets.py` anticipates the brief consuming `CLUSTERS_COMMITTED` and the dependency is real,
-but SPEC §12's acceptance says "emailed at **07:00**" — a clock time, not "whenever
+but SPEC §12's acceptance says "emailed at **16:00**" — a clock time, not "whenever
 clustering last finished". Asset-triggering would also risk a second send if either upstream
 table were rebuilt later the same morning by a manual trigger or a backfill, and a duplicate
 brief in the inbox is worse than a late one. The assets are declared as inlets for graph
@@ -470,7 +469,7 @@ Three things this cost, all of them the same mistake:
 - **The claim two paragraphs up — "a send failure is almost always the SES identity not being
   verified" — is what made this hard to see.** It named the only failure mode anyone had
   thought of, so a verified identity read as "the mailer is fine."
-- **The 07:00 → 16:00 move was a real fix for a different bug and it masked this one.** The
+- **The move to 16:00 was a real fix for a different bug and it masked this one.** The
   send was both late and undelivered; only the lateness got diagnosed, and moving the clock
   made the symptom "no email in the morning" become "no email in the afternoon."
 - **`tests/test_mailer.py` passed the whole time,** correctly, because `moto` was mocking a
@@ -554,7 +553,7 @@ failures for tables nobody has built is one whose failures stop being read (SPEC
 **Cron at 02:00, not asset-triggered.** Iceberg's snapshot isolation makes compaction safe
 alongside readers and writers, so the schedule is about resource contention, not correctness
 — 02:00 is clear of the 02:11 market poll, the 03:30 market DAG, `resolve` at 04:30, `cluster`
-at 05:00 and the 07:00 brief. `assets.py` already anticipated this hook.
+at 05:00 and the 16:00 brief. `assets.py` already anticipated this hook.
 
 `test_every_maintained_table_is_one_the_pipeline_actually_writes` asserts the hardcoded list
 against the jobs' own table constants, because a table missing from a sweep degrades
@@ -568,7 +567,7 @@ SPEC §12's 4A row, item by item:
 |---|---|
 | Ranker over real clusters | `brief/ranker.py` — five of §7.4's six components (4A.H) |
 | HTML brief with §11's health footer | `brief/render.py`, unchanged; the footer already printed fetch **and** content staleness (4A.A) |
-| Emailed at 07:00 | `brief/mailer.py` + `airflow/dags/brief_dag.py`, SES from the local side (4A.J) |
+| Emailed at 16:00 | `brief/mailer.py` + `airflow/dags/brief_dag.py`, Gmail SMTP from the local side (4A.J) |
 | Maintenance DAG | `spark/jobs/maintain.py` + `airflow/dags/maintenance_dag.py` (4A.F) |
 | Stale-but-successful feed detection | Already done in 1.E; the row was stale, not the code (4A.A) |
 | HN score-velocity poller | `sources/hn_scores.py`, source #7 (4A.B) |
@@ -596,7 +595,7 @@ read with marks recorded, plus a measured compaction delta. That is calendar tim
       the count of *uppercase* watchlist entries, `openai` and `anthropic` correctly not
       fetched. Zero errors on both.
 - [x] **Compaction delta measured** — see below.
-- [ ] Three consecutive mornings: confirm the 07:00 mail arrived, run
+- [ ] Three consecutive days: confirm the 16:00 mail arrived, run
       `signal feedback <cluster_id> up|down` on at least one item, and log what the read
       surfaced in the daily-read table below — the format `phase-3.md` used, because that
       table is what SPEC §1's behavioural claim actually rests on.
@@ -679,7 +678,7 @@ local half never ran once. Two independent faults, both found on 2026-08-23 (wri
 [`phase-4b.md`](phase-4b.md)):
 
 1. **The `brief` DAG was paused.** Airflow pauses a newly-discovered DAG by default, and
-   nothing here overrode that. So did `market` and `maintenance`. The 07:00 send — the one
+   nothing here overrode that. So did `market` and `maintenance`. The 16:00 send — the one
    thing this acceptance actually turns on — had never fired.
 2. **`gold.brief_items` did not exist.** Its `CREATE TABLE` was written in Trino's dialect
    rather than Athena's and fails on three separate points. Nothing caught it because the
