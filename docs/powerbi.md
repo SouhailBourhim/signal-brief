@@ -55,7 +55,10 @@ to AWS over the network like any other client. It never touches the repo.
 
 Install, on Windows:
 
-1. **Power BI Desktop** (Microsoft Store or the standalone installer).
+1. **Power BI Desktop** — Microsoft Store or the standalone installer. They run the same
+   connector, but the Store build is MSIX-packaged and reads a virtualized registry, which
+   decides where the DSN below has to live. A **User DSN** is read by both, so that is what
+   [The DSN](#the-dsn) specifies; a System DSN works only for the standalone build.
 2. **Amazon Athena ODBC driver, 2.x, 64-bit** — from AWS's *Connecting to Amazon Athena
    with ODBC* documentation page. Power BI's built-in "Amazon Athena" connector is a thin
    wrapper over this driver; without it the connector is present but cannot connect.
@@ -114,6 +117,12 @@ Verified on 2026-08-26 by running the credential process as Windows invokes it (
 `assumed-role/signal-analyst/...`). Note there is no `aws.exe` on the Windows side — the
 ODBC driver carries its own AWS SDK, which is what reads this file.
 
+That verified the pieces, not the driver. The full chain — MSIX-packaged Power BI spawning
+`wsl.exe`, the SDK making the assume-role hop, the driver querying as `signal-analyst` —
+was first confirmed end to end on 2026-08-28. Worth stating because the MSIX packaging is
+what breaks the System DSN above, so it was a fair question whether it would also block
+`credential_process` shelling out to another process. It does not.
+
 Get the role ARN from Terraform rather than the literal above if the account ever changes:
 
 ```bash
@@ -122,7 +131,7 @@ terraform -chdir=infra/terraform/main output -raw analyst_role_arn
 
 ## The DSN
 
-Windows → **ODBC Data Sources (64-bit)** → *System DSN* → *Add* → *Amazon Athena ODBC
+Windows → **ODBC Data Sources (64-bit)** → *User DSN* → *Add* → *Amazon Athena ODBC
 Driver*:
 
 | Field | Value |
@@ -133,11 +142,39 @@ Driver*:
 | Workgroup | `signal` |
 | AWS Region | `us-east-1` |
 | S3 Output Location | `s3://signal-athena-results-481879233905/` |
-| Authentication Type | Profile |
-| Profile Name | `signal-analyst` |
+| Authentication Type | `IAM Profile` |
+| AWS Profile | `signal-analyst` |
 
-Two of those are less meaningful than they look. **Database** is only the default for an
-unqualified table name, and every query in [`analytics/powerbi/`](../analytics/powerbi/)
+**User DSN, not System DSN.** This is the one choice on the form that depends on which
+Power BI you installed, and it fails without mentioning DSN scope. The Store build
+(`Microsoft.MicrosoftPowerBIDesktop`, MSIX-packaged) runs against a virtualized registry
+view and never sees `HKLM\SOFTWARE\ODBC\ODBC.INI`, where System DSNs live. The Driver
+Manager finds nothing under the name and returns:
+
+    ODBC: ERROR [IM002] [Microsoft][ODBC Driver Manager]
+    Data source name not found and no default driver specified
+
+which reads like a DSN you forgot to create rather than one this process cannot see. A User
+DSN lives in `HKCU` and is read by both builds. Found on 2026-08-28 against Store build
+2.157.879.0 — the System DSN it could not see was present and fully correct, which is why
+the message is worth recognizing rather than re-deriving.
+
+**Authentication Type defaults to `IAM Credentials`, and a DSN saved with that default
+looks finished.** In that mode Username and Password *are* the access key id and secret
+key, so what gets stored is an auth mode with three empty credential fields. The connector
+then reports only:
+
+    We couldn't authenticate with the credentials provided. Please try again.
+
+Choose `IAM Profile` instead. It greys out Username, Password and Session Token — that
+greying is the confirmation you are on the right mode — and enables **AWS Profile**, which
+is the only field to fill in. Leave *Preferred Role* and *Session Duration* empty:
+Preferred Role picks a role out of a SAML assertion in the federated flows and does nothing
+here, and the role hop is already declared as `role_arn`/`source_profile` in
+`%USERPROFILE%\.aws\config`, so the SDK does the `sts:AssumeRole` itself.
+
+Two of the values above are less meaningful than they look. **Database** is only the
+default for an unqualified table name, and every query in [`analytics/powerbi/`](../analytics/powerbi/)
 is fully qualified, so it is a fallback that never gets used. **S3 Output Location** is
 required by the form but overridden in practice: `enforce_workgroup_configuration = true`
 on the `signal` workgroup means the workgroup's own result location wins over whatever a
@@ -146,6 +183,15 @@ find later precisely because it has no effect.
 
 Then in Power BI Desktop: **Get Data → Amazon Athena → DSN `signal-athena`**, and paste a
 query from `analytics/powerbi/` into the advanced/SQL box for each table you want.
+
+The credential prompt that follows opens on its **AAD Authentication** tab. Pick **Use Data
+Source Configuration** in the left pane instead. AAD is Microsoft Entra ID sign-in — it
+authenticates you to Microsoft and has no bearing on AWS, so the sign-in it offers is one
+you should not complete even if it works. On this machine it does not get that far,
+failing with a `WAM Error ... ApiContractViolation` out of the Windows Account Manager,
+which is easy to read as the reason the connection failed rather than as noise from a step
+that was never needed. There is no AWS sign-in to do here: the DSN's profile is the
+credential.
 
 ## Import, not DirectQuery
 
