@@ -50,10 +50,19 @@ class Settings(BaseSettings):
     athena_database: str = "silver"
 
     # Phase 4A delivery (infra/terraform/main/mail.tf). Both default to `contact_email`
-    # because the brief has one reader who is also its sender — the SES identity stays in
-    # the sandbox for exactly that reason (ADR-0010).
+    # because the brief has one reader who is also its sender — which, since ADR-0013 moved
+    # the send onto Gmail's own submission service, is also what makes SPF and DKIM align.
     mail_from: str = ""
     mail_to: str = ""
+
+    # Gmail submission, not SES (ADR-0013). SES accepted all eight sends with zero bounces
+    # and Gmail quarantined every one, because a `From:` of `gmail.com` leaving via
+    # `amazonses.com` aligns for neither SPF nor DKIM. The SMTP username is `mail_from`; the
+    # app password is deliberately not a setting — only the name of the SSM parameter holding
+    # it, so the secret cannot arrive through the environment. See `brief/mailer.py`.
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_password_parameter: str = "/signal/gmail-app-password"
 
     @model_validator(mode="after")
     def _default_mail_addresses(self) -> Settings:

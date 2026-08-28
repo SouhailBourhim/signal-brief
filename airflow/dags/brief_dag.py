@@ -25,10 +25,17 @@ reader is demonstrably at the keyboard. The upstreams are deliberately left at 0
 than the 45 minutes it had behind `enrich`. The wider gap is the point, not a side effect.
 
 Two tasks rather than one, because they fail differently and only one of them is worth
-retrying: a build failure is a data or query problem, while a send failure is usually the
-SES identity not being verified (see `infra/terraform/main/mail.tf`). Splitting them also
-means the rendered file survives a send failure — `make brief-open` still works, and the
-morning is not lost.
+retrying: a build failure is a data or query problem, while a send failure is a credential or
+a connection (see `infra/terraform/main/mail.tf`). Splitting them also means the rendered file
+survives a send failure — `make brief-open` still works, and the morning is not lost.
+
+**What a green `mail` task does and does not prove (2026-08-28).** Until ADR-0013 it proved
+only that SES had accepted the message. It did that five times while every brief sat in the
+reader's Spam folder, because a `From:` of `gmail.com` sent via `amazonses.com` aligns for
+neither SPF nor DKIM, and Gmail quarantines such mail rather than bouncing it. The send now
+goes through Gmail's own submission service, where a `250` is the account handing a message
+to itself — so green here is worth more than it was, but the acceptance test is still a brief
+that was *read*, not a task that was green.
 """
 
 from __future__ import annotations
@@ -61,8 +68,10 @@ def brief_dag():
         Re-rendering here would let the emailed brief differ from the one on disk, and the
         acceptance test rests on the reader and the record being the same artifact.
 
-        Retried, unlike `build`: a send failure is usually transient or an unverified SES
-        identity, and both are worth a second attempt a few minutes later.
+        Retried, unlike `build`: a send failure is usually a transient SMTP connection or an
+        app password that has not been set yet (`mailer.py` names the parameter when it is
+        still the Terraform placeholder), and the first of those is worth a second attempt a
+        few minutes later.
         """
         from pathlib import Path
 

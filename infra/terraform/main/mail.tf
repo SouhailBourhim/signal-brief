@@ -1,80 +1,89 @@
-# Phase 4A: the 16:00 send. SPEC §12; ADR-0002, ADR-0010.
+# Phase 4A: the 16:00 send. SPEC §12; ADR-0002, ADR-0010, ADR-0013.
 #
 # The mailer runs **locally**, not in Lambda. ADR-0002 puts ingestion in AWS because it must
 # run whether or not the laptop is on, and everything interpretive locally; the renderer is
 # local and holds the finished HTML in memory, so a Lambda would exist only to re-read from
-# S3 what the process that called it just produced. What AWS provides here is the transport
-# and one IAM grant, nothing else.
-
-# The sending identity. Sender and recipient are the same address on purpose: this is a brief
-# with one reader.
+# S3 what the process that called it just produced. That decision stands.
 #
-# That is also why the account stays in the **SES sandbox**. Leaving it means asking AWS for
-# production access, which grants the ability to mail strangers — a capability this system
-# has no use for and should not hold. In the sandbox, both ends of every send must be
-# verified identities, which for a self-addressed daily brief is exactly one.
-resource "aws_ses_email_identity" "brief_sender" {
-  email = var.contact_email
-
-  # AWS emails a confirmation link and Terraform cannot click it. It also cannot tell a
-  # pending identity from a verified one — the same blind spot `monitoring.tf` documents for
-  # the SNS subscription, and the same consequence: applying this cleanly proves nothing.
-  #
-  # Verify by hand, once:
-  #
-  #   aws sesv2 get-email-identity --email-identity <address> \
-  #     --query 'VerifiedForSendingStatus'
-  #
-  # Until that returns `true`, `brief/mailer.py::send_brief` fails with SES's own message,
-  # which names the address and is clearer than anything the code could add.
-}
-
-# A dedicated least-privilege role, mirroring `signal-analyst` in query.tf.
+# What changed on 2026-08-28 is the transport, and this file is most of the evidence for why.
 #
-# Worth being explicit that this is not strictly necessary: the admin user (ADR-0005) already
-# holds AdministratorAccess and could send today with no Terraform at all. It exists for the
-# reason query.tf gives for the analyst role — "'I query with an admin key' undoes
-# least-privilege even when the identity behind it is trustworthy" — and the argument is
-# stronger here, because unlike a query, sending mail has an outward-facing side effect.
-resource "aws_iam_role" "mailer" {
-  name = "${var.name_prefix}-mailer"
+# ## What used to be here, and why it is gone
+#
+# This file declared an `aws_ses_email_identity` for the reader's Gmail address and a
+# least-privilege `signal-mailer` role holding `ses:SendEmail` scoped to it. Both applied
+# cleanly. The identity verified. The role worked. Five briefs went out and the reader saw
+# none of them:
+#
+#   aws ses get-send-statistics   -> 8 delivery attempts, 0 bounces, 0 rejects, 0 complaints
+#   aws sesv2 get-account         -> SendingEnabled true, HEALTHY, suppression list empty
+#   aws sesv2 get-email-identity  -> VerifiedForSendingStatus true
+#                                    DkimAttributes.SigningEnabled FALSE, Status NOT_STARTED
+#
+# Every brief was in Gmail's Spam folder. The `From:` header claimed `gmail.com` while the
+# envelope sender was `amazonses.com`, so SPF did not align, and with Easy DKIM never enabled
+# on an email-address identity nothing was signed for `gmail.com` either — so DMARC failed
+# both ways. `_dmarc.gmail.com` publishes `p=none; sp=quarantine`, which is exactly why it
+# never bounced: Gmail quarantines instead of rejecting, and returns a MessageId while doing
+# it.
+#
+# **No SES configuration fixes that for a `@gmail.com` sender.** Aligning SPF and DKIM for
+# `gmail.com` means sending through Google, and the sandbox additionally requires the `From:`
+# to be a verified identity — of which this account has exactly one, that same Gmail address.
+# The fix is a domain (then a domain identity, Easy DKIM, and a custom MAIL FROM) or Google's
+# own submission service. ADR-0013 takes the second, and `brief/mailer.py` is now SMTP.
+#
+# The SES identity and role are therefore deleted rather than left dormant: dead
+# infrastructure that once looked like it worked is worse than none, and re-verifying an
+# address is one click if a domain is ever bought.
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Action    = "sts:AssumeRole"
-      Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/${var.admin_iam_user_name}" }
-    }]
-  })
-}
+# The Gmail app password, in the shape `macro.tf` established for the first secret.
+#
+# This is what makes SMTP affordable. ADR-0010's objection to it was never the protocol but
+# the credential — "a long-lived credential living somewhere a daily job can read it", in a
+# project whose CI deliberately holds no static keys (ADR-0005). Parameter Store answers that
+# the same way it answered it for the FRED key: a `SecureString` under the AWS-managed
+# `alias/aws/ssm` key is encrypted at rest, IAM-gated, CloudTrail-audited, and carries no
+# monthly charge. The password never touches `.env`, the repo, or Terraform state, and it
+# reaches the mailer over the same `~/.aws` credentials `ops/athena.py` already uses — which
+# was the whole reason SES won the argument in the first place.
+#
+# Not Secrets Manager, for `macro.tf`'s reason: $0.40/secret/month buys rotation and
+# cross-account sharing, and a Gmail app password needs neither. SPEC §10 treats the free
+# tier as a design constraint.
+resource "aws_ssm_parameter" "gmail_app_password" {
+  name        = "/signal/gmail-app-password"
+  description = "Gmail app password for the 16:00 brief. Terraform owns this parameter's existence, never its value."
+  type        = "SecureString"
 
-data "aws_iam_policy_document" "mailer" {
-  statement {
-    sid = "SendTheDailyBrief"
+  # Terraform creates the parameter and never learns the secret. `brief/mailer.py::PLACEHOLDER`
+  # matches this string so the mailer can say "still holds the Terraform placeholder" rather
+  # than surfacing Gmail's bare 535.
+  value = "UNSET"
 
-    # `SendEmail` alone would do: the brief is one self-contained HTML document with inline
-    # CSS and no attachments, so `brief/mailer.py` never assembles MIME. `SendRawEmail` is
-    # granted for headroom — an attached PDF edition is the obvious next ask — and both are
-    # scoped to the one identity below, which is the constraint that actually matters.
-    actions = ["ses:SendEmail", "ses:SendRawEmail"]
-
-    resources = [aws_ses_email_identity.brief_sender.arn]
+  lifecycle {
+    # Without this, every `terraform apply` after the password is set would helpfully reset it
+    # to the placeholder and break the send until someone noticed — which, on the evidence of
+    # this file's history, could take five days.
+    ignore_changes = [value]
   }
 }
 
-resource "aws_iam_role_policy" "mailer" {
-  name   = "${var.name_prefix}-mailer"
-  role   = aws_iam_role.mailer.id
-  policy = data.aws_iam_policy_document.mailer.json
-}
+# Set the real value by hand, once — the same shape as the SES verification this replaces,
+# where Terraform provisions the thing and a human completes it. The app password requires
+# 2-Step Verification on the Google account; Google will not offer the option otherwise.
+#
+#   aws ssm put-parameter --name /signal/gmail-app-password --type SecureString \
+#     --value <16 chars from https://myaccount.google.com/apppasswords> --overwrite
+#
+# No IAM role accompanies this one, and the omission is deliberate rather than an oversight.
+# `macro.tf` needed a policy because the reader is a Lambda running as `signal-poller`. The
+# mailer runs locally as `Souhail_Signal_Admin`, which already holds `AdministratorAccess`
+# (ADR-0005) — so a role here would have to be assumed by hand before every send to grant
+# what the caller already has. `query.tf`'s argument for `signal-analyst` does not carry over
+# either: that role exists to keep an *interactive* human out of an admin key, and this is an
+# unattended daily job with one action.
 
-output "mailer_role_arn" {
-  description = "Assume this to send the brief; see brief/mailer.py."
-  value       = aws_iam_role.mailer.arn
-}
-
-output "ses_identity_verification_check" {
-  description = "Run this after apply — Terraform cannot confirm the identity itself."
-  value       = "aws sesv2 get-email-identity --email-identity ${var.contact_email} --query VerifiedForSendingStatus"
+output "gmail_app_password_check" {
+  description = "Confirm the password is set — a value of UNSET means the 16:00 send will fail with a clear message."
+  value       = "aws ssm get-parameter --name ${aws_ssm_parameter.gmail_app_password.name} --with-decryption --query 'Parameter.Value' --output text"
 }

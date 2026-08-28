@@ -444,6 +444,47 @@ query, sending mail has an outward-facing side effect.
 installed environment rather than assumed, since "it needs no new credential" was the whole
 argument for SES over Gmail SMTP.
 
+### The send worked for five days and the brief was never read *(2026-08-28)*
+
+Everything above is accurate about SES and none of it was enough. The identity **was**
+verified, the role **did** work, and `send_brief` never once failed. The reader's report was
+"the email is still not being sent even when my laptop is up," and the first half of that was
+wrong in a way worth recording: it was being sent, and quarantined.
+
+What the account said when asked:
+
+    aws ses get-send-statistics   -> 8 delivery attempts, 0 bounces, 0 rejects, 0 complaints
+    aws sesv2 get-account         -> SendingEnabled true, HEALTHY, suppression list empty
+    aws sesv2 get-email-identity  -> VerifiedForSendingStatus true
+                                     DkimAttributes.SigningEnabled FALSE, Status NOT_STARTED
+    dig TXT _dmarc.gmail.com      -> v=DMARC1; p=none; sp=quarantine
+
+Five briefs, all in Gmail's Spam folder. The `From:` claimed `gmail.com` while the envelope
+sender was `amazonses.com`, so SPF did not align; Easy DKIM was never enabled, so nothing was
+signed for `gmail.com` either. DMARC failed both ways, and because `gmail.com` publishes
+`p=none` Gmail quarantined rather than rejected — which is why there was never a bounce to
+notice, and why every `mail` task was green.
+
+Three things this cost, all of them the same mistake:
+
+- **The claim two paragraphs up — "a send failure is almost always the SES identity not being
+  verified" — is what made this hard to see.** It named the only failure mode anyone had
+  thought of, so a verified identity read as "the mailer is fine."
+- **The 07:00 → 16:00 move was a real fix for a different bug and it masked this one.** The
+  send was both late and undelivered; only the lateness got diagnosed, and moving the clock
+  made the symptom "no email in the morning" become "no email in the afternoon."
+- **`tests/test_mailer.py` passed the whole time,** correctly, because `moto` was mocking a
+  layer at which an undeliverable message and a delivered one are the same object.
+
+`ops/health.py` exists because a source can be stale-but-successful. The mailer had exactly
+that failure mode and no equivalent — `FetchOutcome`'s discipline never crossed into the brief
+package. ADR-0013 moves the send to Gmail's own submission service, where SPF and DKIM align
+because the account sends as itself.
+
+**The five-minute check that would have caught it, and now belongs in every send verification:**
+open the delivered mail in Gmail → **Show original** → confirm `SPF: PASS`, `DKIM: PASS`,
+`DMARC: PASS`. Nothing offline proves delivery; this does.
+
 ## 4A.E — The `project` cost tag, read back *(done 2026-08-22)*
 
 SPEC §12 carried this forward and the carried item was right, but **not for the reason it was
