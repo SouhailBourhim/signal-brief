@@ -9,9 +9,10 @@ enrichment built in.
 
 ![What Signal is, the problem it answers, and what a morning brief actually contains](docs/assets/project-story.jpeg)
 
-**Status: Phases 0-4A merged; Phase 4B built, both awaiting acceptance.** Eight pollers —
-Hacker News (items and top-story scores), SEC EDGAR + Form D, three RSS/Atom feeds, and daily
-market bars — run as scheduled Lambdas and land raw payloads in S3; local Spark jobs
+**Status (2026-08-28): Phases 0-4A merged; Phase 4B deployed and running, acceptance pending
+on evidence that takes calendar time.** Nine pollers — Hacker News (items and top-story
+scores), SEC EDGAR + Form D, three RSS/Atom feeds, daily market bars, and ALFRED macro
+vintages — run as scheduled Lambdas and land raw payloads in S3; local Spark jobs
 commit them to `bronze.raw_documents` on Iceberg, normalize that into
 `silver.articles` and `silver.hn_comments`, collapse it into story clusters, and resolve
 company mentions against a pinned SEC + Wikidata dictionary. **Both labeled eval sets
@@ -30,12 +31,18 @@ See [`docs/runbooks/phase-4a.md`](docs/runbooks/phase-4a.md).
 call per ranked cluster head, content-hash cached, Pydantic-validated, quarantined when it
 fails, scored per model digest and prompt version — and the ALFRED bitemporal macro store,
 which keeps every vintage so "what was knowable on 2026-03-14" is a query rather than an
-archaeology project. Both are **built and neither is running yet**: the enrichment stage
-refuses to start until ADR-0003's model digest is verified against a live Ollama rather than
-copied out of the ADR, the macro poller needs a FRED key in the SSM parameter Terraform
-creates, and its `terraform apply` has not been run. Its acceptance — a 30-day reproducibility
-backfill — cannot close before 2026-09-17, because ingestion started on 2026-08-18. See
-[`docs/runbooks/phase-4b.md`](docs/runbooks/phase-4b.md).
+archaeology project. **Both are deployed and have run against real data.** The macro poller
+was applied and verified on 2026-08-23 the way a deploy should be — the live Lambda's
+CodeSha256 matched the build, and an invocation returned 6 of 6 series — which is what took
+`macro` out of `NOT_YET_DEPLOYED` and made it source #9. The enrichment stage has run over
+real windows against a live Ollama with its ADR-0003 digest verified; the first clean batch
+was 40 heads in 80.2 s with zero schema failures, and the run before it enriched 2,979
+clusters by mistake, which is recorded in the runbook rather than tidied away.
+
+What is left is evidence, not construction: the enrichment eval has a harness and **no
+labeled examples yet**, so `evals/score.py` reports it unscored rather than guessing, and the
+30-day reproducibility backfill cannot close before **2026-09-17**, because ingestion started
+on 2026-08-18. See [`docs/runbooks/phase-4b.md`](docs/runbooks/phase-4b.md).
 
 **[ADR-0009](docs/decisions/ADR-0009-embeddings-for-same-story-and-entities.md) closed the
 phase with two verdicts, measured rather than argued.** Sentence embeddings beat the lexical
@@ -113,7 +120,8 @@ SPEC §15: never publish a metric the pipeline cannot recompute. Current numbers
 | Catch-up after the same outage | RSS lost 0.0 / 3.6 / 5.3 h of 24.2 h; HN lost nothing | `docs/runbooks/phase-1.md` 1.D, real AWS |
 | Embeddings vs. the lexical same-story rule | embedding **0.870 / 0.909** vs. lexical **1.000 / 0.500** held out; corpus false merges ~161/window vs. ~54 | `evals/experiments/embed_dedup.py`, ADR-0009 |
 | Embeddings vs. the lexical resolver | no gain at any threshold; ceiling **0.630** recall for any context-scoring rule over this dictionary | `evals/experiments/embed_entities.py`, ADR-0009 |
-| LLM eval accuracy, cache-hit rate | — | Phase 4B — the stage is built; the numbers need a local model running |
+| LLM stage, first clean batch | 40 heads in **80.2 s**, 0 schema failures; second run 100% cache, 0 model calls | `docs/runbooks/phase-4b.md`, live Ollama |
+| LLM eval accuracy | — | Phase 4B — the harness is built and the labeled set is empty, so `evals/score.py` reports it unscored |
 | Cost per day (full pipeline) | — | Phase 4A — pieces above are real, a full day's total isn't assembled yet |
 | Consecutive daily briefs read | 2 days, 4 reads | SPEC §12's brief ladder; the count started 2026-08-20 |
 
