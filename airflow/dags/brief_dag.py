@@ -11,9 +11,9 @@ So the assets are declared as inlets for graph visibility, exactly as `cluster_d
 `resolve_dag` already do with `SILVER_COMMITTED`, and the schedule is a cron in the reader's
 timezone.
 
-**16:00 rather than the original 07:00, and the reason is the host, not the pipeline.**
+**16:00 rather than the former early-morning schedule, and the reason is the host, not the pipeline.**
 ADR-0002 puts everything interpretive on a laptop, and a laptop sleeps. On 2026-08-24 the
-07:00 slot passed with the machine suspended: the scheduler logged nothing between 21:00
+scheduled slot passed with the machine suspended: the scheduler logged nothing between 21:00
 and 12:58 UTC, then resumed mid-stride and fired the whole chain at once, so the brief
 landed at 13:59 — the second day running. A `restart:` policy does not help, because the
 containers never died; they were frozen with the host, which reports them as `Up` the

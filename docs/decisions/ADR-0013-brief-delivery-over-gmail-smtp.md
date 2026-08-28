@@ -44,8 +44,8 @@ days:
 - **Nothing bounced, and that was not a good sign.** `gmail.com` publishes `p=none`, so Gmail
   is not asked to reject on DMARC failure. It quarantines instead. A quarantined message is
   accepted at SMTP time, counts as a delivery attempt, and returns a MessageId.
-- **The 07:00 → 16:00 move (ADR-0010's 2026-08-24 amendment) was a real fix for a different
-  bug.** The host slept through 07:00 and the scheduler was frozen. Fixing that made the send
+- **The move to 16:00 (ADR-0010's 2026-08-24 amendment) was a real fix for a different
+  bug.** The host slept through the former early-morning schedule and the scheduler was frozen. Fixing that made the send
   happen on time and changed nothing about where it landed, which is why "my laptop is up
   now" did not help.
 

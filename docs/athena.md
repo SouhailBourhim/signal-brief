@@ -44,7 +44,7 @@ Run 2026-08-19, against the deployed lake (account 481879233905). Every number b
 what `signal athena-query` actually printed — nothing here is typed in by hand.
 
 **"How healthy is ingestion — what's the split between successful, empty, and errored
-polls per source?"** (the pollers run continuously, so this grows every 15 minutes; the
+polls per source?"** (the pollers run continuously, so this grows as each source's schedule fires; the
 numbers below are a snapshot, not a fixed fact)
 
 ```sql

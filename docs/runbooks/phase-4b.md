@@ -1,8 +1,7 @@
 # Phase 4B runbook — enrich + macro
 
-> **Amended 2026-08-24 — the brief now sends at 16:00, not 07:00.** The times recorded
-> below are what the schedule was at the time and are left as written. The send moved
-> because the host sleeps through the small hours: on 2026-08-24 the scheduler logged
+> **Amended 2026-08-24 — the brief sends at 16:00.** This runbook uses the current schedule.
+> The send moved because the host sleeps through the small hours: on 2026-08-24 the scheduler logged
 > nothing between 21:00 and 12:58 UTC, then resumed mid-stride and fired the whole chain
 > at once, so the brief landed at 13:59. The containers never died — they were frozen
 > with the host, which still reported them `Up`. See `airflow/dags/brief_dag.py`.
@@ -269,7 +268,7 @@ survive.
 **The first version of that guard was wrong in the same way, within the hour.** It protected
 `.cache` and nothing else — but `docker-compose.yml` also mounts `./data` and `./out`, and
 running `make clean` to test the guard promptly broke both. `/opt/signal/out` went to link
-count 0, which is where the 07:00 brief writes its HTML: the send would have failed on the
+count 0, which is where the 16:00 brief writes its HTML: the send would have failed on the
 first morning of 4A's acceptance, from a fix intended to prevent exactly that.
 
 Caught by checking the container's view rather than trusting the guard, and it is why
@@ -315,7 +314,7 @@ otherwise, and this stack does not set it. So **4A's local half was built, merge
 never executed.** The AWS half — nine Lambdas on EventBridge — has been running the whole time,
 which is exactly why nothing looked wrong: bronze kept filling, the brief kept being
 buildable by hand, and the one thing SPEC §12's 4A acceptance actually turns on (a mail at
-07:00) had never happened once.
+16:00) had never happened once.
 
 **This is why the acceptance is a behavioural test rather than a green build.** Every unit test
 passes, `make skeleton` passes, the Terraform applied cleanly, and the phase was still not

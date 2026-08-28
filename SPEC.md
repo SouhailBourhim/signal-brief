@@ -27,10 +27,10 @@ and `docs/archive/PROJECT_START.md` (the narrowed execution plan). Those two dis
 
 ## 1. What it is
 
-Every 15 minutes, ingest free news, filing, and macro feeds. Collapse thousands of articles into a
-few dozen **story clusters**. Resolve the companies mentioned to real tickers. Rank clusters by
-novelty, breadth, velocity, and whether the market actually reacted. Publish a brief at **16:00
-Africa/Casablanca** that you read every morning and mark up.
+Ingest free news, filing, market, and macro feeds on source-specific schedules. Collapse thousands
+of articles into a few dozen **story clusters**. Resolve the companies mentioned to real tickers.
+Rank clusters by novelty, breadth, velocity, and whether the market actually reacted. Publish a
+brief at **16:00 Africa/Casablanca** that you read every morning and mark up.
 
 **Success is behavioural, not technical:** the project works when you read it daily for a month
 without maintaining it. Everything below exists to make that true.
@@ -84,6 +84,19 @@ Adding source #6 must be a 30-minute job — that constraint drives §6.
 apply and live verification against the real endpoints. `docs/runbooks/phase-2.md` records it.
 `tests/test_source_registry.py` is what keeps it true, by failing the build when a source is
 declared in some but not all of `SOURCES`, `sources.REGISTRY`, and Terraform's `var.sources`.
+
+### Configured poll schedules
+
+The cadence column above describes source availability. The deployed EventBridge schedules in
+`infra/terraform/main/main.tf` define the actual polling cadence for the nine current sources:
+
+| Poller(s) | Configured schedule |
+|---|---|
+| `hackernews` | every 5 minutes |
+| `edgar`, `rss_tech`, `edgar_formd`, `rss_verge`, `rss_ars` | every 15 minutes |
+| `hn_scores` | every 15 minutes at `:07`, `:22`, `:37`, and `:52` UTC |
+| `market` | daily at 02:11 UTC |
+| `macro` | daily at 02:26 UTC |
 
 ---
 
@@ -344,7 +357,7 @@ crowded out by anything else.
 - `raw_documents` — `ingest_id, source_id, fetched_at, source_url, http_status, etag, content_hash, payload, payload_format`
 
 **Silver**
-- `articles` — `article_id, source_id, url_canonical, title, body_text, published_at, fetched_at, event_date, lang, publisher_domain, authority_score, simhash, content_hash`
+- `articles` — `article_id, source_id, url_canonical, title, body_text, published_at, fetched_at, event_date, lang, publisher_domain, authority_score, simhash, content_hash, external_id`
   (plus `timestamp_flagged`, `story_key`, `parse_error` — operational columns predating this
   section, carried here for completeness rather than re-litigated)
 - `hn_comments` — `item_id, parent_id, story_id, by, text, created_at, fetched_at, ingest_id,
@@ -353,20 +366,25 @@ crowded out by anything else.
 - `parse_rejects` — `ingest_id, source_id, parse_error, fetched_at, rejected_at`. A bronze row
   that failed to parse at all (SPEC §6.2 quarantine, at the row granularity — a single bad
   entry inside an otherwise good feed stays in `articles` with its own `parse_error` instead)
-- `story_clusters` — `cluster_id, first_seen_at, last_updated_at, canonical_article_id, article_count, distinct_publisher_count`
-- `article_cluster_map` — `article_id, cluster_id, similarity, assigned_at, assignment_order_key`
-- `entity_mentions` — `mention_id, article_id, surface_form, char_span, entity_id, confidence, resolution_method`
-- `dim_entities` (SCD2) — `entity_id, canonical_name, ticker, cik, entity_type, valid_from, valid_to, is_current`
+- `hn_score_snapshots` — `item_id, score, descendants, title, observed_at, ingest_id`. The
+  time-series counterpart to Hacker News items, used for score velocity.
+- `market_observations` — `ticker, trade_date, open, high, low, close, volume, observed_at,
+  ingest_id`. Daily OHLCV bars, MERGEd by `(ticker, trade_date)`.
+- `story_clusters` — `cluster_id, window_start, window_end, canonical_article_id, title, url_canonical, publisher_domain, published_at, fetched_at, first_seen, last_seen, event_date, article_count, distinct_publisher_count, publishers, timestamp_flagged, ordering_key, algo_version, clustered_at`
+- `article_clusters` — `article_id, cluster_id, window_start, is_canonical, algo_version`
+- `entity_mentions` — `mention_id, article_id, surface_form, char_start, char_end, entity_id, confidence, resolution_method, event_date, dictionary_built_at, algo_version, resolved_at`
+- `dim_entities` (SCD2) — `entity_id, canonical_name, ticker, cik, entity_type, source, parent_entity_id, valid_from, valid_to, is_current`
 
 **Gold**
 - `cluster_enrichment` — `cluster_id, model_name, model_digest, prompt_version, summary, topic, extracted_json, generated_at, input_hash, cache_hit`
 - `enrichment_rejects` — `cluster_id, input_hash, raw_output, validation_error, model_digest, prompt_version, rejected_at`
-- `macro_observations` (bitemporal) — `series_id, period, value, vintage_date, is_latest, revision_delta`
+- `macro_observations` (bitemporal) — `series_id, period, value, vintage_date, superseded_at, is_latest, revision_delta, observed_at, ingest_id`
 - `brief_items` — `brief_date, rank, cluster_id, score, score_components, included, user_feedback`
 
 **Ops**
-- `source_health` — `source_id, window_start, docs_ingested, expected_min, last_success_at, staleness_seconds, gap_reason, status`
+- `source_health` — `source_id, window_start, docs_ingested, expected_min, last_success_at, staleness_seconds, gap_reason, status, content_staleness_seconds, baseline_docs`
 - `pipeline_costs` — `run_id, dag_id, task_id, bytes_scanned, athena_cost_usd, lambda_ms, s3_requests, s3_egress_bytes, run_date`
+- `maintenance_runs` — `run_id, table_name, run_date, files_before, files_after, rewritten_files, added_files, rewritten_bytes, deleted_manifests, orphans_removed, error, skipped`
 
 Iceberg partitioning: bronze by `(source_id, ingest_date)`; `articles` by `days(event_date)`,
 where `event_date = coalesce(published_at, fetched_at)` — a deviation from partitioning on

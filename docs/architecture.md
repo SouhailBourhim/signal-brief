@@ -10,10 +10,9 @@ records that decision and what would reverse it.
 
 ![AWS and local deployment topology: the always-on AWS ingestion box next to the local analysis, enrichment and publishing box, the numbered pipeline stages, and the replay/catch-up loop between them](assets/deployment-topology.jpeg)
 
-The diagrams below draw the same split at finer grain — table lineage, the daily sequence —
-and predate 4A/4B, so their box counts (six sources, no `gold.*` tables) are behind the
-picture above; see [`docs/operations.md`](operations.md) for the schedules and failure
-semantics that picture doesn't show.
+The raster diagrams in `docs/assets/` predate the current brief schedule and need regeneration.
+The editable diagrams below show the current table lineage and daily sequence; see
+[`docs/operations.md`](operations.md) for the schedules and failure semantics they do not show.
 
 ## The system
 
@@ -23,13 +22,15 @@ flowchart TB
         direction LR
         F1["Hacker News"]
         F2["SEC EDGAR<br/>+ Form D"]
-        F3["RSS · Ars,<br/>Verge, tech"]
+        F3["RSS · Ars,<br/>Verge, TechCrunch"]
+        F4["Yahoo Finance"]
+        F5["ALFRED"]
     end
 
     subgraph aws ["AWS — always-free tier"]
         direction TB
         SCHED["EventBridge Scheduler<br/><i>one schedule per source</i>"]
-        LAMBDA["Lambda poller ×6<br/><i>handlers/poll_source.py</i><br/>fetch bytes, report outcome"]
+        LAMBDA["Lambda poller ×9<br/><i>handlers/poll_source.py</i><br/>fetch bytes, report outcome"]
         DDB[("DynamoDB<br/>etags · watermarks")]
         STAGING[("S3 staging/<br/>gzipped JSONL")]
         BRONZE[("S3 bronze/<br/>Iceberg")]
@@ -45,35 +46,37 @@ flowchart TB
 
     subgraph local ["local — Docker Compose + host"]
         direction TB
-        AIRFLOW["Airflow<br/><i>ingest_monitor · process<br/>cluster · resolve</i>"]
+        AIRFLOW["Airflow<br/><i>ingest_monitor · process · market · macro<br/>cluster · resolve · enrich · brief · maintenance</i>"]
         COMMIT["Spark: commit_bronze<br/><i>MERGE on ingest_id</i>"]
         NORM["Spark: normalize<br/><i>parse, hash, simhash</i>"]
         CLUSTER["Spark: cluster<br/><i>blocking → decide → components</i>"]
         RESOLVE["Spark: resolve<br/><i>detect → resolve → SCD2</i>"]
-        BRIEF["ranker + renderer<br/><i>reads over Athena</i>"]
+        ENRICH["Ollama enrichment<br/><i>cached · validated</i>"]
+        BRIEF["ranker + renderer + Gmail SMTP<br/><i>reads over Athena</i>"]
         DICT[["warehouse/entities/<br/>dictionary.json.gz<br/><i>SEC + Wikidata, pinned</i>"]]
     end
 
     OUT["out/brief-DATE.html"]
 
-    F1 & F2 & F3 -->|HTTP, conditional GET| LAMBDA
+    F1 & F2 & F3 & F4 & F5 -->|HTTP, conditional GET| LAMBDA
     STAGING -->|read-once cache| COMMIT
     COMMIT --> BRONZE
     BRONZE --> NORM
     NORM --> CLUSTER
     NORM --> RESOLVE
+    CLUSTER --> ENRICH
     DICT --> RESOLVE
     BRONZE -.->|metadata| GLUE
     GLUE --- ATHENA
     ATHENA -->|result rows only| BRIEF
     BRIEF --> OUT
-    AIRFLOW -.->|orchestrates| COMMIT & NORM & CLUSTER & RESOLVE
+    AIRFLOW -.->|orchestrates| COMMIT & NORM & CLUSTER & RESOLVE & ENRICH & BRIEF
 
     classDef store fill:#eef4ff,stroke:#5b7fb5,color:#123
     classDef job fill:#fff6e8,stroke:#b5885b,color:#123
     classDef out fill:#eefbf0,stroke:#5bb56f,color:#123
     class DDB,STAGING,BRONZE,DICT store
-    class COMMIT,NORM,CLUSTER,RESOLVE,LAMBDA job
+    class COMMIT,NORM,CLUSTER,RESOLVE,ENRICH,LAMBDA job
     class OUT out
 ```
 
@@ -107,6 +110,8 @@ flowchart LR
     ART[("silver.articles")]
     HN[("silver.hn_comments")]
     REJ[("silver.parse_rejects")]
+    HNS[("silver.hn_score_snapshots")]
+    MKT[("silver.market_observations")]
 
     SC[("silver.story_clusters")]
     AC[("silver.article_clusters")]
@@ -115,18 +120,26 @@ flowchart LR
 
     SH[("ops.source_health")]
     PC[("ops.pipeline_costs")]
+    MR[("ops.maintenance_runs")]
 
-    RAW --> ART & HN & REJ
+    CE[("gold.cluster_enrichment")]
+    ER[("gold.enrichment_rejects")]
+    MO[("gold.macro_observations")]
+    BI[("gold.brief_items")]
+
+    RAW --> ART & HN & REJ & HNS & MKT & MO
     ART --> SC & AC
     ART --> EM
     DE -.->|as-of join| EM
+    SC --> CE & ER & BI
 
     classDef immutable fill:#eef4ff,stroke:#5b7fb5,color:#123
     classDef derived fill:#fff6e8,stroke:#b5885b,color:#123
     classDef ops fill:#f4eeff,stroke:#7f5bb5,color:#123
     class RAW immutable
-    class ART,HN,REJ,SC,AC,EM,DE derived
-    class SH,PC ops
+    class ART,HN,REJ,HNS,MKT,SC,AC,EM,DE derived
+    class SH,PC,MR ops
+    class CE,ER,MO,BI derived
 ```
 
 **Three different relationships with time, and mixing them up is how a lake rots:**
@@ -134,9 +147,11 @@ flowchart LR
 | | write mode | why |
 |---|---|---|
 | `bronze.raw_documents` | MERGE on `ingest_id`, insert-only | An immutable record of what a source served. Re-running an interval inserts nothing, which is what makes replay safe. |
-| `silver.articles`, `hn_comments` | MERGE on the natural key | Facts about documents. One row per article, ever. |
+| `silver.articles`, `hn_comments`, `hn_score_snapshots`, `market_observations`, `parse_rejects` | MERGE on the natural key | Facts about documents, score observations, market bars, and parse failures. |
 | `story_clusters`, `article_clusters`, `entity_mentions` | **replace the partition** | Not facts — outputs of a function of (window, dictionary, algorithm). Re-running after a threshold change must *replace*, or the table accumulates contradictory answers and every count over it stops meaning anything. |
 | `dim_entities` | **SCD2 — supersede, never overwrite** | An article published the day before Facebook became Meta did not retroactively become an article about Meta. `valid_from` / `valid_to` / `is_current`. |
+| `gold.cluster_enrichment`, `gold.enrichment_rejects`, `gold.macro_observations`, `gold.brief_items` | cache/append, MERGE, or date-scoped replacement as appropriate | Governed enrichment, bitemporal macro observations, and the decisions shown to the reader. |
+| `ops.source_health`, `ops.pipeline_costs`, `ops.maintenance_runs` | keyed monitoring records | The queryable operational history used by the footer, alerts, and cost reporting. |
 
 Partitioning: bronze by `(source_id, ingest_date)`; `articles` by `days(event_date)` where
 `event_date = coalesce(published_at, fetched_at)` — a deliberate deviation recorded in
@@ -149,12 +164,12 @@ by design and a null partition key cannot be pruned.
 sequenceDiagram
     autonumber
     participant S as EventBridge
-    participant L as Lambda ×6
+    participant L as Lambda ×9
     participant A as Airflow
     participant K as Spark
     participant R as Reader
 
-    loop every 15 min
+    loop source-specific schedules
         S->>L: invoke
         L->>L: conditional GET · 304, empty and error<br/>are three different outcomes
         L-->>A: staged objects
@@ -175,15 +190,13 @@ a cron expression.
 
 ## What is not built yet
 
-The two mermaid diagrams above are narrower than the deployment picture — they still show
-the original six sources and no `gold.*` tables — but the table below is kept current: it is
-the actual outstanding-work list, not a diagram caption.
+The table below is the actual outstanding-work list, not a diagram caption.
 
 | | phase | status |
 |---|---|---|
 | Ollama enrichment — summary, topic, extraction, cached and validated | 4B | done — `enrich/`, `gold.cluster_enrichment` |
 | ALFRED bitemporal macro store | 4B | done — `spark/jobs/macro.py`, `gold.macro_observations` |
-| Email delivery at 16:00 | 4A | done — SES via boto3, `brief_dag` |
+| Email delivery at 16:00 | 4A | done — Gmail SMTP, `brief_dag` |
 | Maintenance DAG — compaction, snapshot expiry, orphan cleanup | 4A | done — `maintenance_dag.py`, 02:00 daily |
 | dbt migration of silver→gold; Kafka + Structured Streaming | 5 | gated on [ADR-0001](decisions/ADR-0001-no-kafka.md)'s re-entry criteria — not yet met |
 

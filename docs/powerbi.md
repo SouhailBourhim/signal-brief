@@ -224,8 +224,8 @@ dollars:
   Import mode a query that trips it fails once, at refresh, where you see it. In
   DirectQuery it fails as a visual that renders an error to whoever is looking at the
   report.
-- **The data doesn't move that fast.** The pollers run every 15 minutes and the brief is
-  built once a day. Re-querying on every mouse interaction re-reads rows that changed
+- **The data doesn't move that fast.** Pollers run on source-specific schedules and the brief
+  is built once a day. Re-querying on every mouse interaction re-reads rows that changed
   hours ago.
 
 Cost does start to matter if DirectQuery is left on a report someone actually uses: 6

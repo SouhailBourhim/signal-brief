@@ -2,7 +2,7 @@
 
 **Status:** Accepted · **Date:** 2026-08-20
 
-**Amended 2026-08-24:** the 07:00 send this record refers to now runs at **16:00**. Only the clock time changed — the reasoning below stands as written. The host sleeps through the small hours, so the scheduler was frozen (not stopped) at 07:00 and the brief arrived mid-afternoon anyway; `airflow/dags/brief_dag.py` carries the incident.
+**Amended 2026-08-24:** the send this record refers to now runs at **16:00**. Only the clock time changed — the reasoning below stands as written. The host slept through the former early-morning schedule, so the scheduler was frozen (not stopped) and the brief arrived mid-afternoon anyway; `airflow/dags/brief_dag.py` carries the incident.
 
 ## Context
 
@@ -11,7 +11,7 @@ drifted from what is actually true, and its Phase 4 row has accumulated more tha
 carry.
 
 **Phase 4 held ten deliverables** — Ollama enrichment, its cache, its eval set, the ranker,
-the HTML brief, email delivery, the 07:00 schedule, the ALFRED bitemporal store, the
+the HTML brief, scheduled email delivery, the ALFRED bitemporal store, the
 maintenance DAG, CI, and cost/egress tracking — against roughly four in each of Phases 1,
 2, and 3. Two of the ten are **differentiators #3 and #4 from §2**, the ones the README is
 supposed to lead with. They were sharing a row with routine plumbing.
@@ -49,7 +49,7 @@ cluster → enrich/publish) is unchanged and is not in question.
 
 ### 1. Phase 4 splits into 4A and 4B
 
-- **4A — Publish.** Ranker, brief from real clusters, email at 07:00, maintenance DAG, and
+- **4A — Publish.** Ranker, brief from real clusters, scheduled email delivery, maintenance DAG, and
   the four carried-forward items above. Gate: three mornings read with feedback recorded,
   1.D proven against the deployed pipeline, compaction delta measured.
 - **4B — Enrich + macro.** The Ollama stage with cache, schema validation and evals; the
