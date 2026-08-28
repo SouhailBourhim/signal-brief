@@ -156,7 +156,16 @@ services:
   airflow-apiserver:
     <<: *airflow-common
     command: api-server
-    ports: ["8080:8080"]
+    # Loopback, not all interfaces. `8080:8080` publishes to 0.0.0.0, and this container
+    # mounts `~/.aws` read-only (see the volumes block) while its JWT secret defaults to the
+    # literal `signal-local-dev` — so on any shared or café network, a bare `8080:8080` is a
+    # path from a stranger's browser to real AWS credentials. This is a local development
+    # stack and nothing off-host is meant to reach it.
+    #
+    # Overridable for the case that does need it — a VM, a remote Docker host, WSL2 reached
+    # from Windows — by setting AIRFLOW_BIND to 0.0.0.0, which makes exposure a deliberate
+    # act rather than the default.
+    ports: ["${AIRFLOW_BIND:-127.0.0.1}:8080:8080"]
     depends_on:
       airflow-init:
         condition: service_completed_successfully
