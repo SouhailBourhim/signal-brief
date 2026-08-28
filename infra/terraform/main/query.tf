@@ -18,6 +18,17 @@ resource "aws_glue_catalog_database" "ops" {
   description = "Pipeline health and cost, as data rather than a dashboard. SPEC §9, §11."
 }
 
+# Created until now by `ops/athena.py::create_iceberg_table`'s `CREATE SCHEMA IF NOT
+# EXISTS`, running as the admin identity every Athena write connects with — the exact
+# situation the comment above describes for silver and ops, one namespace later. It also
+# had a second consequence the others didn't: the analyst policy below enumerates the
+# databases it grants, so a namespace Terraform didn't know about was one `signal-analyst`
+# could not read. The gold marts are the tables an outside reader most wants.
+resource "aws_glue_catalog_database" "gold" {
+  name        = "gold"
+  description = "Serving marts: brief items, cluster enrichment, macro observations. SPEC §9."
+}
+
 # Query scratch, not the record: no prevent_destroy, unlike bronze.
 resource "aws_s3_bucket" "athena_results" {
   bucket = var.athena_results_bucket
@@ -127,10 +138,41 @@ data "aws_iam_policy_document" "analyst" {
       "arn:aws:glue:${var.region}:${data.aws_caller_identity.current.account_id}:database/bronze",
       "arn:aws:glue:${var.region}:${data.aws_caller_identity.current.account_id}:database/${aws_glue_catalog_database.silver.name}",
       "arn:aws:glue:${var.region}:${data.aws_caller_identity.current.account_id}:database/${aws_glue_catalog_database.ops.name}",
+      "arn:aws:glue:${var.region}:${data.aws_caller_identity.current.account_id}:database/${aws_glue_catalog_database.gold.name}",
       "arn:aws:glue:${var.region}:${data.aws_caller_identity.current.account_id}:table/bronze/*",
       "arn:aws:glue:${var.region}:${data.aws_caller_identity.current.account_id}:table/${aws_glue_catalog_database.silver.name}/*",
       "arn:aws:glue:${var.region}:${data.aws_caller_identity.current.account_id}:table/${aws_glue_catalog_database.ops.name}/*",
+      "arn:aws:glue:${var.region}:${data.aws_caller_identity.current.account_id}:table/${aws_glue_catalog_database.gold.name}/*",
     ]
+  }
+
+  # A BI client browses before it queries: Power BI's navigator lists catalogs, then
+  # databases, then tables, through Athena's metadata API rather than Glue's (docs/
+  # powerbi.md). `signal athena-query` never calls these because it is handed the database
+  # name, which is why the gap only appears the first time something connects with a driver.
+  statement {
+    sid = "BrowseTheCatalogFromABIClient"
+    actions = [
+      "athena:GetDataCatalog",
+      "athena:ListDatabases",
+      "athena:GetDatabase",
+      "athena:ListTableMetadata",
+      "athena:GetTableMetadata",
+    ]
+    resources = [
+      "arn:aws:athena:${var.region}:${data.aws_caller_identity.current.account_id}:datacatalog/AwsDataCatalog",
+    ]
+  }
+
+  # `athena:ListDataCatalogs` has no resource type — it is the call that discovers which
+  # catalog ARNs exist, so it cannot be scoped to one. Written as `*` deliberately rather
+  # than by omission: a datacatalog ARN here would match nothing and fail at connect time
+  # with an AccessDenied naming no resource, which is ADR-0005's failure mode again. It
+  # returns catalog names and nothing else; the statement above is what gates reading them.
+  statement {
+    sid       = "DiscoverWhichCatalogsExist"
+    actions   = ["athena:ListDataCatalogs"]
+    resources = ["*"]
   }
 
   # Athena executes as the calling principal, not a service role — reading the actual
