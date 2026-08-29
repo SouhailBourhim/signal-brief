@@ -486,7 +486,28 @@ whole point, and it is why this section closes on the AWS side being correct rat
 
 ## 5.E — The README closes its own gaps
 
-*(pending)*
+**Done 2026-08-29.** Three rows in "Measured, not claimed" had been carrying an em-dash or a
+stale figure, and SPEC §15's rule is that a number is published only once the pipeline can
+recompute it — which means the converse too: once it can, it should be.
+
+| Row | Was | Now |
+|---|---|---|
+| LLM eval accuracy | `—` "the labeled set is empty" | **0.747 / 0.782** (n=95), with the unreviewed-labeler caveat |
+| Consecutive daily briefs read | "2 days, 4 reads", counted by hand from 2026-08-20 | **day 3**, computed by `signal streak`, and it names the missed day |
+| Cost of one brief | 3 queries, 1.7 MB, $0.00014 | **10 queries, 1.93 MB, $0.0005** |
+| Embeddings vs. the lexical same-story rule | a `sentence-transformers` measurement | **the refusal**, with ADR-0017's 4,841 false edges |
+
+Three rows added: novelty's 37.3% recycled share, the 99.64% single-publisher finding, and the
+ranker's diagnosis written out as prose rather than left in a runbook nobody clones.
+
+**The old "consecutive briefs read" row is the one worth noting.** It said 2 days from
+2026-08-20 while the runbook said 3 from 08-23 and the table itself was empty — three numbers,
+three places, none computed. That is what 5.A replaced, and closing this row is the point of
+having done it.
+
+SPEC §16 item 8 asks the README for "a decision you reversed and why". It had ADR-0001's Kafka
+cut; it now also has ADR-0017, which is a sharper example because the reversal is of a decision
+*this project made and measured* rather than one it declined to make.
 
 ## The daily read
 
@@ -495,6 +516,26 @@ SPEC §12's acceptance. Continues 4A's table; the count starts 2026-08-23.
 | Date | Read | What it showed |
 |---|---|---|
 | *(pending)* | | |
+
+## Where this phase stands
+
+| | |
+|---|---|
+| **5.0** | Done — 4B.G's gate closed and passing. 4A's three mornings remain, and are calendar |
+| **5.A** | Done — streak computed, both alarms live and verified end to end |
+| **5.B** | Done — ADR-0015, all five §14 deferrals refused with numbers |
+| **5.C** | Novelty shipped, weights rebalanced, feedback made markable, the dedup branch **measured and refused** (ADR-0017). The resolver's `?itemDescription` is carried |
+| **5.D** | Done — the import was already applied; the analyst's `gold` access verified by assuming the role |
+| **5.E** | Done |
+
+**Carried out of Phase 5:**
+
+| Item | Why it is still open |
+|---|---|
+| **The resolver's `?itemDescription` and wider candidate set** (ADR-0009 §2) | Needs a WDQS dictionary rebuild and a re-score against the 300 labeled mentions. Not blocked, not done |
+| **A human review pass over the 100 enrichment labels** | They are stamped `unreviewed`; the dedup and entity sets were reviewed and three were overridden |
+| **4A's three mornings read, with a mark** | Calendar and a reader |
+| **The 30-day reproducibility backfill** | Bronze starts 2026-08-18, so `signal reproduce --days 30` opens **2026-09-17** |
 
 ## Then
 
