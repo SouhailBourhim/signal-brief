@@ -30,6 +30,36 @@ settings = Settings()
 
 MARKS = ("up", "down", "clear")
 
+# How much of a cluster id the brief prints and this command will accept. Cluster ids are
+# 64-character content hashes; `run_list`'s docstring already conceded that "nobody is going
+# to read one off the page", and the consequence showed up as a measurement in ADR-0015:
+# `gold.brief_items` held **one** mark across 60 items, which is what refuses §14's
+# weight-fitting re-entry. The gate was not waiting on the reader's diligence, it was waiting
+# on a 64-character copy. Eight hex characters is 4 billion values against a ten-row brief.
+SHORT_ID_CHARS = 8
+
+
+def _resolve(
+    prefix: str, day: str, table: str, database: str, workgroup: str, client: Any | None
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """A full cluster id from what the reader typed, or None with the rows to show them.
+
+    Refuses an ambiguous prefix rather than picking one. A wrong mark is worse than a retry:
+    it feeds `ranker`'s feedback component, which is the one term that can subtract.
+    """
+    escaped = prefix.lower().replace("'", "''")
+    matches = run_query(
+        f"SELECT cluster_id, rank, title FROM {table} "
+        f"WHERE brief_date = date '{day}' AND cluster_id LIKE '{escaped}%' "
+        f"ORDER BY rank",
+        database=database,
+        workgroup=workgroup,
+        client=client,
+    )
+    if len(matches.rows) == 1:
+        return matches.rows[0]["cluster_id"], matches.rows
+    return None, matches.rows
+
 
 def run_feedback(
     date: str | None,
@@ -50,9 +80,28 @@ def run_feedback(
 
     database = database or settings.athena_database
     workgroup = workgroup or settings.athena_workgroup
-    escaped = cluster_id.replace("'", "''")
 
     try:
+        # A prefix is resolved to a full id first, so everything below still works on an
+        # exact match and the ambiguous case is refused in one place.
+        # `isalnum` is the test for "this looks like a truncated hash", not a safety check —
+        # the query below escapes regardless. An id that fails it falls through to the exact
+        # match, so a pathological cluster id still behaves exactly as it did before.
+        if len(cluster_id) < 64 and cluster_id.isalnum():
+            resolved, candidates = _resolve(cluster_id, day, table, database, workgroup, client)
+            if resolved is None:
+                if not candidates:
+                    print(f"no item starting with {cluster_id!r} in the {day} brief.")
+                else:
+                    print(f"{cluster_id!r} is ambiguous — {len(candidates)} items match:")
+                    for row in candidates:
+                        short = (row.get("cluster_id") or "")[:SHORT_ID_CHARS]
+                        print(f"  {short}  #{row.get('rank') or '?'}  {row.get('title') or ''}")
+                print(f"`signal feedback --date {day} --list` shows what that brief contained.")
+                return 1
+            cluster_id = resolved
+        escaped = cluster_id.replace("'", "''")
+
         existing = run_query(
             f"SELECT rank, title, user_feedback FROM {table} "
             f"WHERE brief_date = date '{day}' AND cluster_id = '{escaped}'",
@@ -93,7 +142,7 @@ def run_feedback(
     stored = (confirmed.rows[0].get("user_feedback") if confirmed.rows else None) or "—"
     title = row.get("title") or cluster_id
     print(f"#{row.get('rank') or '?'} {title}")
-    print(f"  {day}  {cluster_id}  ->  {stored}")
+    print(f"  {day}  {cluster_id[:SHORT_ID_CHARS]}  ->  {stored}")
     return 0
 
 

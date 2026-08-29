@@ -133,3 +133,63 @@ output "poller_function_names" {
 output "alerts_topic_arn" {
   value = aws_sns_topic.alerts.arn
 }
+
+# ── The local half ────────────────────────────────────────────────────────────────────
+#
+# SPEC §11's monitoring covers the AWS side. `docs/runbooks/phase-4b.md` records the gap that
+# leaves: ten hours of dead ingestion produced no signal behind a green console, because every
+# alarm above watches a Lambda and the Lambdas were fine — it was the laptop that had stopped.
+#
+# The two alarms below watch the two ways the local half fails, and they are not
+# interchangeable. A task failing with the scheduler alive is reported by an Airflow callback
+# (`airflow/dags/alerting.py`). A scheduler frozen with a suspended host cannot report anything
+# at all — on 2026-08-24 the containers read `Up` throughout — so that case needs something
+# outside the laptop watching for silence. Metrics come from `signal_core/ops/heartbeat.py`.
+
+resource "aws_cloudwatch_metric_alarm" "local_silent" {
+  alarm_name        = "${var.name_prefix}-local-not-running"
+  alarm_description = <<-EOT
+    No Airflow DAG has completed on the local host for three hours. ingest_monitor runs
+    hourly, so three missed beats means the scheduler is not running — most likely the host
+    is suspended (ADR-0002 puts everything interpretive on a laptop, and a laptop sleeps).
+
+    This is the failure an on_failure_callback structurally cannot report: the process that
+    would send it is the process that is gone. Nothing in AWS looks wrong while this is true;
+    the pollers keep filling staging and nothing local is left to commit or read it.
+  EOT
+
+  namespace   = "Signal/Local"
+  metric_name = "LocalHeartbeat"
+
+  statistic           = "Sum"
+  period              = 10800 # three ingest_monitor beats
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "LessThanThreshold"
+  treat_missing_data  = "breaching" # no datapoint *is* the condition being watched
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+  ok_actions    = [aws_sns_topic.alerts.arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "local_task_failed" {
+  alarm_name        = "${var.name_prefix}-local-task-failed"
+  alarm_description = <<-EOT
+    An Airflow task failed on the local host. The scheduler was alive to notice, which is
+    what distinguishes this from the silence alarm above; the DAG and task are on the
+    Signal/Local DagFailure metric's dimensions, and in the task log.
+  EOT
+
+  namespace   = "Signal/Local"
+  metric_name = "LocalFailure"
+
+  statistic           = "Sum"
+  period              = 3600
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  # Unlike the silence alarm, absence here is health: most hours have no failures.
+  treat_missing_data = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+}

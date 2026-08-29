@@ -51,11 +51,56 @@ OUT = EVALS / "enrichment" / "examples.jsonl"
 # without letting it dominate the score.
 SEC_CAP_RATIO = 0.20
 
+# `silver.story_clusters` has no body of its own — the head's text lives in
+# `silver.articles`, reached through `canonical_article_id`. This is the same join
+# `brief/read.py::read_clusters` makes for the snippet under each headline, and it has to be
+# the same text or the `input_hash` computed here would not match the one `enrich/run.py`
+# produced, and the join to `predictions.jsonl` would silently find nothing.
+#
+# **This query is why 4B.G never ran.** It was written selecting a `snippet` column that
+# `silver.story_clusters` does not have, and nothing caught it: the sampler has no test, it is
+# the only caller, and the failure needs a real Athena catalog to surface. Found in 5.0 by
+# running it — `COLUMN_NOT_FOUND: line 1:45: Column 'snippet' cannot be resolved`.
 SAMPLE_SQL = """
-SELECT cluster_id, title, publisher_domain, snippet, article_count
-FROM silver.story_clusters
-WHERE title IS NOT NULL AND title <> ''
+SELECT c.cluster_id,
+       c.title,
+       c.publisher_domain,
+       a.body_text AS snippet,
+       c.article_count
+FROM silver.story_clusters c
+LEFT JOIN silver.articles a
+  ON a.article_id = c.canonical_article_id
+WHERE c.title IS NOT NULL AND c.title <> ''
 """
+
+
+def _distinct_by_input(rows: list[dict]) -> list[dict]:
+    """One row per distinct enrichment *question*, not per cluster.
+
+    Clustering runs on a rolling 72-hour window, so the same story is re-clustered under a new
+    `cluster_id` on each of three consecutive days (`spark/jobs/cluster.py`). Its head text does
+    not change, so all three produce the same `input_hash` — which is what `predictions.jsonl`
+    is keyed on and what `score.py` joins through.
+
+    **Found by running the first draw.** 100 rows came back and scored `n=95`: five stories had
+    been drawn twice (Dolly Parton, the Walmart payments story, and three others), and the
+    labels dict silently collapsed each pair. Nothing was wrong with the score — the labels
+    agreed — but the sample was 5% smaller than it claimed, and a disagreement between two
+    labels for the same question would have been resolved by file order.
+    """
+    seen: set[tuple[str, str, str]] = set()
+    distinct = []
+    for row in rows:
+        key = (
+            row.get("title") or "",
+            row.get("publisher_domain") or "",
+            row.get("snippet") or "",
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        distinct.append(row)
+    return distinct
 
 
 def _strata(rows: list[dict]) -> dict[str, list[dict]]:
@@ -88,7 +133,9 @@ def main(argv: list[str] | None = None) -> int:
 
     result = run_query(SAMPLE_SQL, database=settings.athena_database)
     print(f"{len(result.rows)} clusters, {result.bytes_scanned:,} bytes, ${result.cost_usd:.6f}")
-    buckets = _strata(result.rows)
+    rows = _distinct_by_input(result.rows)
+    print(f"{len(rows)} distinct heads ({len(result.rows) - len(rows)} re-clustered duplicates)")
+    buckets = _strata(rows)
     for name, rows in buckets.items():
         print(f"  {name:14} {len(rows)}")
 

@@ -550,12 +550,14 @@ def test_run_writes_a_brief_from_the_cluster_tables_with_costs_from_every_query(
 
     assert path == tmp_path / "brief-2026-08-20.html"
     html = path.read_text(encoding="utf-8")
-    # Eight queries as of 4B: clusters, entities, velocity, market, feedback, health, the
-    # enrichment read and the macro revisions. Every one is charged for and every one is in
-    # the footer — a component that reads a table the reader is not told about is a cost SPEC
-    # §10.3 would not see. The count is asserted through the total rather than separately, so
-    # adding a read without accounting for it fails here.
-    assert "25,165,824 bytes scanned" in html
+    # Ten queries as of 5.C: clusters, entities, velocity, market, feedback, health, the
+    # enrichment read, the macro revisions, the brief streak and novelty's 30-day history.
+    # Every one is charged for and every one is in the footer — a component that reads a table
+    # the reader is not told about is a cost SPEC §10.3 would not see. The count is asserted
+    # through the total rather than separately, so adding a read without accounting for it
+    # fails here, which is how both 5.A's streak read and 5.C's novelty read announced
+    # themselves.
+    assert "31,457,280 bytes scanned" in html
     assert "Northwind" in html
     # The resolved company shows on the story, with its ticker.
     assert "Northwind Corp" in html
@@ -588,9 +590,39 @@ def test_a_stale_clustered_window_says_so(tmp_path, capsys):
         clusters=[_cluster_row(window_end="2026-08-18 05:00:00.000000 UTC")],
         healths=[_health_row()],
     )
-    run(Settings(out_root=tmp_path), limit=5, date="2026-08-20", now=NOW, client=client)
+    path = run(Settings(out_root=tmp_path), limit=5, date="2026-08-20", now=NOW, client=client)
 
-    assert "WARNING: newest clustered window is" in capsys.readouterr().out
+    assert "WARNING: newest clustered window ended" in capsys.readouterr().out
+    # And on the page, not only in the task log. A warning only an operator can see does
+    # not help the one person who reads the brief.
+    assert "These are not today's stories." in path.read_text(encoding="utf-8")
+
+
+def test_yesterdays_clustering_is_stale_even_though_it_is_under_36_hours_old(tmp_path, capsys):
+    """The late-wake case the previous hours-based threshold could not express.
+
+    A window ending 18 hours before the run is well inside the old 36-hour bound, so it
+    passed without comment — but it is the *previous day's* clustering, which is precisely
+    what happens when the host sleeps through the chain and wakes after 16:00 (ADR-0014).
+    The test is the reason the check is a date comparison and not an age.
+    """
+    client = _RoutingAthenaClient(
+        clusters=[_cluster_row(window_end="2026-08-19 18:00:00.000000 UTC")],
+        healths=[_health_row()],
+    )
+    path = run(Settings(out_root=tmp_path), limit=5, date="2026-08-20", now=NOW, client=client)
+
+    assert "WARNING: newest clustered window ended" in capsys.readouterr().out
+    assert "These are not today's stories." in path.read_text(encoding="utf-8")
+
+
+def test_a_fresh_brief_carries_no_stale_banner(tmp_path):
+    """The counterpart to the warning: a banner that is always on is one nobody reads,
+    which is the fault `test_a_fresh_window_does_not_warn` records for the log message."""
+    client = _RoutingAthenaClient(clusters=[_cluster_row()], healths=[_health_row()])
+    path = run(Settings(out_root=tmp_path), limit=5, date="2026-08-20", now=NOW, client=client)
+
+    assert "These are not today's stories." not in path.read_text(encoding="utf-8")
 
 
 def test_a_fresh_window_does_not_warn(tmp_path, capsys):
@@ -662,4 +694,8 @@ def test_every_render_path_gets_a_cleaned_snippet():
     ]
     html_out = render_brief(clusters, RunHealth(articles_in=1, clusters_out=1), date="2026-08-21")
     assert "Northwind acquires Lumen." in html_out
-    assert "<p>Northwind" not in html_out.replace('<p class="body">', "")
+    # The template autoescapes, so uncleaned markup would surface as visible `&lt;p&gt;`
+    # text under the headline — which is exactly how the bug in `render.snippet`'s docstring
+    # showed up. Asserted on the escaped form rather than on a CSS class, so a restyle
+    # cannot quietly turn this check into a no-op.
+    assert "&lt;p&gt;" not in html_out

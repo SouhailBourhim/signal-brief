@@ -27,6 +27,7 @@ from typing import Any
 from signal_core.config import DEPLOYED_SOURCE_IDS, settings
 from signal_core.ops.athena import QueryResult, run_query
 from signal_core.ops.health import SourceHealth
+from signal_core.ops.streak import Streak, compute_streak
 from signal_core.timeutil import ensure_utc, utc_now
 
 # SPEC §7.1: same-story clustering runs over a time-decayed 72-hour window.
@@ -767,3 +768,110 @@ def read_macro_revisions(
             )
         )
     return revisions, result
+
+
+def read_brief_streak(
+    now: datetime | None = None,
+    *,
+    including: date | None = None,
+    database: str | None = None,
+    workgroup: str | None = None,
+    client: Any | None = None,
+) -> tuple[Streak, QueryResult]:
+    """Consecutive daily briefs, from `gold.brief_items`. SPEC §16.5.
+
+    Reads only `brief_date`, and reads *all* of them rather than a recent window: the longest
+    streak and the list of missed days are both statements about the whole history, and a
+    lookback would silently redefine them the moment the history outgrew it. The column is the
+    table's partition key, so this is a metadata-scale read — it has never scanned more than
+    0.00 MB.
+
+    The counting itself is `ops.streak.compute_streak`, which is pure and tested against fixed
+    dates; this function is only the part that needs an AWS account.
+
+    **`including` exists because of an ordering the caller cannot avoid.** `build.run` writes
+    `gold.brief_items` *after* rendering — deliberately, since the row records what the reader
+    was actually shown — so at render time today's brief is not yet in the table it is about to
+    be in. Without this the page would report "day 2" on the third consecutive morning, every
+    morning, and the number would be wrong in the one direction §16.5 cares about. The caller
+    passes the date it is building; a date already present is a no-op.
+    """
+    now = now or utc_now()
+    result = run_query(
+        "SELECT DISTINCT brief_date FROM gold.brief_items ORDER BY brief_date",
+        database=database or settings.athena_database,
+        workgroup=workgroup or settings.athena_workgroup,
+        client=client,
+    )
+    days = [parsed for row in result.rows if (parsed := _parse_date(row.get("brief_date")))]
+    if including is not None:
+        days.append(including)
+    return compute_streak(days, now.date()), result
+
+
+# SPEC §7.4: "embedding distance to the last 30 days of clusters". Thirty days is the spec's
+# number; §14's pgvector row sizes the working set from it and ADR-0015 measured that at 9,379.
+NOVELTY_HISTORY_DAYS = 30
+
+
+def read_window_heads(
+    *,
+    database: str | None = None,
+    workgroup: str | None = None,
+    client: Any | None = None,
+) -> tuple[list[dict[str, Any]], QueryResult]:
+    """Cluster ids and titles for the newest clustered window — what novelty is scored *for*."""
+    result = run_query(
+        """
+        SELECT cluster_id, title
+        FROM silver.story_clusters
+        WHERE window_start = (SELECT max(window_start) FROM silver.story_clusters)
+          AND title IS NOT NULL AND title <> ''
+        """,
+        database=database or settings.athena_database,
+        workgroup=workgroup or settings.athena_workgroup,
+        client=client,
+    )
+    return list(result.rows), result
+
+
+def read_novelty_history(
+    now: datetime | None = None,
+    *,
+    days: int = NOVELTY_HISTORY_DAYS,
+    database: str | None = None,
+    workgroup: str | None = None,
+    client: Any | None = None,
+) -> tuple[list[dict[str, Any]], QueryResult]:
+    """Distinct cluster-head titles from **earlier** windows, over the last `days`.
+
+    **`window_start < max(window_start)` is the whole subtlety of this component.** Clustering
+    holds a rolling 72-hour window and re-runs daily, so yesterday's window contains almost
+    everything today's does. Comparing today against a history that includes those overlapping
+    windows would score every story that ran yesterday as perfectly recycled — which is not
+    what §7.4 means, and would collapse novelty into "is this the first window it appeared in".
+
+    Excluding only the *current* window is the right cut and it is deliberately not stricter:
+    a story that led yesterday's brief and is still leading today's **is** recycled from the
+    reader's point of view, and §7.4's "recycled narratives sink" is exactly the instruction to
+    sink it.
+
+    Titles are returned distinct because the same narrative appears in three consecutive
+    windows; the embedding cache would collapse them anyway, but not reading them three times
+    is cheaper than caching them three times.
+    """
+    now = now or utc_now()
+    since = (now - timedelta(days=days)).date()
+    result = run_query(
+        f"""
+        SELECT DISTINCT title
+        FROM silver.story_clusters
+        WHERE window_start < (SELECT max(window_start) FROM silver.story_clusters)
+          AND window_start >= timestamp '{since.isoformat()} 00:00:00'
+          AND title IS NOT NULL AND title <> ''
+        """,
+        database=database or settings.athena_database,
+        workgroup=workgroup or settings.athena_workgroup,
+        client=client,
+    )
+    return list(result.rows), result

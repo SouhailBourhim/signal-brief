@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
+from alerting import DEFAULT_ARGS, on_dag_success
 from assets import BRONZE_COMMITTED, MARKET_DAILY, SILVER_COMMITTED
 
 # Wide enough to repair a gap without a backfill: every fetch re-states ~63 trading days,
@@ -58,6 +59,8 @@ GATE_TIMEOUT_SECONDS = 4 * 60 * 60
     start_date=pendulum.datetime(2026, 8, 22, tz="Africa/Casablanca"),
     catchup=False,
     max_active_runs=1,  # two runs MERGEing the same keys would race
+    default_args=DEFAULT_ARGS,
+    on_success_callback=on_dag_success,
     tags=["phase4a", "market"],
 )
 def market_dag():

@@ -133,19 +133,21 @@ SPEC §15: never publish a metric the pipeline cannot recompute. Current numbers
 | **Entity resolution precision / recall** | **0.833 / 0.556** held out · 0.868 / 0.611 full set (n=300) | `evals/fit_thresholds.py --set entities`, labeled 2026-08-20 |
 | Dedup ratio | 11 → 7 clusters (fake) · 4,296 → 4,253 (real, 1.01x) | `make skeleton` / `signal brief` |
 | Entity resolution, one production window | 20,760 mentions detected over 4,303 articles → 2,509 linked (12.1%), 1,018 distinct companies | `spark/jobs/resolve.py`, real AWS |
-| Cost of one brief | 3 Athena queries, 1.7 MB scanned, **$0.00014** | brief footer, real AWS |
+| Cost of one brief | **10 Athena queries, 1.93 MB scanned, $0.0005** | brief footer, real AWS |
 | Ingestion, one production window | 521 bronze rows → 207 articles (19 quarantined, all `hackernews`/dead-item) | `docs/runbooks/phase-2.md` 2.E, real AWS |
 | Athena, `SELECT *` vs. projected vs. partition-pruned, same question | 184,259 / 73,373 / 64,713 bytes scanned | `docs/athena.md`, real AWS |
 | S3 egress, one commit | 3,468,248 bytes | `ops.pipeline_costs`, real AWS |
 | Replay after a 24.2 h outage | 23,306 rows re-read, **0 committed**, table unchanged | `docs/runbooks/phase-1.md` 1.D, real AWS |
 | Replay during active catch-up | 4 consecutive hourly MERGEs, each re-reading the full table and inserting only the new rows | `docs/runbooks/phase-1.md` 1.D, real AWS |
 | Catch-up after the same outage | RSS lost 0.0 / 3.6 / 5.3 h of 24.2 h; HN lost nothing | `docs/runbooks/phase-1.md` 1.D, real AWS |
-| Embeddings vs. the lexical same-story rule | embedding **0.870 / 0.909** vs. lexical **1.000 / 0.500** held out; corpus false merges ~161/window vs. ~54 | `evals/experiments/embed_dedup.py`, ADR-0009 |
+| Embeddings vs. the lexical same-story rule | **refused on the corpus measurement**: no threshold ≥0.90 changes a decision; 0.85 buys recall 0.568→0.705 and emits **4,841 false edges across 1,680 heads** (a spanning tree needs 1,679) | `evals/experiments/embed_dedup_ollama.py`, ADR-0017 |
 | Embeddings vs. the lexical resolver | no gain at any threshold; ceiling **0.630** recall for any context-scoring rule over this dictionary | `evals/experiments/embed_entities.py`, ADR-0009 |
 | LLM stage, first clean batch | 40 heads in **80.2 s**, 0 schema failures; second run 100% cache, 0 model calls | `docs/runbooks/phase-4b.md`, live Ollama |
-| LLM eval accuracy | — | Phase 4B — the harness is built and the labeled set is empty, so `evals/score.py` reports it unscored |
+| **LLM enrichment precision / recall** | **0.747 / 0.782** (n=95) · topic 0.789 · summary entailed 0.853 | `make eval`, labeled 2026-08-29 — see the caveat below |
 | Cost per day (full pipeline) | — | Phase 4A — pieces above are real, a full day's total isn't assembled yet |
-| Consecutive daily briefs read | 2 days, 4 reads | SPEC §12's brief ladder; the count started 2026-08-20 |
+| Consecutive daily briefs | **day 3** · 6 briefs since 2026-08-23, longest 3, **missed 2026-08-26** | `signal streak`, computed from `gold.brief_items` |
+| Novelty, one production window | **37.3%** of 1,680 heads are a near-exact repeat (cosine ≥0.99) of the prior 30 days | `evals/experiments/novelty_floor.py`, real AWS |
+| Publisher breadth | **99.64%** of clusters hold exactly one publisher (1,674 of 1,680) | `signal athena-query`, real AWS |
 
 The fixture's 1.000/1.000 proved the harness runs, not that the clustering is good — and
 Phase 3's 252 real labeled pairs showed how much daylight sat between those two claims. On a
@@ -182,7 +184,47 @@ then reviewed by the reader**, who overrode three (`labeler` is stamped on every
 `reviewed_from` on every overridden one) — so the figures measure agreement with a model on
 the bulk of each set, spot-checked where the rule and the labeler disagreed.
 
-The two embedding rows are measured, reproducible, and **not runnable by `make eval`** —
+**The ranker was five-sixths of its spec for two phases, and the sixth component exposed
+what the other five were doing.** SPEC §7.4 names six; `novelty` was deferred through 4A and 4B
+because every embedding sat behind Ollama. Landing it in Phase 5 meant first asking why five of
+the six read `0.00` on the real page — and the answers were not ranking bugs:
+
+- **`recency` read exactly `0.000` for five consecutive days** and `0.901` on the sixth: the day
+  ADR-0014 replaced five crons with an asset-ordered chain. `cluster` had been reading yesterday's
+  bronze, so every story the ranker saw at 16:00 was already a day old. `relevance` looked
+  saturated at 0.94–0.98 because it was the only live term, not because it was crowding out the
+  others; it fell to 0.64 the moment `recency` started competing.
+- **`breadth` cannot fire in this corpus.** 99.64% of clusters hold exactly one publisher — and
+  not because clustering is broken: all six multi-publisher clusters in a window are correct
+  ars/verge/techcrunch/HN merges. 64% of the corpus is single-publisher SEC filings and 30% is
+  Hacker News pointing at 477 distinct domains. A quarter of the score was resting on a signal
+  this source mix emits for 0.36% of clusters. It is now 0.05, and goes back up when wire
+  sources land — with the measurement that raises it.
+- **One feedback mark existed across 60 items**, and the cause was the product, not the reader:
+  marking needs a `cluster_id` and the page printed none, so the loop required copying a
+  64-character hash out of a table nobody could see. The card now prints eight characters and
+  `signal feedback` resolves a prefix.
+
+**The enrichment figure is a model grading a model, and the labels are unreviewed.** 0.747/0.782
+comes from 95 distinct examples whose `labeler` is stamped `claude-opus-5 (assistant),
+unreviewed` — unlike the dedup and entity sets, which the reader reviewed and overrode three of.
+The stratified draw earned its keep on first use: SEC filings score **1.000** on topic and get
+`filing_type` wrong 12 times in 20, so a uniform draw (57% filings) would have published a topic
+accuracy near 0.9 earned on the trivially classifiable half. `company` false-positives 17 times
+and every one is the publisher domain read as the subject. `round_type` fires zero times in 95 —
+the abstention `enrich/schema.py`'s nullability was written for, measured rather than assumed.
+
+**The embedding decision reversed itself once the vehicle existed, and that is the reversal
+worth reading.** ADR-0009 adopted embeddings for same-story dedup on a `sentence-transformers`
+measurement, then rejected `sentence-transformers` as the vehicle on packaging grounds.
+ADR-0016 built the vehicle it chose — `nomic-embed-text` through Ollama, pinned by digest — and
+asking the question again through the encoder that would actually ship refused it (ADR-0017).
+The first measurement was not careless; it was taken on the labeled set alone, which is the axis
+3.B had already shown to be insufficient. The same encoder is in production for `novelty`, where
+the property that ruins dedup — templated filing titles scoring as near-identical — is exactly
+what is wanted.
+
+The two older embedding rows are measured, reproducible, and **not runnable by `make eval`** —
 deliberately. Deciding whether a 1.1 GB dependency earns its place by first adding it to
 `pyproject.toml` would answer the question by assumption, so `evals/experiments/` runs
 against a throwaway virtualenv and each script carries the command that builds one. Both

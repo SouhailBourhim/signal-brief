@@ -29,7 +29,9 @@ from signal_core.brief.read import (
     read_feedback,
     read_hn_velocity,
     read_market_moves,
+    read_novelty_history,
 )
+from signal_core.config import Settings
 from signal_core.ops.athena import AthenaQueryFailed, QueryResult
 from signal_core.timeutil import utc_now
 from signal_core.watchlist import load as load_watchlist
@@ -91,6 +93,7 @@ class RankedWindow:
     velocity_query: QueryResult
     market_query: QueryResult
     feedback_query: QueryResult
+    novelty_query: QueryResult
 
     @property
     def queries(self) -> tuple[QueryResult, ...]:
@@ -100,6 +103,7 @@ class RankedWindow:
             self.velocity_query,
             self.market_query,
             self.feedback_query,
+            self.novelty_query,
         )
 
     @property
@@ -158,6 +162,8 @@ def ranked_window(
     market_moves = market_moves or {}
     feedback = feedback or {}
 
+    novelty, novelty_query = _read_novelty(clusters, now, client=client, progress=progress)
+
     ranked = rank(
         clusters,
         limit=limit,
@@ -166,6 +172,7 @@ def ranked_window(
         velocity_slopes=velocity_slopes,
         market_moves=market_moves,
         feedback=feedback,
+        novelty=novelty,
     )
 
     return RankedWindow(
@@ -180,4 +187,62 @@ def ranked_window(
         velocity_query=velocity_query,
         market_query=market_query,
         feedback_query=feedback_query,
+        novelty_query=novelty_query,
     )
+
+
+def _read_novelty(
+    clusters: list[dict[str, Any]],
+    now: datetime,
+    *,
+    client: Any | None,
+    progress: Callable[[str], None],
+) -> tuple[dict[str, float], QueryResult]:
+    """SPEC §7.4's novelty, or an empty map and a loud line if the encoder is not reachable.
+
+    **Degrades like every other optional signal, and for a sharper reason.** The other reads
+    fall back when a *table* is missing; this one also has to fall back when Ollama is not
+    running, because ADR-0002 puts it on the host and the host is a laptop. A brief that
+    refuses to render because the GPU is asleep would be a worse product than one whose
+    novelty column reads zero — and the reader can see which, because the warning prints and
+    `score_components` records the zeros.
+
+    Only the current window is embedded against history, not every pair: 1,680 heads against
+    7,011 is 11.8M dot products of 768 floats, which is seconds, and SPEC §14's pgvector row
+    is the argument for why that is the right shape rather than a database.
+    """
+    from signal_core.brief.novelty import score_novelty
+    from signal_core.enrich.client import OllamaUnavailable
+    from signal_core.enrich.embed import EmbeddingCache
+
+    settings = Settings()
+    history, novelty_query = optional_read(
+        lambda: read_novelty_history(now, client=client),
+        warning="no story_clusters history yet — novelty scores 0 for every story (5.C)",
+        progress=progress,
+    )
+    if not history:
+        return {}, novelty_query
+
+    heads = [
+        {"cluster_id": c["cluster_id"], "title": c.get("title") or ""}
+        for c in clusters
+        if c.get("title")
+    ]
+    try:
+        cache = EmbeddingCache(settings.embedding_cache_path, settings.ollama_embed_model_digest)
+        cached = cache.load()
+        history_vectors = cache.embed([h["title"] for h in history], settings)
+        head_vectors = cache.embed([h["title"] for h in heads], settings)
+        cache.save()
+    except OllamaUnavailable as unavailable:
+        progress(f"        WARNING: no embeddings — novelty scores 0 ({unavailable})")
+        return {}, novelty_query
+
+    scores = score_novelty(heads, head_vectors, history_vectors)
+    recycled = sum(1 for v in scores.values() if v == 0.0)
+    progress(
+        f"        novelty over {len(history)} prior heads, {cached} vectors cached, "
+        f"{recycled}/{len(scores)} fully recycled"
+    )
+    return scores, novelty_query

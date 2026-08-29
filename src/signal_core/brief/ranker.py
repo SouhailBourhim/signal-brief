@@ -38,14 +38,36 @@ from signal_core.watchlist import Watchlist
 #
 # `feedback` is the smallest for a reason SPEC §14 gives: with a handful of marks it should
 # nudge, not steer.
+#
+# ## 5.C: novelty arrives, and `breadth` is cut from 0.25 to 0.05
+#
+# SPEC §7.4 says weights are hand-set and stay hand-set, so this is a hand-set change with a
+# measurement behind it rather than a fit. Two things were measured against the deployed lake
+# on 2026-08-29 (docs/runbooks/phase-5.md 5.C):
+#
+# **`breadth` cannot fire in this corpus.** 99.64% of clusters hold exactly one publisher —
+# 1,674 of 1,680; six hold two; none holds three. Not a clustering bug: 64% of the corpus is
+# SEC filings from one publisher and 30% is Hacker News pointing at 477 distinct domains, and
+# every one of the six multi-publisher clusters is a correct ars/verge/techcrunch/HN merge. A
+# quarter of the score was resting on a signal the source mix emits for 0.36% of clusters. It
+# becomes a tiebreaker at 0.05, and the weight goes back up when wire sources land — with the
+# measurement that raises it.
+#
+# **`novelty` is the term that actually varies.** 37.3% of a window is a near-exact repeat of
+# something from the prior 30 days, and the rescaled component spreads across the rest
+# (median 0.25, p25 0.45, p10 0.71) instead of saturating. See `brief/novelty.py`.
+#
+# `relevance` and `recency` are untouched: both are live and neither measurement questioned
+# them. `recency` read 0.000 for five straight days before ADR-0014, which was a chain-ordering
+# bug and not a weighting one.
 WEIGHTS: dict[str, float] = {
-    "breadth": 0.25,
     "relevance": 0.25,
     "recency": 0.20,
+    "novelty": 0.20,
     "velocity": 0.10,
     "market_corroboration": 0.10,
     "feedback": 0.10,
-    # 4B: "novelty" — see the module docstring and ADR-0009.
+    "breadth": 0.05,
 }
 
 # How far past its trailing volatility a move has to go to count as corroboration, and the
@@ -141,6 +163,7 @@ def score_cluster(
     velocity_slopes: dict[str, float] | None = None,
     market_moves: dict[str, float] | None = None,
     feedback: dict[str, float] | None = None,
+    novelty: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     now = now or utc_now()
 
@@ -186,6 +209,12 @@ def score_cluster(
         # can subtract. That is intended: "I did not want this" should push a story down,
         # not merely fail to push it up.
         "feedback": (feedback or {}).get(cluster["cluster_id"], 0.0),
+        # 0.0 when novelty was not computed — Ollama down, or a lake with no history to be
+        # novel against. "We could not measure this" has to mean zero in a weighted sum for
+        # the same reason `velocity` does; awarding the full weight to every story on a
+        # corpus that cannot yet contradict it would be SPEC §17's invented metric. The
+        # component is then uniform, so ordering is unaffected either way.
+        "novelty": (novelty or {}).get(cluster["cluster_id"], 0.0),
     }
     return {
         **cluster,
@@ -203,6 +232,7 @@ def rank(
     velocity_slopes: dict[str, float] | None = None,
     market_moves: dict[str, float] | None = None,
     feedback: dict[str, float] | None = None,
+    novelty: dict[str, float] | None = None,
 ):
     """Score, sort, and cut.
 
@@ -217,6 +247,7 @@ def rank(
             velocity_slopes=velocity_slopes,
             market_moves=market_moves,
             feedback=feedback,
+            novelty=novelty,
         )
         for c in clusters
     ]

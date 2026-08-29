@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
+from alerting import DEFAULT_ARGS, on_dag_success
 from assets import MACRO_DAILY, MENTIONS_RESOLVED, SILVER_COMMITTED
 
 RESOLVE_WINDOW_HOURS = 72
@@ -40,6 +41,8 @@ RESOLVE_WINDOW_HOURS = 72
     start_date=pendulum.datetime(2026, 8, 21, tz="Africa/Casablanca"),
     catchup=False,
     max_active_runs=1,  # two runs overwriting the same partitions would race
+    default_args=DEFAULT_ARGS,
+    on_success_callback=on_dag_success,
     tags=["phase3", "entities"],
 )
 def resolve_dag():

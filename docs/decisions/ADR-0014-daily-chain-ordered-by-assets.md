@@ -109,6 +109,23 @@ this and the argument is unchanged: SPEC §12's acceptance is a clock time, and 
 risks a *second send* if an upstream is ever rebuilt later the same day. A duplicate brief in
 the inbox is worse than a late one.
 
+**And precisely because it stays on a cron, it needs a guard of its own.** Ordering the five
+stages does nothing for `brief`, which can still fire ahead of all of them: if the host wakes
+after 16:00, the missed slot fires immediately and mails yesterday's gold tables under today's
+date. This is the same defect as the one above, in the one place that reaches the reader.
+
+The check that existed could not catch it, for two reasons. It was an age in hours —
+`STALE_CLUSTER_HOURS = 36` — so a brief built eighteen hours late on the previous day's
+clustering passed without comment. And it printed to the task log, which the reader never
+sees. So the test is now a **date comparison** — is the newest clustered window older than the
+edition being rendered into? — and its answer is carried **on the page**, not only in the log.
+
+**Marked, not withheld** — the opposite of the choice made for the chain, and deliberately so.
+The chain halts on failure because a stale brief is *undetectable*; but the fix for
+undetectable is to make it detectable, and once the reader can see the warning, sending beats
+silence. The health table, costs and macro revisions are all still true; only the stories are
+old, and now they say so.
+
 ## Consequences
 
 **The ordering is now a fact rather than an inference.** On a wake-up, Airflow can no longer

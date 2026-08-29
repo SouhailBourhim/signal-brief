@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
+from alerting import DEFAULT_ARGS, on_dag_success
 
 
 @dag(
@@ -17,6 +18,8 @@ from airflow.decorators import dag, task
     schedule="30 6 * * *",
     start_date=pendulum.datetime(2026, 1, 1, tz="Africa/Casablanca"),
     catchup=False,
+    default_args=DEFAULT_ARGS,
+    on_success_callback=on_dag_success,
     tags=["phase0"],
 )
 def skeleton_dag():

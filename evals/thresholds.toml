@@ -55,6 +55,18 @@ min_recall    = 1.00
 # ties by keeping what `dedup.py` ships. Tuple order had been breaking them, and had been
 # recommending the simhash distance 3.D removed for chaining a 45-article false cluster.
 #
+# **The 0.500 held-out recall ceiling is now refused, not deferred (ADR-0017, 5.C).** The
+# embedding branch ADR-0009 §1 adopted was re-measured through the vehicle that actually ships
+# (ADR-0016) and does not survive: no threshold at or above 0.90 changes a single decision, and
+# 0.85 — the only one that buys recall, 0.568 -> 0.705 — emits **4,841 false edges across 1,680
+# heads** in one window. A spanning tree of 1,680 nodes needs 1,679. That is 3.B's 59%
+# mega-cluster arriving again, and it is why the number below is unchanged.
+#
+# The merges concentrate on templated filing titles (`424B2 - BANK OF NOVA SCOTIA` against
+# `424B2 - BANK OF MONTREAL /CAN/`), which a retrieval encoder is correct to score as similar
+# and which this corpus is 64% made of. The ceiling is a property of the corpus and the alias
+# index, not of the matching rule.
+#
 # **The floors are not ratcheted, deliberately.** They sit 0.012 and 0.018 under the full set.
 # One labeled pair is worth ~0.023 of recall here, so a floor any closer fails the build on a
 # single re-labeled example — a tripwire on labeling rather than on accuracy. A floor
@@ -103,6 +115,63 @@ min_recall    = 0.55
 min_precision = 0.82
 min_recall    = 0.58
 
-[enrichment]      # SPEC §7.3 — Phase 4B, 100 labeled examples
-min_precision = 0.0
-min_recall    = 0.0
+[enrichment]      # SPEC §7.3 — 100 drawn, 95 distinct, labeled 2026-08-29 (5.0)
+# Carried from 4B.G, where the harness was built and never run. Scored against
+# llama3.1:8b @ sha256:667b0c1932bc… under prompt v1; the stamp is on every prediction row,
+# so a model swap leaves these numbers visibly attributed to the old model rather than
+# silently re-earned.
+#
+#                        precision   recall
+#     full set (n=95)      0.747      0.782    <- what `make eval` gates on, below
+#
+# There is no train/held-out split here, and that is a real difference from `[dedup]` and
+# `[entities]`. Nothing is *fitted* against this set — no threshold is searched, no constant
+# is chosen. The prompt and the schema were written before the labels existed, so the whole
+# set is held out in the only sense that matters, and splitting it would halve the sample to
+# defend against an overfit that has no mechanism to occur.
+#
+# ## What the number is made of, because the headline hides the interesting half
+#
+#     topic exact match     75/95 = 0.789
+#     summary entailed      81/95 = 0.853
+#
+#     topic by stratum      sec          20/20 = 1.000
+#                           corroborated 26/35 = 0.743
+#                           single       29/40 = 0.725
+#
+#     extraction         tp   tn   fp   fn   wrong
+#       company          34   37   17    3     4
+#       amount_usd        3   90    0    2     0
+#       round_type        0   95    0    0     0
+#       headcount_delta   0   93    1    1     0
+#       filing_type       8   75    0    0    12
+#
+# Three findings, all of which the stratified draw exists to make visible:
+#
+# 1. **SEC filings are 100% on topic and the worst on extraction.** `filing_type` is wrong on
+#    12 of the 20 — the model reads the SEC *Item* number off the body (`3C`, `3(c)`) or
+#    falls back to `8-K`, when the form type is the first token of the title. A uniform draw
+#    would have been ~57% filings and would have published a topic accuracy near 0.9 earned
+#    almost entirely on the half of the corpus that is trivially classifiable.
+# 2. **`company` false-positives 17 times, and always the same way**: the publisher domain is
+#    read as the subject. `github.com` becomes "GitHub", `clinch.sh` becomes "Clinch.sh",
+#    `boxblanks.com` becomes "boxblanks.com". §7.3's field says "as named in the text", and
+#    the labels hold that line, so this is the largest single error mode in the extraction.
+# 3. **`round_type` never fires — 95 true negatives, no positives at all.** The field is
+#    correct and the corpus has no funding-round language in it. That is the abstention
+#    `enrich/schema.py` argues nullability exists for, measured rather than assumed.
+#
+# ## The floors
+#
+# Set 0.027 and 0.032 under the measured values. 95 examples × 7 decisions each is 269
+# positive predictions, so one relabeled example moves either figure by ~0.004 — the floors
+# absorb six or seven, which is the same reasoning `[dedup]` uses for not ratcheting tight.
+# They exist to catch a regression, not to certify the number. Quote the full-set row.
+#
+# **Same labeler caveat as `[dedup]` and `[entities]`, and it is stronger here.** These labels
+# were made by an LLM assistant and are stamped `unreviewed` in the data — no human has been
+# over them. That is a model grading a model, and while the grader is a much larger one than
+# the 8B being graded, it is not ground truth and the README must not quote it as though it
+# were. `labeler` is on every record. Reviewing them is carried forward.
+min_precision = 0.72
+min_recall    = 0.75

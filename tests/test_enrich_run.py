@@ -488,6 +488,7 @@ def test_run_enriches_only_the_ranked_cut_not_the_whole_window(monkeypatch):
             feedback={},
             cluster_query=store.EMPTY_RESULT,
             entity_query=store.EMPTY_RESULT,
+            novelty_query=store.EMPTY_RESULT,
             velocity_query=store.EMPTY_RESULT,
             market_query=store.EMPTY_RESULT,
             feedback_query=store.EMPTY_RESULT,

@@ -38,6 +38,7 @@ cache is warm by the time this runs.
 from __future__ import annotations
 
 import time
+from datetime import date as date_type
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,7 @@ from signal_core.brief.items import write_brief_items
 from signal_core.brief.read import (
     CLUSTER_WINDOW_HOURS,
     HEALTH_LOOKBACK_HOURS,
+    read_brief_streak,
     read_health,
     read_macro_revisions,
 )
@@ -53,16 +55,24 @@ from signal_core.brief.render import write_brief
 from signal_core.brief.select import optional_read, ranked_window
 from signal_core.config import Settings
 from signal_core.ops.health import RunHealth
-from signal_core.timeutil import utc_now
+from signal_core.timeutil import BRIEF_TZ, brief_date, ensure_utc, utc_now
 
-# How stale the newest clustered window may be before the brief says so out loud. The
-# cluster DAG runs daily at 05:00, so anything past a day and a half means a run was missed.
+# A brief is **stale** when the newest clustered window ended before the brief's own date —
+# that is, when the daily chain has not finished today. A date comparison rather than an age
+# in hours, because an hours threshold could not express the fault it was there to catch: the
+# previous 36-hour bound let a brief built on the previous day's clustering pass without
+# comment, which is precisely the late-wake case (ADR-0014). `cluster` is asset-triggered now
+# and has no clock of its own, so "36 hours since the 05:00 run" no longer means anything.
 #
 # This exists because **an empty brief and a stale brief look identical on the page**, and
-# they are opposite faults: empty means ingestion stopped, stale means the cluster job did.
+# they are opposite faults: empty means ingestion stopped, stale means the chain did.
 # SPEC §11's argument is that silence is the failure mode; a brief that renders yesterday's
 # stories under today's date without comment is exactly that.
-STALE_CLUSTER_HOURS = 36
+#
+# **Marked on the page, not withheld.** ADR-0014 halts the chain on failure because a stale
+# brief is undetectable — but the fix for undetectable is to make it detectable, and a brief
+# the reader can see is wrong beats one that never arrives. The health table, costs and macro
+# revisions in it are still true; only the stories are old, and now they say so.
 
 
 def run(
@@ -78,6 +88,12 @@ def run(
     settings = settings or Settings()
     now = now or utc_now()
     since = now - timedelta(hours=window_hours)
+    # Resolved here rather than left to `write_brief`'s default, because the staleness check
+    # below compares against it and has to mean the same date the header will carry.
+    brief_day = date or brief_date(now)
+    # Set only when the clustered window predates `brief_day`; threaded into the template so
+    # the page itself carries the warning rather than only this task's log.
+    stale_since: str | None = None
 
     print(
         f"[1/4] window — silver.story_clusters + entities + signals "
@@ -113,10 +129,14 @@ def run(
             f" -> {cluster_read.window_end:%m-%d %H:%M}Z"
             f", algo {cluster_read.algo_version}"
         )
-        if window_age > STALE_CLUSTER_HOURS:
+        window_end_local = ensure_utc(cluster_read.window_end).astimezone(BRIEF_TZ)
+        if window_end_local.strftime("%Y-%m-%d") < brief_day:
+            # Not "old" in the abstract — older than the edition it is being rendered into.
+            stale_since = window_end_local.strftime("%Y-%m-%d %H:%M %Z")
             print(
-                f"        WARNING: newest clustered window is {window_age:.0f}h old — "
-                "these are not today's stories"
+                f"        WARNING: newest clustered window ended {stale_since}, before this "
+                f"brief's date ({brief_day}) — the daily chain has not run today. "
+                f"{window_age:.0f}h old; the brief will say so on the page."
             )
     print(
         f"        {window.linked_entities} company links across {len(window.entities)} "
@@ -144,6 +164,11 @@ def run(
         found = enrichment.get(cluster["cluster_id"])
         cluster["summary"] = found.summary if found else None
         cluster["topic"] = found.topic if found else None
+        # SPEC §7.3's five extraction fields were being fetched, deserialized and dropped
+        # here, so the model's only visible output was the summary. `render.facts` picks the
+        # non-null ones off this; the schema treats null as the expected answer, so most
+        # stories still show nothing.
+        cluster["extraction"] = found.extraction if found else None
     # The share of *shown* stories the enrichment cache could answer for. Deliberately not
     # the same number `enrich/run.py` reports: that one is the share of clusters it enriched
     # without calling the model, which is a fact about inference cost. This one is a fact
@@ -160,8 +185,29 @@ def run(
     revisions = revisions or []
     print(f"        {len(revisions)} macro revisions in the last 45 days")
 
+    # SPEC §16.5's second clause, computed rather than remembered. `including` counts the
+    # brief being built right now, which `gold.brief_items` does not know about until after
+    # the render below — see `read_brief_streak`.
+    streak_read, streak_query = optional_read(
+        lambda: read_brief_streak(now, including=date_type.fromisoformat(brief_day), client=client),
+        warning="no gold.brief_items yet — the streak is unknown, not zero",
+        progress=print,
+    )
+    if streak_read is not None:
+        missed = f", {len(streak_read.missing)} missed" if streak_read.missing else ""
+        print(
+            f"        streak {streak_read.describe()} "
+            f"(longest {streak_read.longest}, {streak_read.total_briefs} briefs{missed})"
+        )
+
     print("[4/4] brief  — render + record")
-    charged = (*window.queries, health_query, enrichment_query, revision_query)
+    charged = (
+        *window.queries,
+        health_query,
+        enrichment_query,
+        revision_query,
+        streak_query,
+    )
     health = RunHealth(
         sources=healths,
         articles_in=cluster_read.articles_in,
@@ -178,7 +224,15 @@ def run(
         bytes_scanned=sum(q.bytes_scanned for q in charged),
         estimated_cost_usd=sum(q.cost_usd for q in charged),
     )
-    path = write_brief(ranked, health, settings.out_root, date=date, revisions=revisions)
+    path = write_brief(
+        ranked,
+        health,
+        settings.out_root,
+        date=date,
+        revisions=revisions,
+        stale_since=stale_since,
+        streak=streak_read,
+    )
 
     # Written after rendering, not before: the row records what the reader actually saw,
     # including `included`, which is a property of the cut rather than of the score. This is

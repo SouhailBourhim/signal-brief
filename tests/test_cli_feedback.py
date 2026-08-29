@@ -60,6 +60,13 @@ class _FakeAthena:
         assert operation_name == "get_query_results"
         if "SELECT user_feedback" in self._current:
             return _Paginator(["user_feedback"], [[i["user_feedback"]] for i in self.items])
+        if "SELECT cluster_id, rank, title" in self._current:
+            # `_resolve`'s prefix lookup. Filtered here rather than answered wholesale so a
+            # test can assert that an ambiguous prefix is refused.
+            prefix = self._current.split("LIKE '", 1)[1].split("%'", 1)[0]
+            columns = ["cluster_id", "rank", "title"]
+            rows = [i for i in self.items if (i.get("cluster_id") or "").startswith(prefix)]
+            return _Paginator(columns, [[i.get(c) for c in columns] for i in rows])
         if "SELECT rank, title" in self._current:
             columns = ["rank", "title", "user_feedback"]
             return _Paginator(columns, [[i[c] for c in columns] for i in self.items])
@@ -108,7 +115,10 @@ def test_an_unknown_cluster_fails_loudly_rather_than_succeeding_silently(capsys)
     client = _FakeAthena([])
     assert run_feedback("2026-08-22", "nope", "up", client=client) == 1
     assert not any(q.lstrip().upper().startswith("UPDATE") for q in client.queries)
-    assert "no item for cluster" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    # Phrased as "no item starting with" since 5.C made short ids resolvable; what the test
+    # is actually about is that nothing was written and the id is named back to the reader.
+    assert "no item" in out and "nope" in out
 
 
 def test_an_unknown_mark_is_rejected_before_any_query(capsys):
@@ -141,3 +151,37 @@ def test_list_on_a_date_with_no_brief_is_an_error_not_an_empty_success(capsys):
     client = _FakeAthena([])
     assert run_list("2026-01-01", client=client) == 1
     assert "no brief items recorded" in capsys.readouterr().out
+
+
+# --- short ids (5.C) ------------------------------------------------------------------------
+
+
+def test_a_short_id_read_off_the_page_resolves_to_the_full_one():
+    """ADR-0015 measured one mark across 60 items and named the cause: the page printed no
+    cluster id, so marking meant copying a 64-character hash out of a table the reader could
+    not see. The brief now prints eight characters and this resolves them."""
+    full = "c98e41f4" + "0" * 56
+    client = _FakeAthena([_item(cluster_id=full)])
+    assert run_feedback("2026-08-22", "c98e41f4", "up", client=client) == 0
+    assert f"cluster_id = '{full}'" in client.sql_containing("UPDATE")
+
+
+def test_an_ambiguous_prefix_is_refused_rather_than_guessed(capsys):
+    """A wrong mark feeds `ranker`'s feedback component, the one term that can subtract."""
+    client = _FakeAthena(
+        [
+            _item(cluster_id="abc11111" + "0" * 56, rank="1", title="First"),
+            _item(cluster_id="abc22222" + "0" * 56, rank="2", title="Second"),
+        ]
+    )
+    assert run_feedback("2026-08-22", "abc", "up", client=client) == 1
+    assert not any(q.lstrip().upper().startswith("UPDATE") for q in client.queries)
+    out = capsys.readouterr().out
+    assert "ambiguous" in out and "abc11111" in out and "abc22222" in out
+
+
+def test_a_full_id_still_works_without_a_resolve_query():
+    full = "d" * 64
+    client = _FakeAthena([_item(cluster_id=full)])
+    assert run_feedback("2026-08-22", full, "up", client=client) == 0
+    assert not any("LIKE" in q for q in client.queries)

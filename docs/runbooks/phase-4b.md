@@ -778,8 +778,11 @@ The rehearsal on five days is the next thing to run.
 
 ## Then
 
-**Phase 5**, per SPEC §12: dbt migration of silver→gold, and Kafka **if and only if** §14's
-criteria are met. Its acceptance is 14 consecutive daily briefs — which cannot start counting
+**Phase 5**, per SPEC §12: §14's re-entry criteria measured and written up — dbt, Kafka +
+Structured Streaming, pgvector, weight fitting — **re-added only where a criterion is actually
+met**. (This line used to read "dbt migration of silver→gold, and Kafka if and only if §14's
+criteria are met", which claimed more than §12 does; corrected 2026-08-29, ADR-0015. All five
+were measured and all five refused.) Its acceptance is 14 consecutive daily briefs — which cannot start counting
 until 4A's does, and 4A's did not start until 2026-08-23, for the reason recorded above.
 
 4B carries forward everything it deliberately declined, plus what it found:
