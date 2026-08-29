@@ -62,6 +62,8 @@ def render_brief(
     health: RunHealth,
     date: str | None = None,
     revisions: list[Any] | None = None,
+    *,
+    stale_since: str | None = None,
 ) -> str:
     template = _environment().get_template("brief.html.j2")
     # Cleaned here rather than by whoever assembled the clusters, because every path that
@@ -81,6 +83,10 @@ def render_brief(
         # SPEC §8's payoff line. Defaults to empty so `skeleton.py` — which has no macro
         # store and never will — renders the same template without knowing about it.
         revisions=revisions or [],
+        # When set, the newest clustered window predates this brief's own date — the stories
+        # below are not today's. Defaults to None so `skeleton.py`, which clusters in process
+        # and has no chain to fall behind, renders the same template without knowing about it.
+        stale_since=stale_since,
     )
 
 
@@ -90,9 +96,14 @@ def write_brief(
     out_root: Path,
     date: str | None = None,
     revisions: list[Any] | None = None,
+    *,
+    stale_since: str | None = None,
 ) -> Path:
     date = date or brief_date()
     out_root.mkdir(parents=True, exist_ok=True)
     path = out_root / f"brief-{date}.html"
-    path.write_text(render_brief(clusters, health, date, revisions), encoding="utf-8")
+    path.write_text(
+        render_brief(clusters, health, date, revisions, stale_since=stale_since),
+        encoding="utf-8",
+    )
     return path

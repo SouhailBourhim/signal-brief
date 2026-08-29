@@ -588,9 +588,39 @@ def test_a_stale_clustered_window_says_so(tmp_path, capsys):
         clusters=[_cluster_row(window_end="2026-08-18 05:00:00.000000 UTC")],
         healths=[_health_row()],
     )
-    run(Settings(out_root=tmp_path), limit=5, date="2026-08-20", now=NOW, client=client)
+    path = run(Settings(out_root=tmp_path), limit=5, date="2026-08-20", now=NOW, client=client)
 
-    assert "WARNING: newest clustered window is" in capsys.readouterr().out
+    assert "WARNING: newest clustered window ended" in capsys.readouterr().out
+    # And on the page, not only in the task log. A warning only an operator can see does
+    # not help the one person who reads the brief.
+    assert "These are not today's stories." in path.read_text(encoding="utf-8")
+
+
+def test_yesterdays_clustering_is_stale_even_though_it_is_under_36_hours_old(tmp_path, capsys):
+    """The late-wake case the previous hours-based threshold could not express.
+
+    A window ending 18 hours before the run is well inside the old 36-hour bound, so it
+    passed without comment — but it is the *previous day's* clustering, which is precisely
+    what happens when the host sleeps through the chain and wakes after 16:00 (ADR-0014).
+    The test is the reason the check is a date comparison and not an age.
+    """
+    client = _RoutingAthenaClient(
+        clusters=[_cluster_row(window_end="2026-08-19 18:00:00.000000 UTC")],
+        healths=[_health_row()],
+    )
+    path = run(Settings(out_root=tmp_path), limit=5, date="2026-08-20", now=NOW, client=client)
+
+    assert "WARNING: newest clustered window ended" in capsys.readouterr().out
+    assert "These are not today's stories." in path.read_text(encoding="utf-8")
+
+
+def test_a_fresh_brief_carries_no_stale_banner(tmp_path):
+    """The counterpart to the warning: a banner that is always on is one nobody reads,
+    which is the fault `test_a_fresh_window_does_not_warn` records for the log message."""
+    client = _RoutingAthenaClient(clusters=[_cluster_row()], healths=[_health_row()])
+    path = run(Settings(out_root=tmp_path), limit=5, date="2026-08-20", now=NOW, client=client)
+
+    assert "These are not today's stories." not in path.read_text(encoding="utf-8")
 
 
 def test_a_fresh_window_does_not_warn(tmp_path, capsys):

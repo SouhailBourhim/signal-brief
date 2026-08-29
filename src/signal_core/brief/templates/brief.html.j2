@@ -16,6 +16,15 @@
   header { border-bottom: 2px solid var(--fg); padding-bottom: .75rem; margin-bottom: 2rem; }
   h1 { font-size: 1.6rem; margin: 0; letter-spacing: .02em; }
   .date { color: var(--muted); font-size: .85rem; margin-top: .3rem; }
+  /* Deliberately not muted: this is the one element on the page whose whole job is to be
+     harder to skim past than the stories under it. Same amber as `.thin` in the health
+     table, so "something is off" reads the same way in both places. */
+  .stale { border: 1px solid #9a7b1f; border-left-width: .35rem; background: #fdf8e8;
+           color: #5a4a12; padding: .8rem 1rem; margin-bottom: 2rem; font-size: .9rem; }
+  .stale strong { display: block; margin-bottom: .25rem; }
+  @media (prefers-color-scheme: dark) {
+    .stale { border-color: #d2b45c; background: #241f10; color: #e4d7a8; }
+  }
   article { padding: 1.25rem 0; border-bottom: 1px solid var(--rule); }
   h2 { font-size: 1.08rem; margin: 0 0 .4rem; line-height: 1.35; }
   h2 a { color: inherit; text-decoration: none; }
@@ -70,6 +79,20 @@
     <h1>Signal</h1>
     <div class="date">{{ date }} · {{ clusters|length }} stories</div>
   </header>
+
+  {# The fault this guards is named in `brief/build.py`: an empty brief and a stale one look
+     identical on the page. If the daily chain has not finished today, the stories below are
+     yesterday's while the header still carries today's date — which is the silent failure
+     SPEC §11 argues is the dangerous one. Above the stories, because it changes how every
+     one of them should be read. #}
+  {% if stale_since %}
+  <section class="stale">
+    <strong>These are not today's stories.</strong>
+    The most recent clustering finished {{ stale_since }}, before this brief's date — the
+    daily chain has not completed today. Rankings, entities and summaries below all describe
+    that earlier window. The pipeline health and cost figures at the foot are current.
+  </section>
+  {% endif %}
 
   {# SPEC §8: "payrolls revised down 46k across the prior two months" — the thing coverage
      routinely buries, and which often matters more than the headline print. Above the
