@@ -17,13 +17,22 @@ is a clock time, not "whenever the last upstream table finishes" (`docs/runbooks
 records why `brief` is cron-scheduled rather than asset-triggered off `CLUSTERS_COMMITTED`).
 
 The local chain that has to clear before 16:00, in order: `maintenance` (02:00, off-peak
-compaction) → `market` and `macro` Spark loads (03:30 / 03:40, reading what the morning's
-Lambda polls already staged) → `resolve` (04:30) → `cluster` (05:00, a 72-hour window) →
-`enrich` (06:15, the ranked head only — see
+compaction) → `market` (03:30, reading what the morning's Lambda polls already staged) →
+`macro` → `resolve` → `cluster` (a 72-hour window) → `enrich` (the ranked head only — see
 [ADR-0011](decisions/ADR-0011-enrichment-scope-and-the-first-secret.md) for why not every
-cluster) → `brief` (16:00: rank, render, mail). That is a 45-minute window reserved for
-enrichment before the send — generous against ADR-0003's measured ~1.5 s/head, which puts a
-40-head batch under two minutes end to end — and the send does not wait on it anyway: if
+cluster) → `brief` (16:00: rank, render, mail).
+
+**Only the first and last of those are clock times.** Since
+[ADR-0014](decisions/ADR-0014-daily-chain-ordered-by-assets.md) each middle stage is triggered
+by the asset the stage before it emits, so Airflow enforces the order instead of five cron
+expressions that only look ordered when read side by side — which is precisely what let a
+sleeping laptop run the entire chain against the previous day's bronze on 2026-08-29, green
+the whole way. Each stage still runs exactly once a day, so every "24x the work" objection in
+those DAGs, and SPEC §7.3's "once per pre-brief window", is unaffected. `market` heads the
+chain and blocks until bronze has a commit under two hours old, because a cron only means what
+it says if the machine is awake to see it.
+
+The send does not wait on enrichment: if
 `enrich` is late or Ollama is down, **the brief still renders, without summaries**, rather than
 being late or silent. Degradation, not failure, is the design.
 

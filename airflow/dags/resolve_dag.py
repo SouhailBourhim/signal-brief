@@ -1,10 +1,15 @@
 """Phase 3 DAG: silver.articles -> entity mentions, plus the SCD2 entity dimension.
 SPEC §7.2, §9, §12; docs/runbooks/phase-3.md 3.C.
 
-**Daily cron at 04:30, half an hour ahead of `cluster`.** Same reasoning as that DAG — the
-product is read once a morning, so recomputing on every hourly commit is work nobody sees —
-and the offset is so that 3.D's brief, which joins clusters to entities, finds both tables
-rebuilt from the same day's silver rather than one of them from yesterday.
+**Triggered by `MACRO_DAILY`, once a day, immediately ahead of `cluster`.** Why it is not on
+the hourly `SILVER_COMMITTED` is unchanged: the product is read once a morning, so recomputing
+it on every hourly commit is work nobody sees. Why it is no longer a 04:30 cron is that the
+half-hour offset ahead of `cluster` was doing real work — it is what made 3.D's brief find
+clusters and entities rebuilt from the same day's silver rather than one of them from
+yesterday — and an offset between two crons only holds while the machine is awake for both.
+On 2026-08-29 it was not, both fired together, and the offset guaranteed nothing. `cluster`
+now waits on this DAG's own `MENTIONS_RESOLVED`, which is the guarantee the offset was
+standing in for.
 
 The dimension loads before the mentions, and the order is deliberate even though nothing
 enforces a foreign key: a mention resolved to an entity that `dim_entities` has never heard
@@ -24,14 +29,14 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
-from assets import MENTIONS_RESOLVED, SILVER_COMMITTED
+from assets import MACRO_DAILY, MENTIONS_RESOLVED, SILVER_COMMITTED
 
 RESOLVE_WINDOW_HOURS = 72
 
 
 @dag(
     dag_id="resolve",
-    schedule="30 4 * * *",
+    schedule=MACRO_DAILY,
     start_date=pendulum.datetime(2026, 8, 21, tz="Africa/Casablanca"),
     catchup=False,
     max_active_runs=1,  # two runs overwriting the same partitions would race

@@ -47,3 +47,20 @@ ENRICHMENT_READY = Asset("iceberg://gold/cluster_enrichment")
 # of it. Declared for the same graph-visibility reason as the others — the brief's schedule
 # is a clock time, not a dependency.
 MACRO_COMMITTED = Asset("iceberg://gold/macro_observations")
+
+# --- The daily chain's own signals -------------------------------------------------
+#
+# These exist so the once-a-day stages can be ordered by Airflow rather than by cron times
+# that have to be read side by side and hoped over. They are deliberately *separate* from
+# the assets above: `SILVER_COMMITTED` and `BRONZE_COMMITTED` fire hourly, so scheduling the
+# daily stages on those would trigger them ~24x a day — the exact cost each of those DAGs'
+# docstrings rejects, and what SPEC §7.3 forbids for enrichment. A daily stage emits a daily
+# asset, so the chain runs once per day and in order.
+#
+# The ordering they encode (market -> macro -> resolve -> cluster -> enrich) is the one the
+# cron times already implied (02:30, 02:40, 03:30, 04:00, 05:15 UTC). Nothing about the data
+# dependencies changed; what changed is that the order is now enforced instead of assumed,
+# because a host that sleeps through the small hours wakes up and fires every overdue cron
+# in the same second (see `market_dag`'s gate and `brief_dag`'s docstring).
+MARKET_DAILY = Asset("signal://daily/market-loaded")
+MACRO_DAILY = Asset("signal://daily/macro-loaded")

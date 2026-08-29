@@ -704,6 +704,38 @@ of the specific run that produced it, and it was still an unreliable thing to ha
 because this test could have failed that same run on different hardware. Re-verified clean
 after the fix.
 
+### A sleeping laptop ran the whole daily chain against yesterday's bronze
+
+**2026-08-29.** The host was suspended ~16 hours (21:15 UTC 08-28 to 13:24 UTC 08-29). On
+wake, every `catchup=False` DAG fired its missed slot in the same second: `market`, `macro`,
+`resolve`, `cluster` and `enrich` all started at **13:24:14** and were green by **13:26:38** —
+while `ingest_monitor` was still committing the night's 449 staged objects into bronze. All
+five read pre-sleep data and reported success. Nothing failed and nothing alerted.
+
+`commit_staged` then failed at 13:35:15 on S3 `PutObject` read timeouts (five attempts, one
+"Remote host terminated the handshake") — a network wobble on a just-resumed host, not a data
+fault. Iceberg aborted atomically, so bronze was untouched rather than half-written, and the
+next hourly slot committed cleanly at 13:36:54 in 96 seconds because the failed attempt had
+already warmed the staging cache. **A failed commit here is safe to simply re-run; that is the
+MERGE's whole point.**
+
+The scheduling defect is the finding, and it is not new — ADR-0008's amendment moved the
+brief to 16:00 for the same root cause, which fixed the *send* and left the five upstream
+stages ordered by nothing but the arithmetic between five cron expressions. That arithmetic
+holds only while the machine is awake for all five slots.
+
+Fixed in **ADR-0014**: the daily stages now chain on daily-only assets
+(`market` → `macro` → `resolve` → `cluster` → `enrich`, with `enrich` requiring clusters AND
+mentions), and `market` gained a `wait_for_fresh_bronze` gate that blocks until bronze has a
+snapshot under two hours old. Each stage still runs once a day, so every "24x the work"
+objection in those docstrings — and SPEC §7.3's "once per pre-brief window" — is preserved.
+`brief` stays on its 16:00 cron per SPEC §12. Verified end to end: triggering `market`
+cascaded all four downstream stages by asset, and the gate's own log shows it comparing
+bronze's last commit against its cutoff rather than passing blind.
+
+**Still unmonitored.** This was caught by a person looking, not by an alarm — the same gap the
+row above records. A halted chain is now at least *visible* where a stale-but-green one was not.
+
 ## Acceptance
 
 SPEC §12's 4B gate, item by item. **Not met** — but the two external gates have since
