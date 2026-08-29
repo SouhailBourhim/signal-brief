@@ -524,7 +524,7 @@ SPEC §12's acceptance. Continues 4A's table; the count starts 2026-08-23.
 | **5.0** | Done — 4B.G's gate closed and passing. 4A's three mornings remain, and are calendar |
 | **5.A** | Done — streak computed, both alarms live and verified end to end |
 | **5.B** | Done — ADR-0015, all five §14 deferrals refused with numbers |
-| **5.C** | Novelty shipped, weights rebalanced, feedback made markable, the dedup branch **measured and refused** (ADR-0017). The resolver's `?itemDescription` is carried |
+| **5.C** | Novelty shipped, weights rebalanced, feedback made markable, the dedup branch **measured and refused** (ADR-0017), the resolver's descriptions **measured and refused** (ADR-0018) — ADR-0009's three carried items are all now closed |
 | **5.D** | Done — the import was already applied; the analyst's `gold` access verified by assuming the role |
 | **5.E** | Done |
 
@@ -560,10 +560,10 @@ it — belongs to whoever ran it.
 
 | Item | Why it is still open |
 |---|---|
-| **The resolver's `?itemDescription` and wider candidate set** (ADR-0009 §2) | Needs a WDQS dictionary rebuild and a re-score against the 300 labeled mentions. Not blocked, not done |
+| ~~**The resolver's `?itemDescription` and wider candidate set**~~ | **Measured and refused — ADR-0018.** Of 20 unreachable mentions, 17 are absent from the dictionary and 3 unindexed; a description arbitrates none of them, because it arbitrates *between candidates* and these propose none. Of 6 precision errors it addresses **one**. Two of the six were labeling errors and two were one bug; fixing those took the resolver to **0.944 / 0.630** (held out **1.000 / 0.593**) with no rebuild |
 | **A human review pass over the 100 enrichment labels** | They are stamped `unreviewed`; the dedup and entity sets were reviewed and three were overridden |
 | **4A's three mornings read, with a mark** | Calendar and a reader |
-| **The uncommitted dictionary rebuild** | Scores 0.026/0.018 below the committed snapshot and passes the floors anyway — see above |
+| ~~**The uncommitted dictionary rebuild**~~ | **Resolved and committed — ADR-0018.** It was never worse: `CZZLF` exists only in the rebuild, so the eval was penalising a *correct* link whose label had minted a slug. With the label corrected the ordering reverses, 0.944 against 0.917 |
 | **The 30-day reproducibility backfill** | Bronze starts 2026-08-18, so `signal reproduce --days 30` opens **2026-09-17** |
 
 ## Then

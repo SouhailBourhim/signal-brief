@@ -377,7 +377,15 @@ def resolve(
     # legal form is the better evidence by a distance.
     if dict_module.has_legal_suffix(tokens):
         minted = dict_module.slug(expanded)
-        if minted:
+        # **A minted id needs more than one word.** `has_legal_suffix` places the legal form
+        # near the end; it cannot tell whether what precedes it is a name. `Investment Company
+        # Act Section` puts `company` two from the end exactly as EDGAR's `... LLC SERIES A29`
+        # shape does, and mints `investment` — a statute read as a filer. Requiring two tokens
+        # separates them, and it is the same claim `CONFIDENCE_SINGLE_TOKEN_PENALTY` already
+        # makes about matched aliases: one word is a weaker claim about a span than two.
+        # Nothing is lost by it — an unindexed company whose whole name is one word plus a
+        # legal form is reachable through the CIK its filing states.
+        if minted and "-" in minted:
             candidates.append(Resolution(minted, CONFIDENCE_MINTED, "minted", None, minted))
 
     if not candidates:

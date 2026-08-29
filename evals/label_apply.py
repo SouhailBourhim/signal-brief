@@ -108,6 +108,12 @@ def _apply_mentions(labels: dict[str, Any], labeler: str) -> tuple[int, int]:
         reason = None
         if isinstance(value, list):
             value, reason = value[0], value[1]
+        # Same trail `_relabel_pairs` keeps, and for the same reason: a record has to say who
+        # made the call that stands *and* who made the one it replaced. Mentions are answered
+        # in place, so without this an overridden label looks like it was always this value.
+        previous = record.get("labeler")
+        if previous and previous != labeler and record.get("entity_id") != value:
+            record["reviewed_from"] = previous
         record["entity_id"] = value
         record["unlinked_reason"] = reason
         record["labeler"] = labeler
