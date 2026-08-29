@@ -38,6 +38,7 @@ cache is warm by the time this runs.
 from __future__ import annotations
 
 import time
+from datetime import date as date_type
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,7 @@ from signal_core.brief.items import write_brief_items
 from signal_core.brief.read import (
     CLUSTER_WINDOW_HOURS,
     HEALTH_LOOKBACK_HOURS,
+    read_brief_streak,
     read_health,
     read_macro_revisions,
 )
@@ -162,6 +164,11 @@ def run(
         found = enrichment.get(cluster["cluster_id"])
         cluster["summary"] = found.summary if found else None
         cluster["topic"] = found.topic if found else None
+        # SPEC §7.3's five extraction fields were being fetched, deserialized and dropped
+        # here, so the model's only visible output was the summary. `render.facts` picks the
+        # non-null ones off this; the schema treats null as the expected answer, so most
+        # stories still show nothing.
+        cluster["extraction"] = found.extraction if found else None
     # The share of *shown* stories the enrichment cache could answer for. Deliberately not
     # the same number `enrich/run.py` reports: that one is the share of clusters it enriched
     # without calling the model, which is a fact about inference cost. This one is a fact
@@ -178,8 +185,29 @@ def run(
     revisions = revisions or []
     print(f"        {len(revisions)} macro revisions in the last 45 days")
 
+    # SPEC §16.5's second clause, computed rather than remembered. `including` counts the
+    # brief being built right now, which `gold.brief_items` does not know about until after
+    # the render below — see `read_brief_streak`.
+    streak_read, streak_query = optional_read(
+        lambda: read_brief_streak(now, including=date_type.fromisoformat(brief_day), client=client),
+        warning="no gold.brief_items yet — the streak is unknown, not zero",
+        progress=print,
+    )
+    if streak_read is not None:
+        missed = f", {len(streak_read.missing)} missed" if streak_read.missing else ""
+        print(
+            f"        streak {streak_read.describe()} "
+            f"(longest {streak_read.longest}, {streak_read.total_briefs} briefs{missed})"
+        )
+
     print("[4/4] brief  — render + record")
-    charged = (*window.queries, health_query, enrichment_query, revision_query)
+    charged = (
+        *window.queries,
+        health_query,
+        enrichment_query,
+        revision_query,
+        streak_query,
+    )
     health = RunHealth(
         sources=healths,
         articles_in=cluster_read.articles_in,
@@ -203,6 +231,7 @@ def run(
         date=date,
         revisions=revisions,
         stale_since=stale_since,
+        streak=streak_read,
     )
 
     # Written after rendering, not before: the row records what the reader actually saw,

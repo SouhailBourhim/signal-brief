@@ -550,12 +550,13 @@ def test_run_writes_a_brief_from_the_cluster_tables_with_costs_from_every_query(
 
     assert path == tmp_path / "brief-2026-08-20.html"
     html = path.read_text(encoding="utf-8")
-    # Eight queries as of 4B: clusters, entities, velocity, market, feedback, health, the
-    # enrichment read and the macro revisions. Every one is charged for and every one is in
-    # the footer — a component that reads a table the reader is not told about is a cost SPEC
-    # §10.3 would not see. The count is asserted through the total rather than separately, so
-    # adding a read without accounting for it fails here.
-    assert "25,165,824 bytes scanned" in html
+    # Nine queries as of 5.A: clusters, entities, velocity, market, feedback, health, the
+    # enrichment read, the macro revisions and the brief streak. Every one is charged for and
+    # every one is in the footer — a component that reads a table the reader is not told about
+    # is a cost SPEC §10.3 would not see. The count is asserted through the total rather than
+    # separately, so adding a read without accounting for it fails here, which is how 5.A's
+    # streak read announced itself.
+    assert "28,311,552 bytes scanned" in html
     assert "Northwind" in html
     # The resolved company shows on the story, with its ticker.
     assert "Northwind Corp" in html
@@ -692,4 +693,8 @@ def test_every_render_path_gets_a_cleaned_snippet():
     ]
     html_out = render_brief(clusters, RunHealth(articles_in=1, clusters_out=1), date="2026-08-21")
     assert "Northwind acquires Lumen." in html_out
-    assert "<p>Northwind" not in html_out.replace('<p class="body">', "")
+    # The template autoescapes, so uncleaned markup would surface as visible `&lt;p&gt;`
+    # text under the headline — which is exactly how the bug in `render.snippet`'s docstring
+    # showed up. Asserted on the escaped form rather than on a CSS class, so a restyle
+    # cannot quietly turn this check into a no-op.
+    assert "&lt;p&gt;" not in html_out

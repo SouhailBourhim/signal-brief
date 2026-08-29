@@ -1,178 +1,287 @@
+{#- The daily brief. SPEC §11 (health footer), §16.5 (screenshot-worthy output).
+
+    ## Read this before changing a style
+
+    This document is rendered once and used twice: opened in a browser via `make brief-open`,
+    and mailed byte-identical as the `text/html` part (`brief/mailer.py` sends the file the
+    builder wrote, so the two cannot drift). The mail is the copy that actually gets read
+    (ADR-0013), and Gmail's sanitiser is the binding constraint on everything here:
+
+    - **Every load-bearing style is an inline `style=` attribute with literal hex.** Gmail
+      drops CSS custom properties, so an earlier version of this page built on `var(--fg)`
+      arrived in the inbox with every colour unresolved — unstyled black serif on white. That,
+      not the design, is why the brief looked plain. Colours come from `brief/theme.py`.
+    - **Layout is nested `<table>`, not flex or grid.** Gmail and Outlook support neither.
+    - **`px`, not `rem`** — Outlook's Word engine mishandles `rem`.
+    - The `<style>` block below is progressive enhancement only: dark mode, hover, and the
+      mobile breakpoint. Inline styles outrank a stylesheet, so its overrides need
+      `!important`. Anything that must survive a hostile client goes inline.
+
+    `tests/test_brief_email_safety.py` fails the build if `var(`, `rem` or `display:flex`
+    reappears in the rendered output.
+-#}
+{%- set SANS = "system-ui,-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif" -%}
+{%- set MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" -%}
 <!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
 <title>Signal — {{ date }}</title>
 <style>
-  :root { --bg:#fbfaf8; --fg:#1a1a18; --muted:#6b6b64; --rule:#e2e0da; --accent:#8a5a2b; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg:#16161a; --fg:#e8e6e1; --muted:#9a978f; --rule:#2c2c33; --accent:#d0a068; }
+  body { margin:0; padding:0; -webkit-text-size-adjust:100%; }
+  table { border-collapse:collapse; }
+  a.headline:hover { text-decoration:underline !important; }
+  @media only screen and (max-width:620px) {
+    .wrap { width:100% !important; }
+    .pad { padding:14px 14px 15px !important; }
+    .hide-sm { display:none !important; }
   }
-  * { box-sizing: border-box; }
-  body { background: var(--bg); color: var(--fg); margin: 0;
-         font: 16px/1.55 ui-serif, Georgia, "Times New Roman", serif; }
-  main { max-width: 42rem; margin: 0 auto; padding: 3rem 1.25rem 4rem; }
-  header { border-bottom: 2px solid var(--fg); padding-bottom: .75rem; margin-bottom: 2rem; }
-  h1 { font-size: 1.6rem; margin: 0; letter-spacing: .02em; }
-  .date { color: var(--muted); font-size: .85rem; margin-top: .3rem; }
-  /* Deliberately not muted: this is the one element on the page whose whole job is to be
-     harder to skim past than the stories under it. Same amber as `.thin` in the health
-     table, so "something is off" reads the same way in both places. */
-  .stale { border: 1px solid #9a7b1f; border-left-width: .35rem; background: #fdf8e8;
-           color: #5a4a12; padding: .8rem 1rem; margin-bottom: 2rem; font-size: .9rem; }
-  .stale strong { display: block; margin-bottom: .25rem; }
   @media (prefers-color-scheme: dark) {
-    .stale { border-color: #d2b45c; background: #241f10; color: #e4d7a8; }
-  }
-  article { padding: 1.25rem 0; border-bottom: 1px solid var(--rule); }
-  h2 { font-size: 1.08rem; margin: 0 0 .4rem; line-height: 1.35; }
-  h2 a { color: inherit; text-decoration: none; }
-  h2 a:hover { text-decoration: underline; text-decoration-color: var(--accent); }
-  .meta { color: var(--muted); font-size: .78rem;
-          font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .meta .flag { color: var(--accent); }
-  p.body { margin: .5rem 0 0; color: var(--fg); }
-  /* A summary is model output; a snippet is source text. They are different kinds of claim,
-     so they do not look identical on the page (SPEC 7.3's determinism boundary, made visible
-     to the reader rather than only recorded in lineage). The rule marks which one this is;
-     the fallback to a snippet is what makes a brief still readable when Ollama was off. */
-  p.body.summary { border-left: 2px solid var(--rule); padding-left: .6rem; }
-  .meta .topic { color: var(--accent); }
-  /* SPEC §8's revision block. Monospace and small, like the health footer, because it is a
-     table of numbers rather than prose — and set apart from the stories because it is a
-     different kind of claim: a fact about data being restated, not about an event. */
-  .revisions { margin-bottom: 1.5rem; padding: .75rem 0 .9rem; border-top: 1px solid var(--rule);
-               border-bottom: 1px solid var(--rule);
-               font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .76rem; }
-  .revisions h2 { font-size: .76rem; margin: 0 0 .45rem; color: var(--muted);
-                  font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
-  .revision { color: var(--muted); padding: .12rem 0; }
-  .revision .series { color: var(--fg); }
-  .revision .up { color: #3f7d3f; }
-  .revision .down { color: #a34141; }
-  .revision .vintage { opacity: .75; }
-  @media (prefers-color-scheme: dark) {
-    .revision .up { color: #7ab77a; } .revision .down { color: #e08585; }
-  }
-  /* Companies resolved out of the story's articles (SPEC 7.2). Chips rather than a comma
-     list because the ticker has to read as attached to its company and not to the next one. */
-  p.entities { margin: .45rem 0 0; display: flex; flex-wrap: wrap; gap: .3rem; }
-  .entity { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .72rem;
-            color: var(--muted); border: 1px solid var(--rule); border-radius: 3px;
-            padding: .05rem .35rem; white-space: nowrap; }
-  .entity .ticker { color: var(--accent); }
-  footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--rule);
-           font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .74rem;
-           color: var(--muted); }
-  footer table { border-collapse: collapse; margin-top: .6rem; width: 100%; }
-  footer td { padding: .15rem .6rem .15rem 0; }
-  .ok { color: #3f7d3f; } .thin { color: #9a7b1f; } .degraded { color: #a34141; }
-  @media (prefers-color-scheme: dark) {
-    .ok { color: #7ab77a; } .thin { color: #d2b45c; } .degraded { color: #e08585; }
+    .page { background:{{ palette.page_dark }} !important; }
+    .card { background:{{ palette.card_dark }} !important;
+            border-color:{{ palette.rule_dark }} !important; }
+    .fg-head { color:{{ palette.head_dark }} !important; }
+    .fg-body { color:{{ palette.body_dark }} !important; }
+    .fg-muted { color:{{ palette.muted_dark }} !important; }
+    .bg-head { background:{{ palette.head_dark }} !important; }
+    .bd-rule { border-color:{{ palette.rule_dark }} !important; }
+    .s-ok { color:{{ palette.ok_dark }} !important; }
+    .s-thin { color:{{ palette.thin_dark }} !important; }
+    .s-degraded { color:{{ palette.degraded_dark }} !important; }
+    .p-ok { background:{{ palette.ok_tint_dark }} !important;
+            color:{{ palette.ok_dark }} !important; }
+    .p-thin { background:{{ palette.thin_tint_dark }} !important;
+              color:{{ palette.thin_dark }} !important; }
+    .p-degraded { background:{{ palette.degraded_tint_dark }} !important;
+                  color:{{ palette.degraded_dark }} !important; }
+    .stale { background:{{ palette.stale_bg_dark }} !important;
+             border-color:{{ palette.thin_dark }} !important;
+             color:{{ palette.stale_fg_dark }} !important; }
+    {# One rule per topic, generated from the same map the cards read, so a new topic
+       cannot be styled in light mode and forgotten in dark. #}
+    {% for slug, s in topic_styles.items() %}
+    .t-{{ slug }} { background:{{ s.tint_dark }} !important; color:{{ s.fg_dark }} !important; }
+    .k-{{ slug }} { color:{{ s.fg_dark }} !important; }
+    .b-{{ slug }} { border-left-color:{{ s.fg_dark }} !important; }
+    {% endfor %}
   }
 </style>
 </head>
-<body>
-<main>
-  <header>
-    <h1>Signal</h1>
-    <div class="date">{{ date }} · {{ clusters|length }} stories</div>
-  </header>
+<body style="margin:0;padding:0;background:{{ palette.page }};">
+<table role="presentation" class="page" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background:{{ palette.page }};">
+<tr><td align="center" style="padding:26px 10px 42px;">
+<table role="presentation" class="wrap" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:100%;">
 
-  {# The fault this guards is named in `brief/build.py`: an empty brief and a stale one look
-     identical on the page. If the daily chain has not finished today, the stories below are
-     yesterday's while the header still carries today's date — which is the silent failure
-     SPEC §11 argues is the dangerous one. Above the stories, because it changes how every
-     one of them should be read. #}
+  <tr><td style="padding:0 2px 10px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+      <td align="left" class="fg-head" style="font-family:{{ SANS }};font-size:19px;font-weight:700;letter-spacing:.16em;color:{{ palette.head }};">SIGNAL</td>
+      <td align="right" class="fg-muted" style="font-family:{{ MONO }};font-size:11px;color:{{ palette.muted }};">{{ date }} &nbsp;·&nbsp; {{ clusters|length }} stories{% if streak and streak.current %} &nbsp;·&nbsp; <span class="{{ 's-ok' if streak.is_live else 's-thin' }}" style="color:{{ palette.ok if streak.is_live else palette.thin }};font-weight:700;">{{ streak.describe() }}</span>{% endif %}</td>
+    </tr></table>
+  </td></tr>
+  <tr><td class="bg-head" style="height:2px;line-height:2px;font-size:0;background:{{ palette.head }};">&nbsp;</td></tr>
+  <tr><td style="height:18px;line-height:18px;font-size:0;">&nbsp;</td></tr>
+
+  {#- The fault this guards is named in `brief/build.py`: an empty brief and a stale one look
+      identical on the page. If the daily chain has not finished today, the stories below are
+      yesterday's while the header still carries today's date — the silent failure SPEC §11
+      argues is the dangerous one. Above the stories, because it changes how every one of them
+      should be read, and deliberately not muted: this is the one element on the page whose
+      whole job is to be harder to skim past than the stories under it. Same amber as `thin`
+      in the health table, so "something is off" reads the same way in both places. -#}
   {% if stale_since %}
-  <section class="stale">
-    <strong>These are not today's stories.</strong>
-    The most recent clustering finished {{ stale_since }}, before this brief's date — the
-    daily chain has not completed today. Rankings, entities and summaries below all describe
-    that earlier window. The pipeline health and cost figures at the foot are current.
-  </section>
+  <tr><td style="padding:0 0 14px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="stale" style="background:{{ palette.stale_bg }};border:1px solid {{ palette.thin }};border-left:5px solid {{ palette.thin }};border-radius:10px;color:{{ palette.stale_fg }};">
+      <tr><td class="pad" style="padding:14px 16px 15px;font-family:{{ SANS }};font-size:14px;line-height:1.55;color:{{ palette.stale_fg }};">
+        <strong style="display:block;font-size:15px;margin-bottom:4px;">These are not today's stories.</strong>
+        The most recent clustering finished {{ stale_since }}, before this brief's date — the
+        daily chain has not completed today. Rankings, entities and summaries below all describe
+        that earlier window. The pipeline health and cost figures at the foot are current.
+      </td></tr>
+    </table>
+  </td></tr>
   {% endif %}
 
-  {# SPEC §8: "payrolls revised down 46k across the prior two months" — the thing coverage
-     routinely buries, and which often matters more than the headline print. Above the
-     stories, not below, because a revision is context for everything under it. #}
+  {#- SPEC §8: "payrolls revised down 46k across the prior two months" — the thing coverage
+      routinely buries, and which often matters more than the headline print. Above the
+      stories, not below, because a revision is context for everything under it, and in its own
+      card because it is a different kind of claim: a fact about data being restated, not about
+      an event. -#}
   {% if revisions %}
-  <section class="revisions">
-    <h2>Revised since last month</h2>
-    {% for r in revisions %}
-    <div class="revision">
-      <span class="series">{{ r.series_id }}</span>
-      <span class="period">{{ r.period }}</span>
-      {{ '%g'|format(r.previous_value) }} &rarr; {{ '%g'|format(r.value) }}
-      <span class="{{ 'down' if r.revision_delta < 0 else 'up' }}">
-        {{ '%+g'|format(r.revision_delta) }}
-      </span>
-      <span class="vintage">published {{ r.vintage_date }}</span>
-    </div>
-    {% endfor %}
-  </section>
+  <tr><td style="padding:0 0 14px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="card" style="background:{{ palette.card }};border:1px solid {{ palette.rule }};border-radius:10px;">
+      <tr><td class="pad" style="padding:14px 16px 13px;">
+        <div class="fg-muted" style="font-family:{{ MONO }};font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:{{ palette.muted }};padding-bottom:9px;">Revised since last month</div>
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+          {% for r in revisions %}
+          <tr>
+            <td align="left" class="fg-head" style="padding:3px 8px 3px 0;font-family:{{ MONO }};font-size:12px;font-weight:700;color:{{ palette.head }};white-space:nowrap;">{{ r.series_id }}</td>
+            <td align="left" class="fg-muted" style="padding:3px 8px 3px 0;font-family:{{ MONO }};font-size:12px;color:{{ palette.muted }};white-space:nowrap;">{{ r.period }}</td>
+            <td align="right" class="fg-body" style="padding:3px 8px 3px 0;font-family:{{ MONO }};font-size:12px;color:{{ palette.body }};white-space:nowrap;">{{ '%g'|format(r.previous_value) }} &rarr; {{ '%g'|format(r.value) }}</td>
+            {% if r.revision_delta < 0 %}
+            <td align="right" class="s-degraded" style="padding:3px 8px 3px 0;font-family:{{ MONO }};font-size:12px;font-weight:700;color:{{ palette.degraded }};white-space:nowrap;">&#9660; {{ '%+g'|format(r.revision_delta) }}</td>
+            {% else %}
+            <td align="right" class="s-ok" style="padding:3px 8px 3px 0;font-family:{{ MONO }};font-size:12px;font-weight:700;color:{{ palette.ok }};white-space:nowrap;">&#9650; {{ '%+g'|format(r.revision_delta) }}</td>
+            {% endif %}
+            <td align="right" class="fg-muted hide-sm" style="padding:3px 0;font-family:{{ MONO }};font-size:11px;color:{{ palette.muted }};white-space:nowrap;">published {{ r.vintage_date }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </td></tr>
+    </table>
+  </td></tr>
   {% endif %}
 
   {% for c in clusters %}
-  <article>
-    <h2><a href="{{ c.url_canonical }}">{{ c.title }}</a></h2>
-    <div class="meta">
-      {{ c.publisher_domain }}
-      {% if c.distinct_publisher_count > 1 %}
-        · {{ c.distinct_publisher_count }} publishers ({{ c.publishers|join(', ') }})
-      {% endif %}
-      {% if c.topic %}· <span class="topic">{{ c.topic }}</span>{% endif %}
-      · score {{ '%.2f'|format(c.score) }}
-      {% for k, v in c.score_components.items() %}· {{ k }} {{ '%.2f'|format(v) }}{% endfor %}
-      {% if c.timestamp_flagged %}<span class="flag">· timestamp unverified</span>{% endif %}
-    </div>
-    {% if c.entities %}
-    <p class="entities">
-      {% for e in c.entities %}
-      <span class="entity">{{ e.canonical_name }}{% if e.ticker %} <span class="ticker">{{ e.ticker }}</span>{% endif %}</span>
-      {% endfor %}
-    </p>
-    {% endif %}
-    {% if c.summary %}
-    <p class="body summary">{{ c.summary }}</p>
-    {% else %}
-    <p class="body">{{ c.snippet }}</p>
-    {% endif %}
-  </article>
+  {#- `topic` is nullable: a cluster the enrichment stage never reached has none, and falls
+      back to a styled "unclassified" entry rather than to no styling at all. -#}
+  {%- set slug = c.topic if c.topic in topic_styles else 'unclassified' -%}
+  {%- set st = topic_styles[slug] -%}
+  <tr><td style="padding:0 0 12px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="card b-{{ slug }}" style="background:{{ palette.card }};border:1px solid {{ palette.rule }};border-left:3px solid {{ st.fg }};border-radius:10px;">
+      <tr><td class="pad" style="padding:15px 18px 16px;">
+
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+          <td align="left">
+            <span class="t-{{ slug }}" style="display:inline-block;background:{{ st.tint }};color:{{ st.fg }};font-family:{{ SANS }};font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:3px 9px;border-radius:20px;">{{ st.label }}</span>
+          </td>
+          <td align="right" class="fg-muted" style="font-family:{{ MONO }};font-size:11px;color:{{ palette.muted }};white-space:nowrap;">{{ '%.2f'|format(c.score) }}{% if c.rank %} &nbsp;·&nbsp; #{{ c.rank }}{% endif %}</td>
+        </tr></table>
+
+        <div style="padding:11px 0 0;">
+          <a class="headline fg-head" href="{{ c.url_canonical }}" style="font-family:{{ SANS }};font-size:17px;font-weight:600;line-height:1.35;color:{{ palette.head }};text-decoration:none;">{{ c.title }}</a>
+        </div>
+
+        {#- SPEC §7.3's five extraction fields. Only the non-null ones render: the schema's
+            docstring is explicit that null is the expected answer most of the time, so a row
+            of empty labels would misrepresent an abstention as a missing value. -#}
+        {% if c.facts %}
+        <div style="padding:9px 0 0;">
+          {% for f in c.facts %}<span class="fg-body bd-rule" style="display:inline-block;border:1px solid {{ palette.rule }};border-radius:4px;padding:2px 7px;margin:0 5px 4px 0;font-family:{{ MONO }};font-size:11px;color:{{ palette.body }};white-space:nowrap;">{{ f }}</span>{% endfor %}
+        </div>
+        {% endif %}
+
+        {#- A summary is model output; a snippet is source text. They are different kinds of
+            claim, so they do not look identical on the page — SPEC §7.3's determinism boundary
+            made visible to the reader rather than only recorded in lineage. The *snippet* is
+            the marked one, and it is marked with a word rather than a rule: enrichment now
+            covers effectively every story, so styling the summary would decorate the common
+            case and say nothing, while an unlabelled rule never told the reader which of the
+            two they were looking at. The fallback itself is what keeps a brief readable when
+            Ollama was off. -#}
+        {% if c.summary %}
+        <p class="fg-body" style="margin:9px 0 0;font-family:{{ SANS }};font-size:15px;line-height:1.55;color:{{ palette.body }};">{{ c.summary }}</p>
+        {% else %}
+        <div class="fg-muted" style="font-family:{{ MONO }};font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:{{ palette.muted }};padding:11px 0 4px;">Source excerpt</div>
+        <p class="fg-body bd-rule" style="margin:0;padding-left:10px;border-left:2px solid {{ palette.rule }};font-family:{{ SANS }};font-size:15px;line-height:1.55;color:{{ palette.body }};">{{ c.snippet }}</p>
+        {% endif %}
+
+        {#- Companies resolved out of the story's articles (SPEC §7.2). Chips rather than a
+            comma list because the ticker has to read as attached to its company and not to the
+            next one — inline-block, not flex, which Gmail ignores. -#}
+        {% if c.entities %}
+        <div style="padding:10px 0 0;">
+          {% for e in c.entities %}<span class="fg-muted bd-rule" style="display:inline-block;border:1px solid {{ palette.rule }};border-radius:4px;padding:2px 7px;margin:0 5px 4px 0;font-family:{{ MONO }};font-size:11px;color:{{ palette.muted }};white-space:nowrap;">{{ e.canonical_name }}{% if e.ticker %} <span class="k-{{ slug }}" style="color:{{ st.fg }};font-weight:700;">{{ e.ticker }}</span>{% endif %}</span>{% endfor %}
+        </div>
+        {% endif %}
+
+        {#- SPEC §7.4 wants every ranking decision explainable. It does not want six numbers of
+            which five are `0.00`, which is what the real corpus produces (docs/runbooks/phase-5.md
+            §5.C) and what this line used to print. `if v` keeps whatever actually moved the
+            score and drops the rest — and because it tests truthiness rather than `> 0`, a
+            negative `feedback`, the one component that can subtract, still shows. The full
+            six are recorded unabridged in `gold.brief_items.score_components`. -#}
+        <p class="fg-muted" style="margin:11px 0 0;font-family:{{ MONO }};font-size:11px;line-height:1.75;color:{{ palette.muted }};">
+          {{- c.publisher_domain -}}
+          {%- if c.distinct_publisher_count > 1 %} · {{ c.distinct_publisher_count }} publishers
+            {%- set others = c.publishers | reject('eq', c.publisher_domain) | list -%}
+            {%- if others %} ({{ others[:3] | join(', ') }}{% if others|length > 3 %}, +{{ others|length - 3 }}{% endif %}){% endif -%}
+          {%- endif -%}
+          {%- if c.age %} · {{ c.age }}{% endif -%}
+          {%- for k, v in c.score_components.items() if v %} · {{ k|component_label }}
+            {%- if v < 0 %} <span class="s-degraded" style="color:{{ palette.degraded }};">{{ '%.2f'|format(v) }}</span>
+            {%- else %} <span class="fg-body" style="color:{{ palette.body }};">{{ '%.2f'|format(v) }}</span>{% endif -%}
+          {%- endfor -%}
+          {%- if c.timestamp_flagged %} · <span class="s-thin" style="color:{{ palette.thin }};">timestamp unverified</span>{% endif -%}
+        </p>
+
+      </td></tr>
+    </table>
+  </td></tr>
   {% else %}
-  <article><p class="body">No stories cleared the threshold.</p></article>
+  <tr><td style="padding:0 0 12px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="card" style="background:{{ palette.card }};border:1px solid {{ palette.rule }};border-radius:10px;">
+      <tr><td class="pad fg-muted" style="padding:22px 18px;text-align:center;font-family:{{ SANS }};font-size:15px;color:{{ palette.muted }};">No stories cleared the threshold.</td></tr>
+    </table>
+  </td></tr>
   {% endfor %}
 
-  {# SPEC §11: the quality layer is visible to anyone who opens the output. #}
-  <footer>
-    <strong class="{{ health.status }}">pipeline: {{ health.status }}</strong>
-    · {{ health.articles_in }} articles in
-    · {{ health.clusters_out }} clusters out
-    · dedup {{ health.dedup_ratio }}x
-    {% if health.exact_duplicates_removed is not none %}
-    · {{ health.exact_duplicates_removed }} exact dupes removed
-    {% endif %}
-    · enriched {{ '%.0f'|format(health.enrichment_coverage * 100) }}%
-    · {{ health.runtime_seconds }}s
-    · {{ '{:,}'.format(health.bytes_scanned) }} bytes scanned
-    · ${{ '%.4f'|format(health.estimated_cost_usd) }}
-    <table>
-      {% for s in health.sources %}
-      <tr>
-        <td>{{ s.source_id }}</td>
-        <td class="{{ 'ok' if s.status == 'ok' else ('thin' if s.status == 'thin' else 'degraded') }}">{{ s.status }}</td>
-        <td>{{ s.docs }} docs</td>
-        <td>{% if s.staleness_seconds is none %}never{% else %}{{ s.staleness_seconds }}s ago{% endif %}</td>
-        {# SPEC §11: fetch staleness and content staleness answer different questions, and
-           only the second can see a feed returning 200 with content that never moves. #}
-        <td>{% if s.content_staleness_seconds is not none %}content {{ s.content_staleness_seconds }}s ago{% endif %}</td>
-        {# SPEC §6.3: a gap catch-up could not close is stated, not implied by a thin day. #}
-        <td class="degraded">{{ s.gap_reason or '' }}</td>
-      </tr>
-      {% endfor %}
+  {#- SPEC §11: the quality layer is visible to anyone who opens the output, and compact. -#}
+  <tr><td style="padding:6px 0 0;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="card" style="background:{{ palette.card }};border:1px solid {{ palette.rule }};border-radius:10px;">
+      <tr><td class="pad" style="padding:14px 16px 14px;">
+
+        <span class="p-{{ health.status if health.status in ('ok', 'thin') else 'degraded' }}" style="display:inline-block;background:{{ palette[health.status + '_tint'] if health.status in ('ok', 'thin') else palette.degraded_tint }};color:{{ palette[health.status] if health.status in ('ok', 'thin') else palette.degraded }};font-family:{{ MONO }};font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;padding:3px 9px;border-radius:20px;">pipeline: {{ health.status }}</span>
+
+        <p class="fg-muted" style="margin:10px 0 0;font-family:{{ MONO }};font-size:11px;line-height:1.75;color:{{ palette.muted }};">
+          {{ health.articles_in }} articles in
+          · {{ health.clusters_out }} clusters out
+          · dedup {{ health.dedup_ratio }}x
+          {% if health.exact_duplicates_removed is not none %}
+          · {{ health.exact_duplicates_removed }} exact dupes removed
+          {% endif %}
+          · enriched {{ '%.0f'|format(health.enrichment_coverage * 100) }}%
+          · {{ health.runtime_seconds }}s
+          · {{ '{:,}'.format(health.bytes_scanned) }} bytes scanned
+          · ${{ '%.4f'|format(health.estimated_cost_usd) }}
+        </p>
+
+        {#- SPEC §16.5 asks the README how many consecutive days the brief has run. The number
+            is computed from `gold.brief_items` (`ops/streak.py`), and it reports its own holes
+            on the page: a streak that cannot show what it skipped is one that only ever grows.
+            The missed days are named, not counted, because "1 missed" invites the reader to
+            assume it was the boring one. -#}
+        {% if streak and streak.total_briefs %}
+        <p class="fg-muted" style="margin:7px 0 0;font-family:{{ MONO }};font-size:11px;line-height:1.75;color:{{ palette.muted }};">
+          streak {{ streak.current }}
+          · longest {{ streak.longest }}
+          · {{ streak.total_briefs }} briefs since {{ streak.first_date }}
+          {%- if streak.missing %} · <span class="s-thin" style="color:{{ palette.thin }};">missed {{ streak.missing|join(', ') }}</span>{% endif %}
+        </p>
+        {% endif %}
+
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:11px;">
+          {% for s in health.sources %}
+          {%- set cls = 'ok' if s.status == 'ok' else ('thin' if s.status == 'thin' else 'degraded') -%}
+          <tr>
+            <td align="left" class="fg-body" style="padding:3px 8px 3px 0;font-family:{{ MONO }};font-size:11px;color:{{ palette.body }};">{{ s.source_id }}</td>
+            <td align="left" class="s-{{ cls }}" style="padding:3px 8px 3px 0;font-family:{{ MONO }};font-size:11px;font-weight:700;color:{{ palette[cls] }};">{{ s.status }}</td>
+            <td align="right" class="fg-muted" style="padding:3px 8px 3px 0;font-family:{{ MONO }};font-size:11px;color:{{ palette.muted }};white-space:nowrap;">{{ s.docs }} docs</td>
+            {#- SPEC §11: fetch staleness and content staleness answer different questions, and
+                only the second can see a feed returning 200 with content that never moves. -#}
+            <td align="right" class="fg-muted" style="padding:3px 0;font-family:{{ MONO }};font-size:11px;color:{{ palette.muted }};white-space:nowrap;">
+              {%- if s.staleness_seconds is none %}never{% else %}{{ s.staleness_seconds|duration }} ago{% endif -%}
+              {%- if s.content_staleness_seconds is not none %} · content {{ s.content_staleness_seconds|duration }}{% endif -%}
+            </td>
+          </tr>
+          {#- SPEC §6.3: a gap catch-up could not close is stated, not implied by a thin day.
+              Its own full-width row because `ops/recovery.py` writes a sentence, not a code,
+              and a sentence needs somewhere to wrap. Emitted only when there is one — the
+              previous layout left an empty cell on every healthy source. -#}
+          {% if s.gap_reason %}
+          <tr><td colspan="4" class="s-degraded" style="padding:1px 0 7px;font-family:{{ MONO }};font-size:11px;line-height:1.55;color:{{ palette.degraded }};">{{ s.gap_reason }}</td></tr>
+          {% endif %}
+          {% endfor %}
+        </table>
+
+      </td></tr>
     </table>
-  </footer>
-</main>
+  </td></tr>
+
+</table>
+</td></tr>
+</table>
 </body>
 </html>
