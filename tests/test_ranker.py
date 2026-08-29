@@ -49,11 +49,35 @@ def test_weights_sum_to_one():
     assert sum(WEIGHTS.values()) == 1.0
 
 
-def test_novelty_is_not_a_weighted_component():
-    """ADR-0009 put every embedding in 4B. A lexical stand-in would score near chance while
-    occupying a weight, and a hand-set weight over a near-chance component is worse than an
-    absent one — the score is only explainable if every term means something."""
-    assert "novelty" not in WEIGHTS
+def test_novelty_is_a_weighted_component_and_completes_spec_7_4():
+    """The inverse of the assertion this file carried through 4A and 4B.
+
+    It used to read `assert "novelty" not in WEIGHTS`, pinning ADR-0009's deferral: every
+    embedding was behind Ollama, and a lexical stand-in would have scored near chance while
+    occupying a weight. 5.C landed the Ollama vehicle (ADR-0016), so the pin inverts rather
+    than being deleted — the reason it existed is the reason it can now go.
+    """
+    assert "novelty" in WEIGHTS
+    assert set(WEIGHTS) == {
+        "novelty",
+        "breadth",
+        "velocity",
+        "relevance",
+        "market_corroboration",
+        "feedback",
+        "recency",
+    }
+
+
+def test_breadth_is_a_tiebreaker_not_a_quarter_of_the_score():
+    """5.C measured 99.64% of clusters holding exactly one publisher — 1,674 of 1,680.
+
+    A quarter of the score was resting on a signal this source mix emits for 0.36% of
+    clusters. The weight goes back up when wire sources land, with the measurement that
+    raises it.
+    """
+    assert WEIGHTS["breadth"] == 0.05
+    assert WEIGHTS["breadth"] < WEIGHTS["novelty"]
 
 
 def test_every_weighted_component_is_explained():

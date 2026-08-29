@@ -31,6 +31,17 @@ class Settings(BaseSettings):
     # Pinned, not floating. SPEC §7.3: swapping a model is a measurement, not a vibe.
     ollama_model: str = "llama3.1:8b"
     ollama_model_digest: str = "UNPINNED"
+    # A second, much smaller model, for SPEC §7.4's novelty component and §7.1 stage 3.
+    # Pinned by the same rule and for the same reason (ADR-0016): the embedding is a cache
+    # key, so a silently re-pulled tag would make every cached vector describe a question
+    # nobody can reproduce.
+    ollama_embed_model: str = "nomic-embed-text"
+    # A cache, not a store: losing it costs ~40s of recomputation, which is why it is a local
+    # Parquet file under `data/` and not an Iceberg table. See `enrich/embed.py`.
+    embedding_cache_path: Path = Path("./data/embeddings/heads.parquet")
+    ollama_embed_model_digest: str = (
+        "sha256:970aa74c0a90ef7482477cf803618e776e173c007bf957f635f1015bfcfef0e6"
+    )
 
     aws_region: str = Field(default="us-east-1", alias="AWS_REGION")
 

@@ -205,6 +205,11 @@
             {%- else %} <span class="fg-body" style="color:{{ palette.body }};">{{ '%.2f'|format(v) }}</span>{% endif -%}
           {%- endfor -%}
           {%- if c.timestamp_flagged %} · <span class="s-thin" style="color:{{ palette.thin }};">timestamp unverified</span>{% endif -%}
+          {#- ADR-0015 measured one feedback mark across 60 items and named the cause: marking
+              needs a `cluster_id`, and the page printed none, so the reader was being asked to
+              copy a 64-character hash out of a table they could not see. Eight characters are
+              enough for a ten-row brief, and `signal feedback` resolves a prefix. -#}
+          {%- if c.cluster_id %} · <span style="opacity:.75;">{{ c.cluster_id[:8] }}</span>{% endif -%}
         </p>
 
       </td></tr>
@@ -243,6 +248,11 @@
             on the page: a streak that cannot show what it skipped is one that only ever grows.
             The missed days are named, not counted, because "1 missed" invites the reader to
             assume it was the boring one. -#}
+        {% if clusters %}
+        <p class="fg-muted" style="margin:7px 0 0;font-family:{{ MONO }};font-size:11px;line-height:1.75;color:{{ palette.muted }};">
+          mark a story: <span class="fg-body" style="color:{{ palette.body }};">signal feedback &lt;id&gt; up|down</span>
+        </p>
+        {% endif %}
         {% if streak and streak.total_briefs %}
         <p class="fg-muted" style="margin:7px 0 0;font-family:{{ MONO }};font-size:11px;line-height:1.75;color:{{ palette.muted }};">
           streak {{ streak.current }}

@@ -356,7 +356,68 @@ The section was scoped as "add novelty on top". The diagnosis says otherwise:
    with a measured reason to expect them to matter more than breadth ever will here.
 4. **feedback — surface the `cluster_id`** so the gate in §14 can actually open.
 
-*(pending — implementation)*
+### What shipped
+
+**Novelty, and the weight cut that had to come with it.**
+
+`brief/novelty.py` scores each head against the prior 30 days of distinct cluster heads, and
+`enrich/embed.py` is ADR-0009's Ollama vehicle finally built — `nomic-embed-text`, pinned by
+digest (ADR-0016), with a content-hash cache keyed on the *text* so the same headline
+re-clustered across three consecutive windows is one inference rather than three.
+
+`evals/experiments/novelty_floor.py` fitted the rescaling constant rather than guessing it,
+against 1,680 current heads and 7,011 prior ones:
+
+    min 0.5062 · p10 0.6439 · p25 0.7773 · p50 0.8763 · p75 1.0000 · p90 1.0000
+
+**37.3% of a window scores ≥0.99** — 626 of 1,680 heads are a near-exact repeat of something
+already seen inside a month. `1 - cos` is unusable raw (unrelated English headlines sit near
+0.37, so the whole scale lives in its top fifth), so novelty is rescaled from a measured floor
+of 0.50. The result is spread, not saturated: median 0.25, p25 0.45, p10 0.71, with the exact
+repeats pinned at 0.00. That was 4A.H's condition for adding a term at all.
+
+**Weights, hand-set as §7.4 requires, with the measurement behind each move:**
+
+| | before | after | why |
+|---|---|---|---|
+| `relevance` | 0.25 | 0.25 | live, unquestioned |
+| `recency` | 0.20 | 0.20 | live since ADR-0014 |
+| `novelty` | — | **0.20** | the term that actually varies |
+| `velocity` | 0.10 | 0.10 | works, rarely reaches the cut |
+| `market_corroboration` | 0.10 | 0.10 | unchanged |
+| `feedback` | 0.10 | 0.10 | §14: nudge, not steer |
+| `breadth` | **0.25** | **0.05** | fires on 0.36% of clusters |
+
+Cutting `breadth` is the uncomfortable half and it is the better-evidenced one. A quarter of
+the score was resting on independent-publisher corroboration in a corpus where 99.64% of
+clusters have exactly one publisher — and not because clustering is broken, but because 64% of
+the corpus is single-publisher SEC filings and 30% is Hacker News pointing at 477 distinct
+domains. It becomes a tiebreaker, and the weight goes back up when wire sources land, with the
+measurement that raises it.
+
+`test_novelty_is_not_a_weighted_component` — the pin 4A and 4B both carried — **inverts**
+rather than being deleted. The reason it existed is the reason it can now go.
+
+The first brief built with it reranked visibly: three stories that had never reached the top
+ten did, and the footline now shows three live components instead of two.
+
+**Marking is possible again.** ADR-0015 measured one feedback mark across 60 items and named
+the cause rather than the reader: marking needs a `cluster_id`, and the page printed none, so
+the loop required copying a 64-character hash out of a table nobody could see. The card now
+carries eight characters and `signal feedback` resolves a prefix, refusing an ambiguous one
+rather than guessing — a wrong mark feeds the one component that can subtract. Verified by
+reading an id off the rendered page and marking it.
+
+### Carried out of this section
+
+**ADR-0009's remaining two items are not done**, and neither is blocked:
+
+- **The embedding branch behind `dedup.decide`.** The vehicle now exists and the cache is
+  built, so what remains is wiring it into `dedup.decide` and re-fitting against the 252
+  labeled pairs to see whether the 0.500 held-out recall ceiling actually moves. That is a
+  measurement, and it should not be claimed before it is made.
+- **The resolver's `?itemDescription` and wider candidate set.** A WDQS dictionary rebuild
+  plus a re-score against the 300 labeled mentions.
 
 ## 5.D — Power BI, and the permission that was never present
 

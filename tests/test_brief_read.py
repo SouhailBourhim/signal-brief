@@ -550,13 +550,14 @@ def test_run_writes_a_brief_from_the_cluster_tables_with_costs_from_every_query(
 
     assert path == tmp_path / "brief-2026-08-20.html"
     html = path.read_text(encoding="utf-8")
-    # Nine queries as of 5.A: clusters, entities, velocity, market, feedback, health, the
-    # enrichment read, the macro revisions and the brief streak. Every one is charged for and
-    # every one is in the footer — a component that reads a table the reader is not told about
-    # is a cost SPEC §10.3 would not see. The count is asserted through the total rather than
-    # separately, so adding a read without accounting for it fails here, which is how 5.A's
-    # streak read announced itself.
-    assert "28,311,552 bytes scanned" in html
+    # Ten queries as of 5.C: clusters, entities, velocity, market, feedback, health, the
+    # enrichment read, the macro revisions, the brief streak and novelty's 30-day history.
+    # Every one is charged for and every one is in the footer — a component that reads a table
+    # the reader is not told about is a cost SPEC §10.3 would not see. The count is asserted
+    # through the total rather than separately, so adding a read without accounting for it
+    # fails here, which is how both 5.A's streak read and 5.C's novelty read announced
+    # themselves.
+    assert "31,457,280 bytes scanned" in html
     assert "Northwind" in html
     # The resolved company shows on the story, with its ticker.
     assert "Northwind Corp" in html
