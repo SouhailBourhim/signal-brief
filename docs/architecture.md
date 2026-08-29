@@ -179,14 +179,19 @@ sequenceDiagram
         K-->>A: SILVER_COMMITTED asset
     end
     Note over A,K: daily, not per-commit — a 72h window<br/>recomputed hourly is 24× the work for one read
-    A->>K: 04:30 resolve · 05:00 cluster
+    A->>K: market (03:30, gated on a fresh bronze commit)
+    A->>K: then macro → resolve → cluster → enrich,<br/>each triggered by the one before (ADR-0014)
     A->>R: 16:00 brief
     R-->>A: thumbs up/down (stored, §7.4)
 ```
 
-Clustering and resolution run on a **daily cron rather than off the hourly asset**, and the
-asset is still declared so the dependency is visible in Airflow's graph rather than implied by
-a cron expression.
+Clustering and resolution run **once a day rather than off the hourly asset**, because a
+72-hour window recomputed on every commit is 24× the work for one read. Since
+[ADR-0014](decisions/ADR-0014-daily-chain-ordered-by-assets.md) they are triggered by the daily
+stage before them rather than by a cron of their own, so Airflow enforces the order instead of
+the arithmetic between five cron expressions — which is what let a sleeping laptop run the
+whole chain against the previous day's bronze. The hourly `SILVER_COMMITTED` is still declared
+as an inlet, so the real data dependency stays visible in the graph.
 
 ## What is not built yet
 

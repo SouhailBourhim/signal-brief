@@ -1,14 +1,18 @@
 """Phase 3 DAG: silver.articles -> story clusters. SPEC §7.1, §12;
 docs/runbooks/phase-3.md 3.B.
 
-**Daily cron, not asset-triggered**, and that is the one interesting scheduling decision
-here. `process` emits `SILVER_COMMITTED` every hour, but clustering reads a rolling 72-hour
-window: recomputing it on every commit would do 24x the work for a product that is read
-once a morning. The asset is still declared (`assets.py`) so the dependency is visible in
-Airflow's graph rather than implied by a cron expression.
+**Triggered by `MENTIONS_RESOLVED`, and still not by the hourly `SILVER_COMMITTED`** — that
+remains the one interesting scheduling decision here. `process` emits `SILVER_COMMITTED` every
+hour, but clustering reads a rolling 72-hour window: recomputing it on every commit would do
+24x the work for a product that is read once a morning. So this stays once a day. What changed
+is that it now follows `resolve` explicitly rather than trailing it by a cron offset, because
+an offset between two crons only means anything while the host is awake for both — on
+2026-08-29 it slept through both and they fired together. `SILVER_COMMITTED` stays declared as
+an inlet so the real data dependency is still visible in the graph rather than implied by the
+chain.
 
-05:00 Africa/Casablanca puts the clusters in front of the reader before the brief is opened,
-and inside the window where 4A's 16:00 mail has room to run.
+The clusters still land far ahead of 4A's 16:00 mail, which is the only deadline that matters.
+What they no longer depend on is a 05:00 wall-clock slot the machine may be suspended through.
 
 Re-running is safe by construction: `cluster_window` replaces the window's partitions rather
 than appending, so a manual trigger, a retry, or an overlapping backfill all converge on the
@@ -19,14 +23,14 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
-from assets import CLUSTERS_COMMITTED, SILVER_COMMITTED
+from assets import CLUSTERS_COMMITTED, MENTIONS_RESOLVED, SILVER_COMMITTED
 
 CLUSTER_WINDOW_HOURS = 72
 
 
 @dag(
     dag_id="cluster",
-    schedule="0 5 * * *",
+    schedule=MENTIONS_RESOLVED,
     start_date=pendulum.datetime(2026, 8, 20, tz="Africa/Casablanca"),
     catchup=False,
     max_active_runs=1,  # two runs overwriting the same partitions would race

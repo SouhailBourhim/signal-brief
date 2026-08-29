@@ -6,12 +6,24 @@ Runs the pinned local model over the ranked head of the window, writing
 itself, so a morning where Ollama was off produces a brief without summaries rather than a
 brief that is late.
 
-**06:15, between `cluster` at 05:00 and the brief at 16:00.** §7.3 is explicit that
-enrichment runs "against cluster heads once per pre-brief window, not on every 15-minute
-cycle", so this is a cron rather than an asset trigger on `CLUSTERS_COMMITTED` — a
-15-minute-triggered enrichment would spend the GPU budget re-answering the same questions
-about the same window all day. `CLUSTERS_COMMITTED` and `MENTIONS_RESOLVED` are declared as
-inlets for graph visibility, the way `brief_dag` already declares its own.
+**Triggered by `CLUSTERS_COMMITTED & MENTIONS_RESOLVED` — which is still once per pre-brief
+window.** §7.3 is explicit that enrichment runs "against cluster heads once per pre-brief
+window, not on every 15-minute cycle", and that constraint is unchanged and still binding.
+What satisfies it is the *rate*, not the mechanism: both of these assets are emitted by daily
+stages — `cluster` and `resolve`, once each — so the AND fires exactly once a day. Hanging
+this off the hourly `SILVER_COMMITTED` or `BRONZE_COMMITTED` would spend the GPU budget
+re-answering the same questions about the same window all day, and that remains forbidden.
+
+The old 06:15 cron was picked to sit between `cluster` at 05:00 and the brief at 16:00, and it
+did not survive a sleeping host. On 2026-08-29 the machine woke at 13:24 and Airflow fired
+every overdue cron at once: `cluster` and `enrich` started in the same second, so enrichment
+ran against the *previous* day's cluster heads and reported success. Waiting on the assets is
+what makes "after clustering" true instead of merely likely.
+
+**The AND is load-bearing.** `CLUSTERS_COMMITTED` alone would be enough to order this behind
+`cluster` in today's chain, but the brief joins enrichment to entities, and requiring
+`MENTIONS_RESOLVED` too is what keeps both halves rebuilt from the same day rather than
+letting a re-run of one silently pair with yesterday's other.
 
 **Ollama runs on the host, not in Compose** (ADR-0002: the GPU is why inference is free).
 Compose reaches it at `host.docker.internal:11434` via `SIGNAL_OLLAMA_URL`, which
@@ -36,7 +48,7 @@ CAPACITY_FLOOR_SECONDS = 60.0
 
 @dag(
     dag_id="enrich",
-    schedule="15 6 * * *",
+    schedule=(CLUSTERS_COMMITTED & MENTIONS_RESOLVED),
     start_date=pendulum.datetime(2026, 8, 22, tz="Africa/Casablanca"),
     catchup=False,
     max_active_runs=1,  # two batches against one GPU would contend for VRAM
