@@ -10,8 +10,13 @@ records that decision and what would reverse it.
 
 ![AWS and local deployment topology: the always-on AWS ingestion box next to the local analysis, enrichment and publishing box, the numbered pipeline stages, and the replay/catch-up loop between them](assets/deployment-topology.jpeg)
 
-The raster diagrams in `docs/assets/` predate the current brief schedule and need regeneration.
-The editable diagrams below show the current table lineage and daily sequence; see
+The raster diagrams in `docs/assets/` carry the deployed shape: the 16:00 send, delivery over
+Gmail SMTP ([ADR-0013](decisions/ADR-0013-brief-delivery-over-gmail-smtp.md) — the SES identity
+and role are deleted, not dormant), and the ranker's `novelty` component. They have **no vector
+source** — checked against this repo, its history, and the bundle on `audit/docs-code-reality`,
+all of which hold only JPEGs — so a label that goes stale is repaired in place inside its own
+bounding box rather than redrawn, and the diff is asserted to touch nothing else. The editable
+diagrams below show the current table lineage and daily sequence; see
 [`docs/operations.md`](operations.md) for the schedules and failure semantics they do not show.
 
 ## The system
