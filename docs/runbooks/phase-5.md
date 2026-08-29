@@ -412,10 +412,18 @@ reading an id off the rendered page and marking it.
 
 **ADR-0009's remaining two items are not done**, and neither is blocked:
 
-- **The embedding branch behind `dedup.decide`.** The vehicle now exists and the cache is
-  built, so what remains is wiring it into `dedup.decide` and re-fitting against the 252
-  labeled pairs to see whether the 0.500 held-out recall ceiling actually moves. That is a
-  measurement, and it should not be claimed before it is made.
+- ~~**The embedding branch behind `dedup.decide`.**~~ **Measured and refused — ADR-0017.**
+  The vehicle existed by then, so the question was asked properly for the first time. On the
+  252 labeled pairs no threshold at or above 0.90 changes a single decision, and the 19
+  positives the lexical rule misses (median cosine 0.825) sit *underneath* the hardest true
+  negatives (0.856). 0.85 buys recall 0.568 -> 0.705 and costs precision 0.962 -> 0.912 — and
+  then the corpus measurement settles it: **4,841 false edges across 1,680 heads**, where a
+  spanning tree needs 1,679. 3.B's 59% mega-cluster, on paper instead of in a morning's brief.
+
+  The merges land on templated filing titles a retrieval encoder is *correct* to call similar,
+  in a corpus that is 64% filings. **ADR-0009 §1 is reversed; ADR-0009 §2 is confirmed.** The
+  first measurement was not careless, it was taken on the labeled set alone — the axis 3.B had
+  already shown to be insufficient.
 - **The resolver's `?itemDescription` and wider candidate set.** A WDQS dictionary rebuild
   plus a re-score against the 300 labeled mentions.
 
