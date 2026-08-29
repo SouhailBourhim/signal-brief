@@ -499,7 +499,7 @@ receiving phase's row below, so it is gated by an acceptance test rather than by
 | **3. Cluster + resolve** *(done)* | **3.0 first: a real brief** — the existing renderer pointed at real `silver.articles`, ugly ranking, no enrichment, no email. Then: Spark dedup, clustering, entity resolution; both labeled eval sets committed | Reported precision/recall on both, reproducible via `make eval` — **and you have been reading a real brief every morning since 3.0**, not a fake one |
 | **4A. Publish** *(built 2026-08-22; acceptance pending)* | Ranker over real clusters; HTML brief with §11's health footer, emailed at 16:00; maintenance DAG; **plus the carried-forward items below** | You read it three mornings running and the feedback loop records your marks. Compaction delta measured |
 | **4B. Enrich + macro** *(built 2026-08-22; acceptance pending)* | Ollama stage with content-hash cache, Pydantic validation and evals (§7.3); ALFRED bitemporal macro store (§8) | A 30-day backfill: **bronze bytes, normalization, hashing, simhash and entity resolution reproduce identically; clustering reproduces within a stated tolerance given a recorded ordering key; enrichment resolves from cache with a published hit rate** |
-| **5. Platform polish** | Close 4A's and 4B's acceptances; §14's re-entry criteria **measured and written up** — dbt, Kafka + Structured Streaming, pgvector, weight fitting — re-added only where a criterion is actually met; ADR-0009's three carried items; alerting for the local half; **plus the carried-forward items below** | 14+ consecutive daily briefs; each re-added component has a written before/after justification — **and each refused one has the measurement that refused it** |
+| **5. Platform polish** *(built 2026-08-29; acceptance is calendar)* | Close 4A's and 4B's acceptances; §14's re-entry criteria **measured and written up** — dbt, Kafka + Structured Streaming, pgvector, weight fitting — re-added only where a criterion is actually met; ADR-0009's three carried items; alerting for the local half; **plus the carried-forward items below** | 14+ consecutive daily briefs; each re-added component has a written before/after justification — **and each refused one has the measurement that refused it** |
 
 Phase 4 is the one people skip and the one interviewers probe. It is not optional — which is
 why it is now two phases rather than one ten-item row that can be half-finished and called
@@ -566,17 +566,19 @@ checking the code against the row rather than trusting either.
 
 ### Carried forward into Phase 5
 
-Same rule, one phase on. Every item below is open, recorded in the runbook it came from, and
-named again in `docs/runbooks/phase-5.md` — visible in both places or it is not carried.
+Same rule, one phase on. Every item below was open when Phase 5 opened, recorded in the runbook
+it came from and named again in `docs/runbooks/phase-5.md` — visible in both places or it is not
+carried. **Five closed inside the phase and are struck through with what closed them**, because a
+carried item that simply disappears when it is done leaves no trail that it was ever owed.
 
 | Item | Recorded in | Gates |
 |---|---|---|
 | **30-day reproducibility backfill** — bronze starts 2026-08-18, so the window cannot close before 2026-09-17 | `docs/runbooks/phase-4b.md` | 4B's own acceptance |
-| **100 enrichment examples and the `[enrichment]` floors** — the harness is complete and has never been run; the floors are still `0.0` | `docs/runbooks/phase-4b.md` 4B.G | `make eval` gating §7.3 at all |
-| **ADR-0009's embedding branch behind `dedup.decide`** | ADR-0009 | Dedup recall's 0.500 ceiling |
-| **§7.4's novelty component** — absent from `WEIGHTS` for two phases | `docs/runbooks/phase-4a.md` 4A.H, ADR-0009 | The ranker is five-sixths of its spec |
-| **The resolver's `?itemDescription` and a wider candidate set** | ADR-0009 | Entity recall's 0.630 ceiling |
-| **Nothing alerts on a local DAG failing** — ten hours of dead ingestion produced no signal behind a green AWS console; §11's monitoring covers the AWS half only | `docs/runbooks/phase-4b.md` | §11's whole argument, and the 14-brief streak that rests on it |
+| ~~**100 enrichment examples and the `[enrichment]` floors**~~ **Closed 2026-08-29** — it was never blocked on Ollama but on a query nobody had run. 100 drawn, 95 distinct, **0.747 / 0.782**; floors `0.72 / 0.75` and gating. A human review of the labels is carried | `docs/runbooks/phase-5.md` 5.0 | `make eval` gating §7.3 at all |
+| ~~**ADR-0009's embedding branch behind `dedup.decide`**~~ **Measured and refused 2026-08-29 (ADR-0017)** — asked again through the encoder that actually ships: **4,841 false edges across 1,680 heads**, where a spanning tree needs 1,679 | ADR-0017 | Dedup recall's 0.500 ceiling |
+| ~~**§7.4's novelty component** — absent from `WEIGHTS` for two phases~~ **Shipped 2026-08-29 (5.C)** at weight 0.20, with `breadth` cut 0.25 → 0.05 on the measurement that 99.64% of clusters hold exactly one publisher | `docs/runbooks/phase-5.md` 5.C | The ranker is five-sixths of its spec |
+| ~~**The resolver's `?itemDescription` and a wider candidate set**~~ **Measured and refused 2026-08-29 (ADR-0018)** — it addresses none of the 20 unreachable mentions and one of six precision errors; fixing a label bug and a suffix bug instead took precision to **0.944** | ADR-0018 | Entity recall's 0.630 ceiling |
+| ~~**Nothing alerts on a local DAG failing** — ten hours of dead ingestion produced no signal behind a green AWS console~~ **Closed 2026-08-29 (5.A)** — a task-failure callback *and* a heartbeat-absence alarm, because a frozen scheduler cannot report its own failure; both verified firing | `docs/runbooks/phase-5.md` 5.A | §11's whole argument, and the 14-brief streak that rests on it |
 
 The last one is the sharpest, for the reason 4B gives: §11 argues that silence is the failure
 mode, and the monitoring built for it watches Lambdas — which were fine. The half that broke

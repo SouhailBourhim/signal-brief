@@ -509,6 +509,62 @@ SPEC §16 item 8 asks the README for "a decision you reversed and why". It had A
 cut; it now also has ADR-0017, which is a sharper example because the reversal is of a decision
 *this project made and measured* rather than one it declined to make.
 
+## 5.F — The README as the front door, and the diagrams that contradicted it
+
+**Done 2026-08-30.** 5.E closed four rows in "Measured, not claimed". This is the pass that
+read the whole file against SPEC §16 rather than row by row, and it found two different kinds
+of wrong.
+
+**Drift between sections of the same document.** The header quoted entity resolution at
+0.833 / 0.556 while the table three screens below quoted ADR-0018's corrected 1.000 / 0.593;
+the lead said the enrichment eval "has a harness and no labels yet" above a row scoring it at
+0.747 / 0.782; the cost of one brief appeared as both $0.00014 and $0.0005. Every one of those
+was a row 5.E had updated without re-reading what introduced it. **A file that is edited in
+place, one row at a time, drifts against itself** — which is the same failure the streak had
+in 5.A, one document up.
+
+**Four of §16's eight items were missing rather than stale**, and three of them were missing
+because nobody had run the query:
+
+| §16 item | Was | Now |
+|---|---|---|
+| 3. Throughput, latency p50/p95 | absent | 242–1,682 articles/day (mean ~890) · 1,840 in → 1,680 out · freshness p50 3 min / p95 806 min, per source · fetch → published p50 9 h / p95 31 h |
+| 4. Cost per day | `—` "a full day's total isn't assembled yet" | **$0.16 over 30 days ≈ $0.005/day**, by cost-allocation tag, split by service |
+| 7. "What I'd do differently at 100× volume" | absent | five things in the order they break, each tied to a constraint already recorded here |
+| 8. A decision reversed | a paragraph inside a table | its own section — Kafka, ADR-0017, ADR-0018 |
+
+**The latency row is worth more than the fact that it exists.** Fetch → published in the brief
+reads p50 9 h on 08-29 against p50 42–68 h on the five briefs before it. That is ADR-0014's
+asset chain showing up as a *number the reader feels*, measured from `gold.brief_items` joined
+back to the cluster heads — the same fix 5.C found in the `recency` component, seen from the
+other end. Neither measurement was available to the other.
+
+`signal cost` had never been run against the tag it was built for (4A). The answer took one
+command and closed a row that had carried an em-dash since Phase 4A.
+
+### The diagrams said SES for two days after SES was deleted
+
+`docs/architecture.md` carried a caveat saying the rasters "predate the current brief schedule
+and need regeneration". Checked rather than believed: they were regenerated 2026-08-29 and
+**do** carry the 16:00 send, so the caveat was false — and it was hiding two things that were
+actually wrong. All four diagrams that mention delivery named **Amazon SES**, which
+[ADR-0013](../decisions/ADR-0013-brief-delivery-over-gmail-smtp.md) replaced with Gmail SMTP
+*the day before they were drawn*, and whose identity and role are deleted rather than dormant.
+Two ranker boxes predated `novelty`.
+
+**There is no vector source** — the repo, its history, and the `signal-brief-diagrams-corrected.zip`
+bundle on `audit/docs-code-reality` hold only JPEGs. So the labels were repaired in place, as
+9c33775 did, each inside its measured ink bbox, with the pixel diff against the original
+asserted to touch only those boxes. That check earned its keep immediately: it caught an erase
+that clipped the bar-chart icon, and a ghost `vel` left behind because the lifecycle diagram
+centres its box text rather than left-aligning it. The `LOCAL` badge that replaced the `AWS`
+one is the sibling box's actual pill, copied, so it matches its neighbours exactly instead of
+approximately.
+
+**A caveat that names the wrong staleness is worse than no caveat**, because it reads as
+having been checked. The line now states what the diagrams carry, and that they are repaired
+in place rather than redrawn.
+
 ## The daily read
 
 SPEC §12's acceptance. Continues 4A's table; the count starts 2026-08-23.
@@ -527,6 +583,7 @@ SPEC §12's acceptance. Continues 4A's table; the count starts 2026-08-23.
 | **5.C** | Novelty shipped, weights rebalanced, feedback made markable, the dedup branch **measured and refused** (ADR-0017), the resolver's descriptions **measured and refused** (ADR-0018) — ADR-0009's three carried items are all now closed |
 | **5.D** | Done — the import was already applied; the analyst's `gold` access verified by assuming the role |
 | **5.E** | Done |
+| **5.F** | Done — the README audited against §16 as a whole, four missing items measured, and four diagram labels repaired |
 
 ### Found on the way out: an uncommitted dictionary rebuild that costs 0.026 precision
 
