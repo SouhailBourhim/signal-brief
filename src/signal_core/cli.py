@@ -82,6 +82,11 @@ def main(argv: list[str] | None = None) -> int:
         help="skip the cache stage, which reads through Athena and needs credentials",
     )
 
+    sub.add_parser(
+        "streak",
+        help="consecutive daily briefs, from gold.brief_items (SPEC 16.5)",
+    )
+
     athena_query = sub.add_parser(
         "athena-query", help="run a SQL query against the lake, print rows + bytes scanned + cost"
     )
@@ -153,6 +158,20 @@ def main(argv: list[str] | None = None) -> int:
         # Non-zero on failure so this can gate. The enrichment stage never fails — it
         # publishes a rate rather than gating on one (SPEC §12 asks for the rate).
         return 0 if report.passed else 1
+    if args.command == "streak":
+        from signal_core.brief.read import read_brief_streak
+
+        streak, query = read_brief_streak()
+        print(f"{streak.describe()}  ({streak.total_briefs} briefs, longest {streak.longest})")
+        if streak.first_date:
+            print(f"  first {streak.first_date} · current run from {streak.started}")
+        if streak.missing:
+            # Named, not counted: SPEC 17's rule against inventing a metric applies just as
+            # much to hiding one, and "3 missed" is the shape of a number nobody chases.
+            print(f"  missed: {', '.join(str(d) for d in streak.missing)}")
+        print(f"  {query.bytes_scanned:,} bytes scanned, ${query.cost_usd:.6f}")
+        return 0
+
     if args.command == "athena-query":
         from signal_core.cli_athena import run_athena_query
 

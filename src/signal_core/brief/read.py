@@ -27,6 +27,7 @@ from typing import Any
 from signal_core.config import DEPLOYED_SOURCE_IDS, settings
 from signal_core.ops.athena import QueryResult, run_query
 from signal_core.ops.health import SourceHealth
+from signal_core.ops.streak import Streak, compute_streak
 from signal_core.timeutil import ensure_utc, utc_now
 
 # SPEC §7.1: same-story clustering runs over a time-decayed 72-hour window.
@@ -767,3 +768,42 @@ def read_macro_revisions(
             )
         )
     return revisions, result
+
+
+def read_brief_streak(
+    now: datetime | None = None,
+    *,
+    including: date | None = None,
+    database: str | None = None,
+    workgroup: str | None = None,
+    client: Any | None = None,
+) -> tuple[Streak, QueryResult]:
+    """Consecutive daily briefs, from `gold.brief_items`. SPEC §16.5.
+
+    Reads only `brief_date`, and reads *all* of them rather than a recent window: the longest
+    streak and the list of missed days are both statements about the whole history, and a
+    lookback would silently redefine them the moment the history outgrew it. The column is the
+    table's partition key, so this is a metadata-scale read — it has never scanned more than
+    0.00 MB.
+
+    The counting itself is `ops.streak.compute_streak`, which is pure and tested against fixed
+    dates; this function is only the part that needs an AWS account.
+
+    **`including` exists because of an ordering the caller cannot avoid.** `build.run` writes
+    `gold.brief_items` *after* rendering — deliberately, since the row records what the reader
+    was actually shown — so at render time today's brief is not yet in the table it is about to
+    be in. Without this the page would report "day 2" on the third consecutive morning, every
+    morning, and the number would be wrong in the one direction §16.5 cares about. The caller
+    passes the date it is building; a date already present is a no-op.
+    """
+    now = now or utc_now()
+    result = run_query(
+        "SELECT DISTINCT brief_date FROM gold.brief_items ORDER BY brief_date",
+        database=database or settings.athena_database,
+        workgroup=workgroup or settings.athena_workgroup,
+        client=client,
+    )
+    days = [parsed for row in result.rows if (parsed := _parse_date(row.get("brief_date")))]
+    if including is not None:
+        days.append(including)
+    return compute_streak(days, now.date()), result

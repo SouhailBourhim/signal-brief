@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
+from alerting import DEFAULT_ARGS, on_dag_success
 from assets import CLUSTERS_COMMITTED, ENRICHMENT_READY, MENTIONS_RESOLVED
 
 # ADR-0003 measured ~22.5 s of model load plus ~1.0 s per head on the dev box (RTX 5070 8GB,
@@ -52,6 +53,8 @@ CAPACITY_FLOOR_SECONDS = 60.0
     start_date=pendulum.datetime(2026, 8, 22, tz="Africa/Casablanca"),
     catchup=False,
     max_active_runs=1,  # two batches against one GPU would contend for VRAM
+    default_args=DEFAULT_ARGS,
+    on_success_callback=on_dag_success,
     tags=["phase4b", "enrich"],
 )
 def enrich_dag():

@@ -20,6 +20,7 @@ from __future__ import annotations
 import pendulum
 from airflow.decorators import dag, task
 from airflow.exceptions import AirflowFailException
+from alerting import DEFAULT_ARGS, on_dag_success
 from assets import BRONZE_COMMITTED
 
 # How many past windows form a source's volume baseline. 24 hourly windows is a full day,
@@ -70,6 +71,11 @@ def _volume_baselines(spark, window_start) -> dict[str, float]:
     start_date=pendulum.datetime(2026, 8, 1, tz="UTC"),
     catchup=False,
     max_active_runs=1,  # two runs merging the same staged objects would race the MERGE
+    default_args=DEFAULT_ARGS,
+    # Hourly, so this is the metronome the AWS-side silence alarm keys off: no heartbeat
+    # for three hours means the local scheduler is not running, which is the failure no
+    # on_failure_callback can report (see ops/heartbeat.py).
+    on_success_callback=on_dag_success,
     tags=["phase1", "ingest"],
 )
 def ingest_monitor_dag():

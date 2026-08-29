@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
+from alerting import DEFAULT_ARGS, on_dag_success
 from assets import SILVER_COMMITTED
 
 
@@ -29,6 +30,8 @@ from assets import SILVER_COMMITTED
     start_date=pendulum.datetime(2026, 8, 22, tz="Africa/Casablanca"),
     catchup=False,
     max_active_runs=1,  # two sweeps rewriting the same files would contend
+    default_args=DEFAULT_ARGS,
+    on_success_callback=on_dag_success,
     tags=["phase4a", "maintenance"],
 )
 def maintenance_dag():
