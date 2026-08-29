@@ -130,16 +130,44 @@ def strip_legal_suffix(tokens: tuple[str, ...]) -> tuple[str, ...]:
     return tokens
 
 
+# How far from the end of a name a legal form may sit and still be a *suffix*. Zero would be
+# the literal reading and is wrong for this corpus: EDGAR emits `JS VENTURE FUND LLC SERIES
+# A29`, where a two-token series designator trails the legal form. Two positions of slack is
+# what that shape needs, measured against the span after `resolve.expand` rather than before
+# it — at one, the expanded form lost its link and recall fell through the floor.
+LEGAL_SUFFIX_MAX_FROM_END = 2
+
+
 def has_legal_suffix(tokens: tuple[str, ...]) -> bool:
-    """Whether a name declares a legal form — `Lyntris Inc.`, `Mishpacha Fund, LP`.
+    """Whether a name declares a legal form **as a suffix** — `Lyntris Inc.`, `Mishpacha Fund, LP`.
 
     This is the licence to mint an id for a company the dictionary has never heard of. It is
     also, in this corpus, the line between a company and a person: EDGAR Form 4 and 144
     filers are individuals (`GEE DAVID NICHOLAS`, `Turco Christopher Edward`) and they are
     the largest single source of company-shaped spans, which nothing but the absence of a
     legal form distinguishes from a private company nobody has indexed.
+
+    **Position is checked, and it was not.** This read `any(token in LEGAL_SUFFIXES ...)` —
+    any position — while its name, its docstring and every caller said suffix. `LEGAL_SUFFIXES`
+    contains `company` and `as` (Norwegian *aksjeselskap*), which are also an ordinary English
+    noun and an ordinary English conjunction, so two spans in the labeled set minted companies
+    out of prose (5.C carried):
+
+        `Investment Company Act Section`  ->  minted `investment`   (a statute, not a filer)
+        `As AI becomes harder to avoid`  ->  minted `as-ai`         (a headline)
+
+    Both are rejected by requiring the legal form to sit at or near the end **and** to have at
+    least one token before it — a name needs something to be the name. Checked against every
+    minting positive in the labeled set: all of them carry the legal form last, except EDGAR's
+    `... LLC SERIES A29` shape, which is why the slack is one position and not zero.
     """
-    return any(token in LEGAL_SUFFIXES for token in tokens)
+    if len(tokens) < 2:
+        return False
+    last = len(tokens) - 1
+    return any(
+        token in LEGAL_SUFFIXES and index > 0 and last - index <= LEGAL_SUFFIX_MAX_FROM_END
+        for index, token in enumerate(tokens)
+    )
 
 
 def slug(name: str) -> str:

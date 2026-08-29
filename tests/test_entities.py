@@ -365,3 +365,75 @@ def test_build_is_first_writer_wins_on_a_duplicate_id():
 
     assert built.entities["XRX"].canonical_name == "Xerox Holdings Corp"
     assert built.by_cik["0000108772"] == "XRX"
+
+
+# --- a legal form is a suffix (ADR-0018) --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Lyntris Inc.",
+        "Mishpacha Fund, LP",
+        "SpotWise Data Group LLC",
+        "PIER 88 INVESTMENT PARTNERS LLC",
+        "Chiba Bank, Ltd.",
+        "BofA Finance LLC",
+        # EDGAR's series shape, where a designator trails the legal form. This is the reason
+        # `LEGAL_SUFFIX_MAX_FROM_END` is 2 rather than 0 — measured on the span *after*
+        # `resolve.expand` grows it, which is where the slack is actually needed.
+        "JS VENTURE FUND LLC SERIES A29",
+    ],
+)
+def test_a_real_legal_form_is_still_recognised(name):
+    assert dict_module.has_legal_suffix(dict_module.normalize(name))
+
+
+@pytest.mark.parametrize(
+    ("name", "why"),
+    [
+        ("As AI", "`as` is Norwegian aksjeselskap and an English conjunction, and leads here"),
+        ("Inc", "a legal form with no name in front of it"),
+        ("LLC", "same"),
+    ],
+)
+def test_a_legal_word_in_the_wrong_place_is_not_a_legal_form(name, why):
+    """This read `any(token in LEGAL_SUFFIXES ...)` — any position — while its name, its
+    docstring and every caller said suffix (ADR-0018)."""
+    assert not dict_module.has_legal_suffix(dict_module.normalize(name)), why
+
+
+def test_position_alone_cannot_reject_a_statute():
+    """The division of labour, pinned, because it is not obvious and a test asserted otherwise.
+
+    `Investment Company Act Section` puts `company` exactly as far from the end as EDGAR's
+    `... LLC SERIES A29` shape puts `llc`. No position rule separates them, so
+    `has_legal_suffix` accepts both and the *minting* guard — a minted id must be more than one
+    word — is what rejects the statute.
+    """
+    assert dict_module.has_legal_suffix(dict_module.normalize("Investment Company Act Section"))
+    assert dict_module.slug("Investment Company Act Section") == "investment"
+
+
+def test_a_statute_does_not_mint_a_company(dictionary):
+    """`Investment Company Act Section` minted `investment` — a statute read as a filer."""
+    context = "Item 3C: Investment Company Act Section 3(c) <br>Item 3C.1: Section 3(c)(1)"
+    assert resolve("Section", context, dictionary=dictionary).entity_id is None
+
+
+def test_a_headline_fragment_does_not_mint_a_company(dictionary):
+    context = "AI was supposed to win people over by now — it hasn't As AI becomes harder"
+    assert resolve("As AI", context, dictionary=dictionary).entity_id is None
+
+
+def test_a_minted_id_needs_more_than_one_word(dictionary):
+    """`has_legal_suffix` places the legal form; it cannot tell whether what precedes it is a
+    name. Two tokens is the same claim `CONFIDENCE_SINGLE_TOKEN_PENALTY` makes about aliases.
+
+    Nothing is lost: a one-word company that files is reachable through its stated CIK.
+    """
+    assert resolve("Acme LLC", "Acme LLC filed", dictionary=dictionary).entity_id is None
+    assert (
+        resolve("Acme Data LLC", "Acme Data LLC filed", dictionary=dictionary).entity_id
+        == "acme-data"
+    )

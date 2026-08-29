@@ -80,8 +80,26 @@ min_recall    = 0.55
 #
 #                        precision   recall
 #     train (fitted on)     0.900     0.667
-#     HELD OUT              0.833     0.556     <- the honest estimate
-#     full set              0.868     0.611     <- what `make eval` gates on, below
+#     HELD OUT              1.000     0.593     <- the honest estimate
+#     full set              0.944     0.630     <- what `make eval` gates on, below
+#
+# **Re-measured and ratcheted in the resolver pass after Phase 5 (ADR-0018).** Was
+# 0.833/0.556 held out and 0.868/0.611 full set. Three things moved it, none of them the
+# `?itemDescription` fix ADR-0009 §2 named — that was measured and refused:
+#
+# 1. **Two labels were wrong.** `Cizzle Brands Corp` and `Lyntris Inc.` both state a CIK, and
+#    the resolver linked through it at confidence 1.0 to the tickered entity. SEC's own
+#    `cik-lookup-data.txt` agrees. The labels were minted slugs for companies that already had
+#    canonical entries; corrected, with `reviewed_from` recording what they replaced.
+# 2. **`has_legal_suffix` matched any position** despite its name, so `Investment Company Act
+#    Section` minted `investment` and `As AI` minted `as-ai`. It now requires the legal form
+#    near the end with a token before it, and a minted id to be more than one word.
+# 3. **The dictionary rebuild that 5.C recorded as a regression is the better one.** `CZZLF`
+#    exists only in it, so the eval had been penalising a correct link. With the label fixed
+#    the ordering reverses: 0.944 against the committed snapshot's 0.917.
+#
+# `CONFIDENCE_FLOOR` was re-fitted after the change — 3.E's lesson about changing a constant
+# without re-fitting — and is unchanged at 0.72.
 #
 # Quote the held-out row. The floors gate the full set because that is what the scorer sees,
 # and they sit just under it: they catch a regression, they do not certify the number.
@@ -110,10 +128,13 @@ min_recall    = 0.55
 # Same caveat as `[dedup]`: these labels were made by an LLM assistant and reviewed by the
 # reader. See docs/runbooks/phase-3.md 3.A.
 #
-# Not ratcheted in 3.E, for the reason under `[dedup]`: 54 positive mentions put one example
-# at ~0.019 of recall, and these floors already sit 0.048 and 0.031 below the full set.
-min_precision = 0.82
-min_recall    = 0.58
+# **Ratcheted for the first time since 3.C.** They sat at 0.82 / 0.58, which is 0.124 and
+# 0.050 under the new full set — far enough that the two-mention regression this pass fixed
+# would have gone unnoticed, and one did. 54 positive mentions put one example at ~0.019 of
+# recall and one at ~0.028 of precision, so the new floors keep roughly a mention and a half
+# of slack on each axis: a tripwire on regression, not on relabeling.
+min_precision = 0.90
+min_recall    = 0.60
 
 [enrichment]      # SPEC §7.3 — 100 drawn, 95 distinct, labeled 2026-08-29 (5.0)
 # Carried from 4B.G, where the harness was built and never run. Scored against

@@ -130,7 +130,7 @@ SPEC §15: never publish a metric the pipeline cannot recompute. Current numbers
 |---|---|---|
 | Dedup precision / recall, **real pairs** | **1.000 / 0.500** held out · 0.962 / 0.568 full set (n=252) | `evals/fit_thresholds.py`, labeled 2026-08-20 |
 | Dedup precision / recall, Phase 0 fixture | 1.000 / 1.000 (n=55) | `make eval` — a harness canary, not evidence |
-| **Entity resolution precision / recall** | **0.833 / 0.556** held out · 0.868 / 0.611 full set (n=300) | `evals/fit_thresholds.py --set entities`, labeled 2026-08-20 |
+| **Entity resolution precision / recall** | **1.000 / 0.593** held out · 0.944 / 0.630 full set (n=300) | `evals/fit_thresholds.py --set entities`, labeled 2026-08-20, corrected 2026-08-29 (ADR-0018) |
 | Dedup ratio | 11 → 7 clusters (fake) · 4,296 → 4,253 (real, 1.01x) | `make skeleton` / `signal brief` |
 | Entity resolution, one production window | 20,760 mentions detected over 4,303 articles → 2,509 linked (12.1%), 1,018 distinct companies | `spark/jobs/resolve.py`, real AWS |
 | Cost of one brief | **10 Athena queries, 1.93 MB scanned, $0.0005** | brief footer, real AWS |
@@ -141,7 +141,7 @@ SPEC §15: never publish a metric the pipeline cannot recompute. Current numbers
 | Replay during active catch-up | 4 consecutive hourly MERGEs, each re-reading the full table and inserting only the new rows | `docs/runbooks/phase-1.md` 1.D, real AWS |
 | Catch-up after the same outage | RSS lost 0.0 / 3.6 / 5.3 h of 24.2 h; HN lost nothing | `docs/runbooks/phase-1.md` 1.D, real AWS |
 | Embeddings vs. the lexical same-story rule | **refused on the corpus measurement**: no threshold ≥0.90 changes a decision; 0.85 buys recall 0.568→0.705 and emits **4,841 false edges across 1,680 heads** (a spanning tree needs 1,679) | `evals/experiments/embed_dedup_ollama.py`, ADR-0017 |
-| Embeddings vs. the lexical resolver | no gain at any threshold; ceiling **0.630** recall for any context-scoring rule over this dictionary | `evals/experiments/embed_entities.py`, ADR-0009 |
+| Entity descriptions (`?itemDescription`) | **refused**: of 20 unreachable mentions, 17 are absent from the dictionary and 3 unindexed — a description arbitrates none. Of 6 precision errors, **1** | `evals/experiments/candidate_ceiling.py`, ADR-0018 |
 | LLM stage, first clean batch | 40 heads in **80.2 s**, 0 schema failures; second run 100% cache, 0 model calls | `docs/runbooks/phase-4b.md`, live Ollama |
 | **LLM enrichment precision / recall** | **0.747 / 0.782** (n=95) · topic 0.789 · summary entailed 0.853 | `make eval`, labeled 2026-08-29 — see the caveat below |
 | Cost per day (full pipeline) | — | Phase 4A — pieces above are real, a full day's total isn't assembled yet |
