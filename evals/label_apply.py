@@ -14,6 +14,7 @@ between here and the README.
     uv run python evals/label_apply.py pairs         --labels FILE.json --labeler NAME
     uv run python evals/label_apply.py mentions      --labels FILE.json --labeler NAME
     uv run python evals/label_apply.py relabel-pairs --labels FILE.json --labeler NAME
+    uv run python evals/label_apply.py enrichment    --labels FILE.json --labeler NAME
 """
 
 from __future__ import annotations
@@ -116,9 +117,49 @@ def _apply_mentions(labels: dict[str, Any], labeler: str) -> tuple[int, int]:
     return answered, sum(1 for r in records if "entity_id" not in r)
 
 
+# SPEC §7.3's five extraction fields, written out in full on every record even when every
+# one is null. `score.py` reads them with `.get`, so a sparse record would score identically —
+# but a labeled set where "absent" and "the model correctly abstained" look the same on disk
+# is one nobody can audit by reading it.
+ENRICHMENT_FIELDS = ("company", "amount_usd", "round_type", "headcount_delta", "filing_type")
+
+
+def _apply_enrichment(labels: dict[str, Any], labeler: str) -> tuple[int, int]:
+    """Answer `examples.jsonl` in place, keyed by row index rather than by a label id.
+
+    Unlike pairs and mentions, enrichment labels are three answers per row — `topic`,
+    `summary_ok` and `extraction` — and one of them is not a property of the story at all.
+    **`summary_ok` judges the model's summary**, so it cannot be labeled until
+    `enrichment_predict.py` has run; `topic` and `extraction` are ground truth read off the
+    source and could have been labeled at any time. That asymmetry is why the file is answered
+    in place rather than drained from a candidate queue: a re-run against a new model
+    invalidates a third of each record and none of the rest.
+    """
+    path = EVALS / "enrichment" / "examples.jsonl"
+    records = _read(path)
+
+    answered = 0
+    for index, record in enumerate(records):
+        value = labels.get(str(index))
+        if value is None:
+            continue
+        extraction = value.get("extraction") or {}
+        unknown = set(extraction) - set(ENRICHMENT_FIELDS)
+        if unknown:
+            raise ValueError(f"row {index}: unknown extraction fields {sorted(unknown)}")
+        record["topic"] = value["topic"]
+        record["summary_ok"] = bool(value["summary_ok"])
+        record["extraction"] = {name: extraction.get(name) for name in ENRICHMENT_FIELDS}
+        record["labeler"] = labeler
+        answered += 1
+
+    _write(path, records)
+    return answered, sum(1 for r in records if "topic" not in r)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("which", choices=("pairs", "mentions", "relabel-pairs"))
+    parser.add_argument("which", choices=("pairs", "mentions", "relabel-pairs", "enrichment"))
     parser.add_argument("--labels", type=Path, required=True, help="JSON {id: answer}")
     parser.add_argument("--labeler", required=True, help="who or what made these judgements")
     args = parser.parse_args(argv)
@@ -128,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
         "pairs": _apply_pairs,
         "relabel-pairs": _relabel_pairs,
         "mentions": _apply_mentions,
+        "enrichment": _apply_enrichment,
     }[args.which]
     applied, remaining = apply(labels, args.labeler)
     print(f"{args.which}: applied {applied}, {remaining} still unanswered")

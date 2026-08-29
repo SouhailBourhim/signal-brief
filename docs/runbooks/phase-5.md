@@ -82,7 +82,78 @@ Everything else runs against the clock rather than in a chain.
 
 ## 5.0 — Close Phase 4
 
-*(pending)*
+**4B.G's gate is closed. 4A's remains open and is calendar, not work.**
+
+### The 100 enrichment examples, and why the harness had never run
+
+4B recorded this as "harness built; no labeled examples yet", blocked on Ollama. Ollama had
+been up since 08-25. The first thing 5.0 did was run the sampler, and it failed on the first
+line:
+
+```
+AthenaQueryFailed: COLUMN_NOT_FOUND: line 1:45:
+Column 'snippet' cannot be resolved or requester is not authorized
+```
+
+`sample_enrichment.py` selected a `snippet` column from `silver.story_clusters`, which has no
+body of its own — the head's text lives in `silver.articles`, reached through
+`canonical_article_id`. **So the item was never blocked on Ollama at all.** It was blocked on
+a query nobody had executed, in a script with no test and exactly one caller, whose failure
+needs a real Athena catalog to surface. It had been recorded as blocked on the external
+dependency because that was the last thing anyone had checked.
+
+Same shape as the `brief` DAG being paused and `gold.brief_items` not existing (4A): a
+component that was never wrong, only never run.
+
+### The numbers
+
+100 drawn from a stratified sample (20 SEC, 40 corroborated, 40 single-source), 100
+predictions at 2.04 s each on `llama3.1:8b @ sha256:667b0c1932bc…`, **0% schema failures**.
+
+|  | precision | recall | f1 |
+|---|---|---|---|
+| enrichment, n=95 | **0.747** | **0.782** | 0.764 |
+
+Floors set at 0.72 / 0.75 in `evals/thresholds.toml`; `make eval` gates on them and passes.
+The headline hides the two findings worth having:
+
+- **SEC filings score 100% on topic and worst on extraction.** `filing_type` is wrong on 12 of
+  20 — the model reads the SEC *Item* number off the body (`3C`, `3(c)`) or falls back to
+  `8-K`, when the form type is the first token of the title. The editorial half scores 0.73.
+  A uniform draw would have been ~57% filings and would have published a topic accuracy near
+  0.9 earned on the trivially classifiable half. **The stratified cap is what made the number
+  honest**, and this is the first time it has been exercised.
+- **`company` false-positives 17 times and always the same way**: the publisher domain read as
+  the subject — `github.com` → "GitHub", `clinch.sh` → "Clinch.sh". §7.3 says "as named in the
+  text"; the domain is not the text.
+
+And one non-finding that is worth as much: **`round_type` scored 95 true negatives and no
+positives.** The field never fires because this corpus has no funding-round language. That is
+precisely the abstention `enrich/schema.py` argues nullability exists for, now measured rather
+than assumed.
+
+### n=95, not 100
+
+The draw returned 100 rows and the scorer reported 95. Clustering runs a rolling 72-hour
+window, so the same story is re-clustered under a new `cluster_id` on three consecutive days
+with identical head text — and `input_hash` is content-keyed, so five pairs collapsed. Nothing
+was wrong with the score (the duplicate labels agree), but the sample was 5% smaller than it
+claimed, and two disagreeing labels for the same question would have been resolved by file
+order. `sample_enrichment.py` now dedupes on the input text before stratifying.
+
+### The caveat, stated where it will be read
+
+These labels were made by **an LLM assistant and have not been reviewed by a human**.
+`labeler` is stamped `claude-opus-5 (assistant), unreviewed` on every record. The dedup and
+entity sets carry the same caveat with one difference: the reader reviewed those and overrode
+three. A review pass here is **carried forward**, and the README must not quote 0.747/0.782 as
+though it were ground truth.
+
+### What is still open in 4A
+
+Three mornings read with a mark recorded. That is calendar and a reader, not work — and the
+reader has explicitly deprioritised it. `gold.brief_items` holds 1 mark across 60 items, which
+ADR-0015 uses to refuse §14's weight-fitting re-entry. Carried.
 
 ## 5.A — The streak, computed; the local half, loud
 
