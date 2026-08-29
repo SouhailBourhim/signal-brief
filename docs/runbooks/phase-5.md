@@ -528,6 +528,34 @@ SPEC §12's acceptance. Continues 4A's table; the count starts 2026-08-23.
 | **5.D** | Done — the import was already applied; the analyst's `gold` access verified by assuming the role |
 | **5.E** | Done |
 
+### Found on the way out: an uncommitted dictionary rebuild that costs 0.026 precision
+
+`warehouse/entities/dictionary.json.gz` is **modified in the working tree and not committed**.
+It was rebuilt 2026-08-29 14:01 UTC — 8,004 SEC entities against the committed snapshot's 7,994
+— by something that predates this phase's work, and it scores worse:
+
+```
+$ uv run python evals/score.py | grep entities            # working tree
+entities  n=300  precision=0.842  recall=0.593  f1=0.696
+
+$ SIGNAL_ENTITY_DICTIONARY_PATH=<committed> … | grep entities
+entities  n=300  precision=0.868  recall=0.611  f1=0.717
+```
+
+Isolated non-destructively through `Settings.entity_dictionary_path` rather than by touching
+the file, because the change is not this phase's to commit or revert.
+
+**Nothing would have caught this.** The `[entities]` floors are 0.82 / 0.58 and both figures
+clear them, so `make eval` is green on a dictionary that is measurably worse than the one the
+README publishes. 3.C already recorded that "more data made it worse" — an alias index is only
+as precise as its rarest junk entry — and this is that finding recurring, silently, through a
+rebuild rather than a code change.
+
+The README's 0.868 / 0.611 remains correct **for the repo**, since CI scores the committed
+snapshot. It is wrong for anyone running `make eval` on this machine right now, which is the
+gap worth naming. Deciding what to do with the rebuild — commit it and re-ratchet, or discard
+it — belongs to whoever ran it.
+
 **Carried out of Phase 5:**
 
 | Item | Why it is still open |
@@ -535,6 +563,7 @@ SPEC §12's acceptance. Continues 4A's table; the count starts 2026-08-23.
 | **The resolver's `?itemDescription` and wider candidate set** (ADR-0009 §2) | Needs a WDQS dictionary rebuild and a re-score against the 300 labeled mentions. Not blocked, not done |
 | **A human review pass over the 100 enrichment labels** | They are stamped `unreviewed`; the dedup and entity sets were reviewed and three were overridden |
 | **4A's three mornings read, with a mark** | Calendar and a reader |
+| **The uncommitted dictionary rebuild** | Scores 0.026/0.018 below the committed snapshot and passes the floors anyway — see above |
 | **The 30-day reproducibility backfill** | Bronze starts 2026-08-18, so `signal reproduce --days 30` opens **2026-09-17** |
 
 ## Then
