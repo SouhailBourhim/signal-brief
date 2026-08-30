@@ -52,6 +52,18 @@ x-airflow-common: &airflow-common
     # Scheduler and api-server have to agree on the token secret; left unset each process
     # invents its own and the workers are rejected. Local-only stack, hence a default.
     AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-signal-local-dev}
+    # The same failure as the JWT secret above, one layer down. Left unset, every container
+    # generates its own fernet key into its own airflow.cfg — measured 2026-08-30, the
+    # scheduler, api-server and dag-processor each held a different one. A Variable written
+    # by a task through the api-server then reads back from the scheduler as
+    # "does not exist" rather than as a decryption error, and `--force-recreate` silently
+    # invalidates every stored value at once.
+    #
+    # `brief_dag`'s "already sent today" marker is a Variable, so this is precisely what
+    # stops a restart from re-mailing the day's brief. Local-only stack protecting no real
+    # secret (the macro API key lives in SSM, not here), hence a committed default —
+    # override per-machine with AIRFLOW_FERNET_KEY in .env, as .env.example describes.
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-x4HVl5Kha-_vT7CqcicQPn8jYN3COjqKyHCM26WxqwY=}
     PYTHONPATH: /opt/signal/src
     # The DAGs folder is a bind mount from the host, so bytecode written there is written
     # into the repo — by a container uid the host user does not own. `airflow/dags/__pycache__`
@@ -97,6 +109,12 @@ x-airflow-common: &airflow-common
     AWS_REGION: ${AWS_REGION:-us-east-1}
   volumes:
     - ./airflow/dags:/opt/airflow/dags
+    # Task logs, on the host rather than inside the container. Without this they live only
+    # in the container's own filesystem, so `--force-recreate` destroys them — on
+    # 2026-08-30 a `maintenance.sweep` failure left a task_instance row in Postgres and no
+    # log at all to say why. The log of the run that made you restart is exactly the log a
+    # restart must not take with it.
+    - ./airflow/logs:/opt/airflow/logs
     - ./src:/opt/signal/src
     - ./data:/opt/signal/data
     - ./out:/opt/signal/out
@@ -150,7 +168,32 @@ services:
     # AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS (username:role) and generates the password
     # itself. It had been failing on every start, silently, behind a `|| true`.
     # `make airflow-password` prints the current one.
-    command: db migrate
+    # `db migrate`, but not before the DAGs bind mount is actually there.
+    #
+    # Docker Desktop restarts this stack at boot with `restart: unless-stopped`, and on
+    # WSL2 it can beat the host filesystem to it. On 2026-08-30 it did: every bind mount
+    # resolved to an empty directory, so Airflow came up with zero DAGs and stayed that
+    # way for eight hours, reporting `Up` the whole time while nothing ran. A fresh
+    # container mounting the same path saw all twelve files — the paths were right, the
+    # timing was not. `restart:` cannot help, because nothing had crashed.
+    #
+    # Every service below waits on this one completing successfully, so blocking here is
+    # what stops the stack from coming up DAG-less. Waiting rather than failing outright
+    # because the race resolves on its own within seconds; failing after 150s because a
+    # stack that refuses to start is debuggable and one that runs empty is not.
+    command:
+      - bash
+      - -c
+      - |
+        for attempt in $$(seq 1 30); do
+          if compgen -G '/opt/airflow/dags/*.py' > /dev/null; then
+            exec airflow db migrate
+          fi
+          echo "dags mount still empty (attempt $$attempt/30) — waiting for the host filesystem"
+          sleep 5
+        done
+        echo "FATAL: /opt/airflow/dags empty after 150s — refusing to start a DAG-less stack"
+        exit 1
     restart: "no"
 
   airflow-apiserver:
