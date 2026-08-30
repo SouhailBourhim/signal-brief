@@ -35,7 +35,18 @@ from assets import SILVER_COMMITTED
     tags=["phase4a", "maintenance"],
 )
 def maintenance_dag():
-    @task(inlets=[SILVER_COMMITTED])
+    # Retried once, which the per-table error handling below does not cover: `maintain`
+    # swallows a failure *per table*, but everything before it — building the Spark session,
+    # which resolves Iceberg's runtime jar through the Ivy cache — is all-or-nothing.
+    #
+    # On 2026-08-30 that failed after 12 seconds against healthy runs of 400-900, on a
+    # container that had started seconds earlier with a cold `.cache/ivy2`. Re-run
+    # untouched it took 676 s and succeeded. With no retries a cold start like that costs
+    # the whole night's compaction, and this DAG only runs once a day.
+    #
+    # Once, not twice: a second attempt covers a transient session build, while a genuinely
+    # broken sweep would just spend another ten minutes proving it.
+    @task(inlets=[SILVER_COMMITTED], retries=1, retry_delay=pendulum.duration(minutes=5))
     def sweep() -> dict[str, int | str]:
         from signal_core.spark.jobs.maintain import maintain
         from signal_core.spark.session import build_iceberg_session

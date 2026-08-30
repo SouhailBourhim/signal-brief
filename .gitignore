@@ -48,3 +48,5 @@ CLAUDE.md
 .claude/
 
 /node_modules/
+# Airflow task logs, bind-mounted from docker-compose so they survive a recreate
+airflow/logs/
