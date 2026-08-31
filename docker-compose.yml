@@ -168,32 +168,14 @@ services:
     # AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS (username:role) and generates the password
     # itself. It had been failing on every start, silently, behind a `|| true`.
     # `make airflow-password` prints the current one.
-    # `db migrate`, but not before the DAGs bind mount is actually there.
     #
-    # Docker Desktop restarts this stack at boot with `restart: unless-stopped`, and on
-    # WSL2 it can beat the host filesystem to it. On 2026-08-30 it did: every bind mount
-    # resolved to an empty directory, so Airflow came up with zero DAGs and stayed that
-    # way for eight hours, reporting `Up` the whole time while nothing ran. A fresh
-    # container mounting the same path saw all twelve files — the paths were right, the
-    # timing was not. `restart:` cannot help, because nothing had crashed.
-    #
-    # Every service below waits on this one completing successfully, so blocking here is
-    # what stops the stack from coming up DAG-less. Waiting rather than failing outright
-    # because the race resolves on its own within seconds; failing after 150s because a
-    # stack that refuses to start is debuggable and one that runs empty is not.
-    command:
-      - bash
-      - -c
-      - |
-        for attempt in $$(seq 1 30); do
-          if compgen -G '/opt/airflow/dags/*.py' > /dev/null; then
-            exec airflow db migrate
-          fi
-          echo "dags mount still empty (attempt $$attempt/30) — waiting for the host filesystem"
-          sleep 5
-        done
-        echo "FATAL: /opt/airflow/dags empty after 150s — refusing to start a DAG-less stack"
-        exit 1
+    # The empty-mount guard deliberately does NOT live here. It did, for one day, and it
+    # did not work: `depends_on` is evaluated by `docker compose up`, not by the Docker
+    # daemon restarting containers at boot, which is the path that actually fails. On
+    # 2026-08-31 the scheduler restarted at 14:09 UTC with an empty mount while this
+    # container had not run since the previous afternoon, and the brief was lost again.
+    # The guard now runs inside each long-running service — see `wait-for-dags`.
+    command: db migrate
     restart: "no"
 
   airflow-apiserver:
@@ -215,14 +197,25 @@ services:
 
   airflow-scheduler:
     <<: *airflow-common
-    command: scheduler
+    # Guarded: refuses to start against an empty DAGs mount and exits, so
+    # `restart: unless-stopped` retries until the host filesystem is there. This is the
+    # container the boot race actually breaks — an empty mount here is a scheduler with
+    # nothing to schedule, which looks identical to a quiet day.
+    # `bash -c` because the image entrypoint prepends `airflow` to whatever it is
+    # given — a bare `wait-for-dags` becomes `airflow wait-for-dags` and dies on an
+    # invalid-choice error. The entrypoint itself must stay (it gives an arbitrary
+    # uid a passwd entry, see airflow-init).
+    command: ["bash", "-c", "exec wait-for-dags airflow scheduler"]
     depends_on:
       airflow-init:
         condition: service_completed_successfully
 
   airflow-dag-processor:
     <<: *airflow-common
-    command: dag-processor
+    # Guarded for the same reason as the scheduler: parsing an empty directory is how a
+    # DAG-less stack looks healthy. The api-server is deliberately left unguarded — it
+    # serves the UI you would use to notice, and is more useful up than restarting.
+    command: ["bash", "-c", "exec wait-for-dags airflow dag-processor"]
     depends_on:
       airflow-init:
         condition: service_completed_successfully
