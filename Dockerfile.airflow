@@ -15,6 +15,12 @@ RUN apt-get update \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 
+# Baked into the image, deliberately: this guard checks the DAGs bind mount, so it cannot
+# itself be mounted from the host — a check that goes missing exactly when the thing it
+# checks goes missing is not a check. See the script for the two outages that motivated it.
+COPY airflow/wait-for-dags.sh /usr/local/bin/wait-for-dags
+RUN chmod 0755 /usr/local/bin/wait-for-dags
+
 USER airflow
 # Pinned to 4.1.x by Iceberg's Spark runtime, exactly as pyproject.toml is — ADR-0006.
 # A container that resolved pyspark 4.2 would fail at the first spark.sql() with
