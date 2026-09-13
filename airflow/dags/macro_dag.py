@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
-from alerting import DEFAULT_ARGS, on_dag_success
+from alerting import DAGRUN_TIMEOUT, DEFAULT_ARGS, on_dag_success
 from assets import BRONZE_COMMITTED, MACRO_COMMITTED, MACRO_DAILY, MARKET_DAILY
 
 # How far back to re-read. Wider than the daily cadence on purpose: the merge is insert-only
@@ -38,6 +38,7 @@ WINDOW_HOURS = 72
     start_date=pendulum.datetime(2026, 8, 22, tz="Africa/Casablanca"),
     catchup=False,
     max_active_runs=1,  # two loads recomputing `is_latest` at once would contend
+    dagrun_timeout=DAGRUN_TIMEOUT,
     default_args=DEFAULT_ARGS,
     on_success_callback=on_dag_success,
     tags=["phase4b", "macro"],

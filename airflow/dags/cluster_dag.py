@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
-from alerting import DEFAULT_ARGS, on_dag_success
+from alerting import DAGRUN_TIMEOUT, DEFAULT_ARGS, on_dag_success
 from assets import CLUSTERS_COMMITTED, MENTIONS_RESOLVED, SILVER_COMMITTED
 
 CLUSTER_WINDOW_HOURS = 72
@@ -35,6 +35,7 @@ CLUSTER_WINDOW_HOURS = 72
     start_date=pendulum.datetime(2026, 8, 20, tz="Africa/Casablanca"),
     catchup=False,
     max_active_runs=1,  # two runs overwriting the same partitions would race
+    dagrun_timeout=DAGRUN_TIMEOUT,
     default_args=DEFAULT_ARGS,
     on_success_callback=on_dag_success,
     tags=["phase3", "cluster"],

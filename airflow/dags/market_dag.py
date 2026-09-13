@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
-from alerting import DEFAULT_ARGS, on_dag_success
+from alerting import DAILY_DAGRUN_TIMEOUT, DEFAULT_ARGS, on_dag_success
 from assets import BRONZE_COMMITTED, MARKET_DAILY, SILVER_COMMITTED
 
 # Wide enough to repair a gap without a backfill: every fetch re-states ~63 trading days,
@@ -49,6 +49,13 @@ BRONZE_MAX_AGE_HOURS = 2
 # Poked in `reschedule` mode, so the wait costs a metadata query every 5 minutes rather than a
 # worker slot held for hours. The timeout is what turns "bronze never came back" into a
 # failure instead of a DAG that waits forever and is discovered by its absence.
+#
+# It is also why this DAG takes `DAILY_DAGRUN_TIMEOUT` rather than the hourly default: a run
+# timeout shorter than the gate's own does not shorten the wait, it *fails* it, and a failed
+# gate halts the entire daily chain. Found on 2026-09-01 by doing exactly that — a 45-minute
+# run timeout killed a legitimate wait for a bronze commit at minute 45, thirteen minutes
+# before the commit landed. `tests/test_dag_recovery.py` pins the two together so a later edit
+# cannot separate them again.
 GATE_POKE_SECONDS = 300
 GATE_TIMEOUT_SECONDS = 4 * 60 * 60
 
@@ -59,6 +66,7 @@ GATE_TIMEOUT_SECONDS = 4 * 60 * 60
     start_date=pendulum.datetime(2026, 8, 22, tz="Africa/Casablanca"),
     catchup=False,
     max_active_runs=1,  # two runs MERGEing the same keys would race
+    dagrun_timeout=DAILY_DAGRUN_TIMEOUT,
     default_args=DEFAULT_ARGS,
     on_success_callback=on_dag_success,
     tags=["phase4a", "market"],

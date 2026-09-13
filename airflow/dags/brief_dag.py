@@ -52,6 +52,17 @@ A laptop that is never on between 16:00 and midnight still misses that day. Carr
 window past midnight would mean mailing a brief dated yesterday, and that is a different
 artifact rather than a late one.
 
+**`due` reads the run's own day rather than the clock, and that is not a nicety
+(2026-09-01).** The window ends at 23:00, but a run *created* at 23:00 can still be
+*executing* at 01:15 if the host suspends in between — and `brief_date()` asked at that
+point returns tomorrow. The 22:00 slot of 2026-08-31 woke at 01:15 and concluded, correctly
+and entirely beside the point, that no brief had yet been sent for 2026-09-01: it was about
+to mail the 2026-09-01 edition, ranked over data that stopped the previous evening, at 1am,
+and then write `brief_last_sent_date = 2026-09-01` and suppress the real 16:00 send later
+that same day. It got as far as `build` before jamming on the same freeze, which is the only
+reason the wrong brief was never delivered. So `due` asks two questions now — is this run's
+slot still today, and has today's brief already gone — and `logical_date` answers the first.
+
 Two tasks rather than one, because they fail differently and only one of them is worth
 retrying: a build failure is a data or query problem, while a send failure is a credential or
 a connection (see `infra/terraform/main/mail.tf`). Splitting them also means the rendered file
@@ -71,7 +82,7 @@ from __future__ import annotations
 import pendulum
 from airflow.decorators import dag, task
 from airflow.sdk import Variable
-from alerting import DEFAULT_ARGS, on_dag_success
+from alerting import DAGRUN_TIMEOUT, DEFAULT_ARGS, on_dag_success
 from assets import CLUSTERS_COMMITTED, ENRICHMENT_READY, MENTIONS_RESOLVED
 
 # The "already sent today" marker. An Airflow Variable rather than a file in `out/`, which
@@ -86,6 +97,7 @@ LAST_SENT_KEY = "brief_last_sent_date"
     start_date=pendulum.datetime(2026, 8, 22, tz="Africa/Casablanca"),
     catchup=False,
     max_active_runs=1,
+    dagrun_timeout=DAGRUN_TIMEOUT,
     default_args=DEFAULT_ARGS,
     on_success_callback=on_dag_success,
     tags=["phase4a", "brief"],
@@ -93,20 +105,34 @@ LAST_SENT_KEY = "brief_last_sent_date"
 def brief_dag():
     @task.short_circuit
     def due() -> bool:
-        """Has today's brief already gone out? If so, skip the rest of the run.
+        """Is this run still in its own day, and has that day's brief already gone out?
 
         Short-circuit rather than a check inside `build`, so a tick on an
         already-sent day costs one Postgres read and never reaches Athena or the
         renderer. Seven of the eight daily ticks normally end here.
         """
+        from airflow.sdk import get_current_context
+
         from signal_core.timeutil import brief_date
 
         today = brief_date()
-        last = Variable.get(LAST_SENT_KEY, default=None)
-        if last == today:
-            print(f"brief for {today} already sent — nothing to do")
+
+        # The day this run's *slot* falls on — which is not the day it is executing on, if
+        # the host was suspended while the slot passed. NULL for a manual trigger in
+        # Airflow 3, and that is the one case where the wall clock is the right answer:
+        # someone asking for a brief now is asking for the one dated now.
+        logical_date = get_current_context()["dag_run"].logical_date
+        edition = brief_date(logical_date) if logical_date else today
+
+        if edition != today:
+            print(f"slot belongs to {edition} but today is {today} — window closed, skipping")
             return False
-        print(f"no brief sent for {today} yet (last sent: {last or 'never'}) — building")
+
+        last = Variable.get(LAST_SENT_KEY, default=None)
+        if last == edition:
+            print(f"brief for {edition} already sent — nothing to do")
+            return False
+        print(f"no brief sent for {edition} yet (last sent: {last or 'never'}) — building")
         return True
 
     @task(inlets=[CLUSTERS_COMMITTED, ENRICHMENT_READY, MENTIONS_RESOLVED])
