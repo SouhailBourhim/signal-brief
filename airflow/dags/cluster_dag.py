@@ -11,7 +11,8 @@ an offset between two crons only means anything while the host is awake for both
 an inlet so the real data dependency is still visible in the graph rather than implied by the
 chain.
 
-The clusters still land far ahead of 4A's 16:00 mail, which is the only deadline that matters.
+The clusters still land far ahead of 4A's afternoon mail, which is the only deadline that
+matters — and ahead of its 13:00 opening since ADR-0020, by seven hours rather than ten.
 What they no longer depend on is a 05:00 wall-clock slot the machine may be suspended through.
 
 Re-running is safe by construction: `cluster_window` replaces the window's partitions rather

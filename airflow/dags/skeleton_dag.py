@@ -14,7 +14,7 @@ from alerting import DAILY_DAGRUN_TIMEOUT, DEFAULT_ARGS, on_dag_success
 
 @dag(
     dag_id="skeleton",
-    # 06:30 local so the brief exists before the 16:00 read (SPEC §1).
+    # 06:30 local so the brief exists before the afternoon read (SPEC §1; ADR-0020).
     schedule="30 6 * * *",
     start_date=pendulum.datetime(2026, 1, 1, tz="Africa/Casablanca"),
     catchup=False,

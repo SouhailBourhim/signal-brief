@@ -76,7 +76,7 @@ def test_a_streak_that_ended_is_reported_as_ended_not_as_shorter():
 
 
 def test_yesterdays_brief_is_still_a_live_streak():
-    """The brief DAG fires at 16:00, so for most of any day the newest brief is yesterday's."""
+    """The brief DAG's window opens at 13:00, so for much of any day the newest is yesterday's."""
     assert compute_streak(days(27, 28), date(2026, 8, 29)).is_live is True
     assert compute_streak(days(26, 27), date(2026, 8, 29)).is_live is False
 

@@ -4,8 +4,8 @@
 
 Signal polls nine public sources every 5–15 minutes, stores every raw response immutably,
 collapses syndicated coverage into ranked story clusters, resolves company mentions to
-tickers, enriches the ranked head of each window with a locally run LLM, and mails a brief at
-16:00 Africa/Casablanca — with replay, catch-up, per-run cost tracking and measured accuracy
+tickers, enriches the ranked head of each window with a locally run LLM, and mails a brief each
+afternoon, from 13:00 Africa/Casablanca — with replay, catch-up, per-run cost tracking and measured accuracy
 built in rather than promised.
 
 ![What Signal is, the problem it answers, and what a morning brief actually contains](docs/assets/project-story.jpeg)
@@ -121,7 +121,7 @@ resolves, enriches, ranks and renders.
 The daily chain is ordered by Airflow **assets**, not by cron times hoped to line up
 (ADR-0014): `market → macro → resolve → cluster → enrich`, with hourly `ingest_monitor`
 committing bronze and `process` normalizing off that commit, maintenance at 02:00, and the
-brief on a 16:00 clock. That ordering is not cosmetic — see the `recency` finding below for
+brief on an afternoon clock. That ordering is not cosmetic — see the `recency` finding below for
 what five independent crons cost.
 
 [`docs/architecture.md`](docs/architecture.md) draws both halves and the table lineage;
@@ -409,8 +409,9 @@ Airflow worker process), not on taste.
 
 **Phases 0 through 5 are built and deployed.** Nine pollers run on schedule and land raw
 payloads in S3; local Spark commits them to Iceberg, normalizes, clusters, resolves entities,
-enriches through Ollama and ranks; the brief has gone out at 16:00 on six of the seven days
-since 2026-08-23, with the missed one named on the page; the
+enriches through Ollama and ranks; the brief has gone out on nine of the twenty-one days
+since 2026-08-23 — a six-day run to 2026-09-01, then eleven days with the laptop
+powered off, which ADR-0020 measures rather than rounds away; the
 infrastructure is Terraform, and applied. All three labeled sets are scored in CI on every PR,
 against floors that ratchet up and never down.
 
@@ -420,7 +421,7 @@ against floors that ratchet up and never down.
 | 1 | Real pollers, staging → Iceberg MERGE, state, monitoring, **replay and catch-up measured against a deliberate 24.2 h outage** | Done |
 | 2 | The lake: normalize, quarantine, Athena, cost tracking, the query measurements | Done |
 | 3 | Story clustering and entity resolution, both **labeled and scored**, plus the fitting procedure that audited itself | Done |
-| 4A | The ranker, the 16:00 mail, nightly maintenance, the feedback CLI | Built; acceptance is three mornings read with marks recorded — calendar |
+| 4A | The ranker, the afternoon mail, nightly maintenance, the feedback CLI | Built; acceptance is three mornings read with marks recorded — calendar |
 | 4B | The governed LLM stage and the bitemporal macro store | Done; enrichment scored 2026-08-29 |
 | 5 | Computed streak, local-half alerting, §14's five deferrals **measured and refused**, novelty + the weight rebalance, Power BI as a reader | Done; gate is 14 consecutive briefs, which lands 2026-09-05 |
 
@@ -467,7 +468,7 @@ rather than a Lambda at 3am.
 | `evals/experiments/` | Measurements that decide a question without shipping a dependency — the embedding trials, the corpus-level false-merge rate a pairwise eval cannot see, the novelty floor |
 | `analytics/powerbi/` | The read-only query set behind ADR-0012 |
 | [`docs/architecture.md`](docs/architecture.md) | What runs where, why the AWS/local line falls there, table lineage, what is deliberately missing |
-| [`docs/operations.md`](docs/operations.md) | How Signal runs day to day: the 16:00 critical path, replay vs. catch-up, failure-to-response |
+| [`docs/operations.md`](docs/operations.md) | How Signal runs day to day: the afternoon critical path, replay vs. catch-up, failure-to-response |
 | [`docs/athena.md`](docs/athena.md) | Querying the lake, and the `SELECT *` vs. projected vs. pruned measurement |
 | [`docs/how-signal-works.md`](docs/how-signal-works.md) | Every phase in plain English — no prior knowledge assumed |
 | [`docs/runbooks/`](docs/runbooks/) | What was actually done per phase, including what broke on first real use |

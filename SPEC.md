@@ -30,7 +30,8 @@ and `docs/archive/PROJECT_START.md` (the narrowed execution plan). Those two dis
 Ingest free news, filing, market, and macro feeds on source-specific schedules. Collapse thousands
 of articles into a few dozen **story clusters**. Resolve the companies mentioned to real tickers.
 Rank clusters by novelty, breadth, velocity, and whether the market actually reacted. Publish a
-brief at **16:00 Africa/Casablanca** that you read every morning and mark up.
+brief each afternoon — the first hour from **13:00 Africa/Casablanca** the machine is
+awake (ADR-0020) — that you read every morning and mark up.
 
 **Success is behavioural, not technical:** the project works when you read it daily for a month
 without maintaining it. Everything below exists to make that true.
@@ -131,7 +132,7 @@ The cadence column above describes source availability. The deployed EventBridge
                     │              ranker ──► brief renderer                 │
                     └───────────────────────┬────────────────────────────────┘
                                             ▼
-                         static HTML + email, 16:00 Africa/Casablanca
+                    static HTML + email, from 13:00 Africa/Casablanca
                                             │
                                  feedback ──┘ (stored; see §7.4)
 
@@ -287,7 +288,7 @@ Governed like any other transform:
   ADR-0003): one-time model load ~23 s, then ~1.0 s/head at ~60 tok/s steady state. A 40-head batch
   is therefore **~1 minute**, comfortably inside the window — well under the ~3-minute figure this
   paragraph assumed before the model was pinned and measured. The DAG asserts this bound and fails
-  loudly rather than silently lagging the 16:00 send.
+  loudly rather than silently lagging the afternoon send.
 
 ### 7.4 Ranking
 
@@ -497,7 +498,7 @@ receiving phase's row below, so it is gated by an acceptance test rather than by
 | **1. Ingest** *(done)* | Terraform-provisioned S3 / Glue / DynamoDB / budgets / alarms; 3 Lambda pollers on schedule; `bronze.raw_documents` Iceberg table; local Airflow coordinating monitoring and recovery | Stop ingestion for a day, restart. **Replay** reprocesses the stored interval with no duplicates and no gaps; **catch-up** recovers what each source's backfill horizon allows and records `gap_reason` for the rest (§6.3). **Passed against the deployed pipeline**, 2026-08-21: a deliberate 24.2 h outage, 23,306 rows re-read and 0 committed, and RSS gaps of 0.0 / 3.6 / 5.3 h recorded rather than hidden — `docs/runbooks/phase-1.md` 1.D |
 | **2. Lake + query** *(done)* | 6 sources; Spark normalize → `silver.articles`, `silver.hn_comments`, `silver.parse_rejects`; Glue-registered Iceberg; Athena serving queries; partitioning rationale documented (ADR-0007); `ops.pipeline_costs` recording bytes scanned and S3 egress | A stranger runs `make up` and answers an ad-hoc question in Athena; bytes scanned and cost recorded for that query |
 | **3. Cluster + resolve** *(done)* | **3.0 first: a real brief** — the existing renderer pointed at real `silver.articles`, ugly ranking, no enrichment, no email. Then: Spark dedup, clustering, entity resolution; both labeled eval sets committed | Reported precision/recall on both, reproducible via `make eval` — **and you have been reading a real brief every morning since 3.0**, not a fake one |
-| **4A. Publish** *(built 2026-08-22; acceptance pending)* | Ranker over real clusters; HTML brief with §11's health footer, emailed at 16:00; maintenance DAG; **plus the carried-forward items below** | You read it three mornings running and the feedback loop records your marks. Compaction delta measured |
+| **4A. Publish** *(built 2026-08-22; acceptance pending)* | Ranker over real clusters; HTML brief with §11's health footer, emailed on the first hourly slot from 13:00 the host is awake (ADR-0020); maintenance DAG; **plus the carried-forward items below** | You read it three mornings running and the feedback loop records your marks. Compaction delta measured |
 | **4B. Enrich + macro** *(built 2026-08-22; acceptance pending)* | Ollama stage with content-hash cache, Pydantic validation and evals (§7.3); ALFRED bitemporal macro store (§8) | A 30-day backfill: **bronze bytes, normalization, hashing, simhash and entity resolution reproduce identically; clustering reproduces within a stated tolerance given a recorded ordering key; enrichment resolves from cache with a published hit rate** |
 | **5. Platform polish** *(built 2026-08-29; acceptance is calendar)* | Close 4A's and 4B's acceptances; §14's re-entry criteria **measured and written up** — dbt, Kafka + Structured Streaming, pgvector, weight fitting — re-added only where a criterion is actually met; ADR-0009's three carried items; alerting for the local half; **plus the carried-forward items below** | 14+ consecutive daily briefs; each re-added component has a written before/after justification — **and each refused one has the measurement that refused it** |
 
@@ -526,8 +527,8 @@ The brief appears in Phase 3 and improves monotonically, rather than arriving at
 |---|---|---|---|
 | **3.0** | `silver.articles` | recency + breadth (Phase 0's ranker, unchanged) | `make brief` |
 | **3.x** | real clusters, resolved entities | same | `make brief` |
-| **4A** | same | §7.4's full component set | email, 16:00 |
-| **4B** | + enrichment, + macro revisions | same | email, 16:00 |
+| **4A** | same | §7.4's full component set | email, from 13:00 |
+| **4B** | + enrichment, + macro revisions | same | email, from 13:00 |
 
 §1's success criterion is behavioural — *read daily for a month without maintaining it* —
 and calendar time is the one input that cannot be compressed by working harder. So the

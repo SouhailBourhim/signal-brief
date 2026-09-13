@@ -32,7 +32,7 @@ from datetime import date, timedelta
 from itertools import pairwise
 
 # How stale the newest brief may be before the streak is considered broken rather than
-# merely not-yet-run-today. The brief DAG fires at 16:00 (ADR-0010's amendment), so for most
+# merely not-yet-run-today. The brief DAG's window opens at 13:00 (ADR-0020), so for over half
 # of any given day the newest brief is legitimately yesterday's.
 LIVE_TOLERANCE_DAYS = 1
 
