@@ -1,9 +1,10 @@
-"""Phase 4A DAG: build the brief and mail it at 16:00. SPEC §12; ADR-0002, ADR-0010.
+"""Phase 4A DAG: build the brief and mail it in the afternoon. SPEC §12; ADR-0002, ADR-0010,
+ADR-0020.
 
 **Cron, not asset-triggered**, and this is the one scheduling decision in the phase worth
 arguing. `assets.py` anticipates the brief consuming `CLUSTERS_COMMITTED`, and the dependency
-is real — but SPEC §12's acceptance says "emailed at **16:00**", which is a clock time, not
-"whenever clustering last finished". Asset-triggering would also risk a second send if either
+is real — but SPEC §12's acceptance is a **clock time**, not "whenever clustering last
+finished". Asset-triggering would also risk a second send if either
 upstream table were rebuilt later the same day by a manual trigger or a backfill, and a
 duplicate brief in the inbox is worse than a late one.
 
@@ -21,19 +22,21 @@ containers never died; they were frozen with the host, which reports them as `Up
 whole time.
 
 A clock time only works if the machine is awake to see it, so the send moved to an hour the
-reader is demonstrably at the keyboard. The upstreams are deliberately left at 02:00 to
-06:15: they catch up whenever the host wakes, and that now has until 16:00 to happen rather
-than the 45 minutes it had behind `enrich`. The wider gap is the point, not a side effect.
+reader is demonstrably at the keyboard — 16:00 then, 13:00 since ADR-0020 went and *measured*
+when the keyboard is actually occupied (last section below). The upstreams are deliberately
+left at 02:00 to 06:15: they catch up whenever the host wakes, and that now has until 13:00 to
+happen rather than the 45 minutes it had behind `enrich`. The wider gap is the point, not a
+side effect.
 
-**16:00, or the first hour after it the laptop is actually awake.**
-Moving the send to 16:00 made the miss less likely; it did not make it impossible. A cron
+**13:00, or the first hour after it the laptop is actually awake.**
+Opening the window in the afternoon made the miss less likely; it did not make it impossible. A cron
 fires only if the machine is up to see it, and `catchup=False` means a slot passed while the
 host was suspended is never retried — the brief for that day simply does not go. That is the
 missing 2026-08-26 in the streak the README reports.
 
-So the schedule is an hourly *window*, 16:00 to 23:00, in front of a short-circuit that asks
-one question: has today's brief already been mailed? On a day the laptop is awake at 16:00
-nothing changes — the 16:00 run sends and the seven behind it short-circuit in a second each.
+So the schedule is an hourly *window*, 13:00 to 23:00, in front of a short-circuit that asks
+one question: has today's brief already been mailed? On a day the laptop is awake at 13:00
+nothing changes — the 13:00 run sends and the ten behind it short-circuit in a second each.
 On a day it wakes at 19:20, `catchup=False` creates the 19:00 run the moment the scheduler is
 back, which is the same "resumed mid-stride and fired at once" behaviour that produced the
 13:59 brief above, used on purpose this time.
@@ -46,11 +49,37 @@ The marker is an Airflow Variable written only after `mail` returns, never after
 the question is "was it sent", not "was it rendered", and those two differ in exactly the case
 where a retry is what you want. It lives in Airflow's own Postgres, so it survives `make
 clean` and a container restart, and it costs nothing — keying off `gold.brief_items` instead
-would put an Athena scan on all eight ticks of every day.
+would put an Athena scan on all eleven ticks of every day.
 
-A laptop that is never on between 16:00 and midnight still misses that day. Carrying the
+A laptop that is never on between 13:00 and midnight still misses that day. Carrying the
 window past midnight would mean mailing a brief dated yesterday, and that is a different
-artifact rather than a late one.
+artifact rather than a late one — see ADR-0020 for why that stayed refused even when it was
+the option that would have rescued the most days.
+
+**`due` reads the run's own day rather than the clock, and that is not a nicety
+(2026-09-01).** The window ends at 23:00, but a run *created* at 23:00 can still be
+*executing* at 01:15 if the host suspends in between — and `brief_date()` asked at that
+point returns tomorrow. The 22:00 slot of 2026-08-31 woke at 01:15 and concluded, correctly
+and entirely beside the point, that no brief had yet been sent for 2026-09-01: it was about
+to mail the 2026-09-01 edition, ranked over data that stopped the previous evening, at 1am,
+and then write `brief_last_sent_date = 2026-09-01` and suppress the real 16:00 send later
+that same day. It got as far as `build` before jamming on the same freeze, which is the only
+reason the wrong brief was never delivered. So `due` asks two questions now — is this run's
+slot still today, and has today's brief already gone — and `logical_date` answers the first.
+
+**13:00 rather than 16:00, because 16:00 was a guess and this one is measured
+(2026-09-13).** Between 2026-09-01 and 2026-09-13 the brief went out exactly once.  Nothing
+was broken: `due` was short-circuiting correctly and saying so in its logs — `slot belongs to
+2026-09-12 but today is 2026-09-13 — window closed, skipping`, which is Friday's 16:00 send
+slot not executing until Saturday morning.
+
+So the host's real uptime was reconstructed from every timestamp Airflow leaves behind. Over
+27 days it was awake on 17, and the window's own peak hour was 17:00 — the placement was never
+wrong, it just opened after a third of the available uptime had already gone by. Opening at
+13:00 raises the share of awake minutes inside the window from 64% to 87%, and the days the
+brief would actually have been sent from 13 to 16. ADR-0020 carries the histogram, the
+alternatives, and the honest limit: ten of those 27 days the machine was simply off, and no
+cron reaches those.
 
 Two tasks rather than one, because they fail differently and only one of them is worth
 retrying: a build failure is a data or query problem, while a send failure is a credential or
@@ -71,7 +100,7 @@ from __future__ import annotations
 import pendulum
 from airflow.decorators import dag, task
 from airflow.sdk import Variable
-from alerting import DEFAULT_ARGS, on_dag_success
+from alerting import DAGRUN_TIMEOUT, DEFAULT_ARGS, on_dag_success
 from assets import CLUSTERS_COMMITTED, ENRICHMENT_READY, MENTIONS_RESOLVED
 
 # The "already sent today" marker. An Airflow Variable rather than a file in `out/`, which
@@ -82,10 +111,11 @@ LAST_SENT_KEY = "brief_last_sent_date"
 
 @dag(
     dag_id="brief",
-    schedule="0 16-23 * * *",  # 16:00, then hourly to midnight as the catch-up window
+    schedule="0 13-23 * * *",  # 13:00, then hourly to midnight as the catch-up window
     start_date=pendulum.datetime(2026, 8, 22, tz="Africa/Casablanca"),
     catchup=False,
     max_active_runs=1,
+    dagrun_timeout=DAGRUN_TIMEOUT,
     default_args=DEFAULT_ARGS,
     on_success_callback=on_dag_success,
     tags=["phase4a", "brief"],
@@ -93,20 +123,34 @@ LAST_SENT_KEY = "brief_last_sent_date"
 def brief_dag():
     @task.short_circuit
     def due() -> bool:
-        """Has today's brief already gone out? If so, skip the rest of the run.
+        """Is this run still in its own day, and has that day's brief already gone out?
 
         Short-circuit rather than a check inside `build`, so a tick on an
         already-sent day costs one Postgres read and never reaches Athena or the
-        renderer. Seven of the eight daily ticks normally end here.
+        renderer. Ten of the eleven daily ticks normally end here.
         """
+        from airflow.sdk import get_current_context
+
         from signal_core.timeutil import brief_date
 
         today = brief_date()
-        last = Variable.get(LAST_SENT_KEY, default=None)
-        if last == today:
-            print(f"brief for {today} already sent — nothing to do")
+
+        # The day this run's *slot* falls on — which is not the day it is executing on, if
+        # the host was suspended while the slot passed. NULL for a manual trigger in
+        # Airflow 3, and that is the one case where the wall clock is the right answer:
+        # someone asking for a brief now is asking for the one dated now.
+        logical_date = get_current_context()["dag_run"].logical_date
+        edition = brief_date(logical_date) if logical_date else today
+
+        if edition != today:
+            print(f"slot belongs to {edition} but today is {today} — window closed, skipping")
             return False
-        print(f"no brief sent for {today} yet (last sent: {last or 'never'}) — building")
+
+        last = Variable.get(LAST_SENT_KEY, default=None)
+        if last == edition:
+            print(f"brief for {edition} already sent — nothing to do")
+            return False
+        print(f"no brief sent for {edition} yet (last sent: {last or 'never'}) — building")
         return True
 
     @task(inlets=[CLUSTERS_COMMITTED, ENRICHMENT_READY, MENTIONS_RESOLVED])

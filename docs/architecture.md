@@ -10,7 +10,7 @@ records that decision and what would reverse it.
 
 ![AWS and local deployment topology: the always-on AWS ingestion box next to the local analysis, enrichment and publishing box, the numbered pipeline stages, and the replay/catch-up loop between them](assets/deployment-topology.jpeg)
 
-The raster diagrams in `docs/assets/` carry the deployed shape: the 16:00 send, delivery over
+The raster diagrams in `docs/assets/` carry the deployed shape: the afternoon send, delivery over
 Gmail SMTP ([ADR-0013](decisions/ADR-0013-brief-delivery-over-gmail-smtp.md) — the SES identity
 and role are deleted, not dormant), and the ranker's `novelty` component. They have **no vector
 source** — checked against this repo, its history, and the bundle on `audit/docs-code-reality`,
@@ -186,7 +186,7 @@ sequenceDiagram
     Note over A,K: daily, not per-commit — a 72h window<br/>recomputed hourly is 24× the work for one read
     A->>K: market (03:30, gated on a fresh bronze commit)
     A->>K: then macro → resolve → cluster → enrich,<br/>each triggered by the one before (ADR-0014)
-    A->>R: 16:00 brief
+    A->>R: afternoon brief
     R-->>A: thumbs up/down (stored, §7.4)
 ```
 
@@ -206,7 +206,7 @@ The table below is the actual outstanding-work list, not a diagram caption.
 |---|---|---|
 | Ollama enrichment — summary, topic, extraction, cached and validated | 4B | done — `enrich/`, `gold.cluster_enrichment` |
 | ALFRED bitemporal macro store | 4B | done — `spark/jobs/macro.py`, `gold.macro_observations` |
-| Email delivery at 16:00 | 4A | done — Gmail SMTP, `brief_dag` |
+| Email delivery, from 13:00 | 4A | done — Gmail SMTP, `brief_dag` |
 | Maintenance DAG — compaction, snapshot expiry, orphan cleanup | 4A | done — `maintenance_dag.py`, 02:00 daily |
 | dbt migration of silver→gold; Kafka + Structured Streaming | 5 | gated on [ADR-0001](decisions/ADR-0001-no-kafka.md)'s re-entry criteria — not yet met |
 

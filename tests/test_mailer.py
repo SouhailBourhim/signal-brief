@@ -1,4 +1,4 @@
-"""The 16:00 send. 4A.J; SPEC §12, ADR-0010, ADR-0013.
+"""The afternoon send. 4A.J; SPEC §12, ADR-0010, ADR-0013, ADR-0020.
 
 These were written against `moto`'s SES mock until 2026-08-28, when five briefs that SES
 had accepted with zero bounces turned out to have been sitting in Gmail's Spam folder the

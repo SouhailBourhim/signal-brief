@@ -14,7 +14,7 @@ stages — `cluster` and `resolve`, once each — so the AND fires exactly once 
 this off the hourly `SILVER_COMMITTED` or `BRONZE_COMMITTED` would spend the GPU budget
 re-answering the same questions about the same window all day, and that remains forbidden.
 
-The old 06:15 cron was picked to sit between `cluster` at 05:00 and the brief at 16:00, and it
+The old 06:15 cron was picked to sit between `cluster` at 05:00 and the brief, then at 16:00, and it
 did not survive a sleeping host. On 2026-08-29 the machine woke at 13:24 and Airflow fired
 every overdue cron at once: `cluster` and `enrich` started in the same second, so enrichment
 ran against the *previous* day's cluster heads and reported success. Waiting on the assets is
@@ -35,13 +35,13 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
-from alerting import DEFAULT_ARGS, on_dag_success
+from alerting import DAGRUN_TIMEOUT, DEFAULT_ARGS, on_dag_success
 from assets import CLUSTERS_COMMITTED, ENRICHMENT_READY, MENTIONS_RESOLVED
 
 # ADR-0003 measured ~22.5 s of model load plus ~1.0 s per head on the dev box (RTX 5070 8GB,
 # llama3.1:8b q4). A 40-head batch is therefore ~1 minute. This bound is that figure with
 # generous headroom for a cold GPU, a longer body, or a slower box — it is a tripwire for
-# "enrichment has quietly become slow enough to threaten the 16:00 send", not a benchmark.
+# "enrichment has quietly become slow enough to threaten the afternoon send", not a benchmark.
 # SPEC §7.3: "The DAG asserts this bound and fails loudly rather than silently lagging."
 CAPACITY_SECONDS_PER_HEAD = 8.0
 CAPACITY_FLOOR_SECONDS = 60.0
@@ -53,6 +53,7 @@ CAPACITY_FLOOR_SECONDS = 60.0
     start_date=pendulum.datetime(2026, 8, 22, tz="Africa/Casablanca"),
     catchup=False,
     max_active_runs=1,  # two batches against one GPU would contend for VRAM
+    dagrun_timeout=DAGRUN_TIMEOUT,
     default_args=DEFAULT_ARGS,
     on_success_callback=on_dag_success,
     tags=["phase4b", "enrich"],
@@ -82,7 +83,7 @@ def enrich_dag():
             raise RuntimeError(
                 f"enrichment took {result.elapsed_seconds:.0f}s for {result.processed} heads "
                 f"({result.inferred} inferred), past the {budget:.0f}s bound — at this rate it "
-                "will start lagging the 16:00 send (SPEC §7.3, ADR-0003)"
+                "will start lagging the afternoon send (SPEC §7.3, ADR-0003)"
             )
 
         if result.rejected:

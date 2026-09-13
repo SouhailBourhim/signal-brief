@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
-from alerting import DEFAULT_ARGS, on_dag_success
+from alerting import DAGRUN_TIMEOUT, DEFAULT_ARGS, on_dag_success
 from assets import BRONZE_COMMITTED, SILVER_COMMITTED
 
 
@@ -31,6 +31,7 @@ from assets import BRONZE_COMMITTED, SILVER_COMMITTED
     start_date=pendulum.datetime(2026, 8, 1, tz="UTC"),
     catchup=False,
     max_active_runs=1,  # two runs MERGEing the same window would race each other
+    dagrun_timeout=DAGRUN_TIMEOUT,
     default_args=DEFAULT_ARGS,
     on_success_callback=on_dag_success,
     tags=["phase2", "process"],
